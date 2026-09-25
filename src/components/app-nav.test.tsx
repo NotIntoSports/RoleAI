@@ -13,7 +13,7 @@ describe("AppNav", () => {
 
   it("renders 6 navigation buttons with Chinese labels", () => {
     render(<AppNav current="workspace" onNavigate={() => {}} />);
-    const buttons = screen.getAllByRole("button");
+    const buttons = screen.getAllByRole("button").filter((button) => button.classList.contains("app-nav-item"));
     expect(buttons.length).toBe(6);
     expect(buttons[0].textContent).toBe("工作台");
     expect(buttons[1].textContent).toBe("虚拟直播");
@@ -26,7 +26,7 @@ describe("AppNav", () => {
   it("marks the current route button with aria-current and data-active", () => {
     render(<AppNav current="records" onNavigate={() => {}} />);
     const buttons = screen.getAllByRole("button");
-    const activeButton = buttons.find((b) => b.textContent === "记录");
+    const activeButton = buttons.find((b) => b.getAttribute("aria-label") === "记录");
     expect(activeButton?.getAttribute("aria-current")).toBe("page");
     expect(activeButton?.getAttribute("data-active")).toBe("true");
   });
@@ -56,6 +56,17 @@ describe("AppNav", () => {
     const workspaceButton = screen.getByRole("button", { name: "工作台" });
     fireEvent.click(workspaceButton);
     expect(onNavigate).not.toHaveBeenCalled();
+  });
+
+  it("closes expanded navigation after selecting a destination", () => {
+    const onNavigate = vi.fn();
+    render(<AppNav current="workspace" onNavigate={onNavigate} />);
+    const toggle = screen.getByRole("button", { name: "切换导航" });
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "资料" }));
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(onNavigate).toHaveBeenCalledWith("materials");
   });
 
   it("does not render any anchor tags", () => {

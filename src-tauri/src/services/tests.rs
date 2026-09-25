@@ -1,10 +1,13 @@
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicU32, Ordering},
+    Arc,
+};
 
 use crate::{
     config::{ConfigStore, EmbeddingDistance},
     providers::{
         DiscoveredModel, EmbeddingError, EmbeddingProbe, LiveKitError, LiveKitProbe,
-        ProviderEndpoint, ProviderError, ProviderProbe,
+        ProviderEndpoint, ProviderError, ProviderProbe, RouteProbeError, RouteStageProbe,
     },
     secrets::{MemorySecretStore, SecretError, SecretService, SecretStore},
 };
@@ -525,6 +528,75 @@ impl ProviderProbe for OpenProbe {
     }
 }
 
+/// 线路阶段探测桩：realtime/tts 各自可配置成败，并记录调用次数以断言 test() 真正发起了探测。
+struct StageProbeStub {
+    realtime_allowed: bool,
+    tts_allowed: bool,
+    realtime_calls: AtomicU32,
+    tts_calls: AtomicU32,
+}
+
+impl StageProbeStub {
+    fn open() -> Self {
+        Self {
+            realtime_allowed: true,
+            tts_allowed: true,
+            realtime_calls: AtomicU32::new(0),
+            tts_calls: AtomicU32::new(0),
+        }
+    }
+
+    fn denied() -> Self {
+        Self {
+            realtime_allowed: false,
+            tts_allowed: false,
+            realtime_calls: AtomicU32::new(0),
+            tts_calls: AtomicU32::new(0),
+        }
+    }
+}
+
+fn probe_denied() -> RouteProbeError {
+    RouteProbeError {
+        code: "downstream_reconnect_exceeded".into(),
+        message: "实时语音服务拒绝了本次请求，请检查模型配置或稍后重试。".into(),
+    }
+}
+
+impl RouteStageProbe for StageProbeStub {
+    fn probe_realtime_session(
+        &self,
+        _: &ProviderEndpoint,
+        _: Option<&str>,
+        _: &str,
+    ) -> Result<(), RouteProbeError> {
+        self.realtime_calls.fetch_add(1, Ordering::SeqCst);
+        if self.realtime_allowed {
+            Ok(())
+        } else {
+            Err(probe_denied())
+        }
+    }
+
+    fn probe_tts(
+        &self,
+        _: &ProviderEndpoint,
+        _: Option<&str>,
+        _: &str,
+        _: Option<&str>,
+    ) -> Result<(), RouteProbeError> {
+        self.tts_calls.fetch_add(1, Ordering::SeqCst);
+        if self.tts_allowed {
+            Ok(())
+        } else {
+            Err(RouteProbeError {
+                code: "TTS_RATE_LIMITED".into(),
+                message: "语音合成测试未通过，请确认账号已开通语音合成并有余量。".into(),
+            })
+        }
+    }
+}
+
 struct FailProbe;
 
 impl ProviderProbe for FailProbe {
@@ -573,7 +645,8 @@ fn voice_route_requires_test_before_single_activation() {
     .unwrap();
     let config = ConfigStore::new(path);
     let secrets = SecretService::new("test", Arc::new(MemorySecretStore::default())).unwrap();
-    let service = super::VoiceRouteService::new(&config, &secrets, &OpenProbe);
+    let stage = StageProbeStub::open();
+    let service = super::VoiceRouteService::new(&config, &secrets, &OpenProbe, &stage);
     let route = service
         .save(super::VoiceRouteSaveInput {
             id: Some("default".into()),
@@ -623,7 +696,8 @@ fn voice_route_save_generates_uuid_when_id_is_omitted() {
     .unwrap();
     let config = ConfigStore::new(path);
     let secrets = SecretService::new("test", Arc::new(MemorySecretStore::default())).unwrap();
-    let service = super::VoiceRouteService::new(&config, &secrets, &OpenProbe);
+    let stage = StageProbeStub::open();
+    let service = super::VoiceRouteService::new(&config, &secrets, &OpenProbe, &stage);
     let route = service
         .save(super::VoiceRouteSaveInput {
             id: None,
@@ -650,7 +724,8 @@ fn e2e_route_rejects_cascaded_fields() {
     let config = ConfigStore::new(directory.path().join("config.json"));
     config.restore_defaults().unwrap();
     let secrets = SecretService::new("test", Arc::new(MemorySecretStore::default())).unwrap();
-    let service = super::VoiceRouteService::new(&config, &secrets, &OpenProbe);
+    let stage = StageProbeStub::open();
+    let service = super::VoiceRouteService::new(&config, &secrets, &OpenProbe, &stage);
     let error = service
         .save(super::VoiceRouteSaveInput {
             id: Some("bad".into()),
@@ -677,7 +752,8 @@ fn failed_retest_deactivates_and_unreadies_route() {
     std::fs::write(&path, r#"{"configVersion":1,"models":{"providers":[{"id":"e2e","baseUrl":"https://e2e.test/v1"}]},"speech":{"voiceRoutes":[{"id":"route","name":"Route","mode":"e2e","e2eProviderId":"e2e","e2eModelId":"realtime","active":true,"ready":true,"status":"ready","configVersion":1}],"activeVoiceRouteId":"route"}}"#).unwrap();
     let config = ConfigStore::new(path);
     let secrets = SecretService::new("test", Arc::new(MemorySecretStore::default())).unwrap();
-    let service = super::VoiceRouteService::new(&config, &secrets, &FailProbe);
+    let stage = StageProbeStub::denied();
+    let service = super::VoiceRouteService::new(&config, &secrets, &FailProbe, &stage);
     assert_eq!(
         service.test("route").unwrap_err().code(),
         "PROVIDER_TIMEOUT"
@@ -699,7 +775,8 @@ fn voice_route_test_rejects_a_model_missing_from_provider_catalog() {
     .unwrap();
     let config = ConfigStore::new(path);
     let secrets = SecretService::new("test", Arc::new(MemorySecretStore::default())).unwrap();
-    let service = super::VoiceRouteService::new(&config, &secrets, &OpenProbe);
+    let stage = StageProbeStub::open();
+    let service = super::VoiceRouteService::new(&config, &secrets, &OpenProbe, &stage);
     service
         .save(super::VoiceRouteSaveInput {
             id: Some("missing-model".into()),
@@ -727,6 +804,119 @@ fn voice_route_test_rejects_a_model_missing_from_provider_catalog() {
 }
 
 #[test]
+fn e2e_route_test_fails_when_realtime_handshake_is_denied() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("config.json");
+    std::fs::write(
+        &path,
+        r#"{"configVersion":1,"models":{"providers":[{"id":"e2e","baseUrl":"https://e2e.test/v1"}]}}"#,
+    )
+    .unwrap();
+    let config = ConfigStore::new(path);
+    let secrets = SecretService::new("test", Arc::new(MemorySecretStore::default())).unwrap();
+    let stage = StageProbeStub::denied();
+    let service = super::VoiceRouteService::new(&config, &secrets, &OpenProbe, &stage);
+    service
+        .save(super::VoiceRouteSaveInput {
+            id: Some("voice".into()),
+            name: "Voice".into(),
+            mode: crate::config::VoiceRouteMode::E2e,
+            asr_provider_id: None,
+            asr_model_id: None,
+            llm_provider_id: None,
+            llm_model_id: None,
+            tts_provider_id: None,
+            tts_model_id: None,
+            voice_id: None,
+            e2e_provider_id: Some("e2e".into()),
+            e2e_model_id: Some("realtime".into()),
+        })
+        .unwrap();
+
+    // 模型在目录里也必须真实握手：账号无实时语音权限时测试必须失败。
+    let error = service.test("voice").unwrap_err();
+    assert_eq!(error.code(), "VOICE_ROUTE_PROBE_FAILED");
+    assert_eq!(stage.realtime_calls.load(Ordering::SeqCst), 1);
+    let route = &config.load().unwrap().speech.voice_routes[0];
+    assert!(!route.ready);
+    assert_eq!(route.status.as_deref(), Some("test_failed"));
+}
+
+#[test]
+fn e2e_route_test_passes_when_realtime_handshake_succeeds() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("config.json");
+    std::fs::write(
+        &path,
+        r#"{"configVersion":1,"models":{"providers":[{"id":"e2e","baseUrl":"https://e2e.test/v1"}]}}"#,
+    )
+    .unwrap();
+    let config = ConfigStore::new(path);
+    let secrets = SecretService::new("test", Arc::new(MemorySecretStore::default())).unwrap();
+    let stage = StageProbeStub::open();
+    let service = super::VoiceRouteService::new(&config, &secrets, &OpenProbe, &stage);
+    service
+        .save(super::VoiceRouteSaveInput {
+            id: Some("voice".into()),
+            name: "Voice".into(),
+            mode: crate::config::VoiceRouteMode::E2e,
+            asr_provider_id: None,
+            asr_model_id: None,
+            llm_provider_id: None,
+            llm_model_id: None,
+            tts_provider_id: None,
+            tts_model_id: None,
+            voice_id: None,
+            e2e_provider_id: Some("e2e".into()),
+            e2e_model_id: Some("realtime".into()),
+        })
+        .unwrap();
+
+    let tested = service.test("voice").unwrap();
+    assert!(tested.ready);
+    assert_eq!(stage.realtime_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(stage.tts_calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn cascaded_route_test_fails_when_tts_probe_is_denied() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("config.json");
+    std::fs::write(
+        &path,
+        r#"{"configVersion":1,"models":{"providers":[{"id":"asr","baseUrl":"https://asr.test/v1"},{"id":"llm","baseUrl":"https://llm.test/v1"},{"id":"tts","baseUrl":"https://tts.test/v1"}]}}"#,
+    )
+    .unwrap();
+    let config = ConfigStore::new(path);
+    let secrets = SecretService::new("test", Arc::new(MemorySecretStore::default())).unwrap();
+    let stage = StageProbeStub::denied();
+    let service = super::VoiceRouteService::new(&config, &secrets, &OpenProbe, &stage);
+    service
+        .save(super::VoiceRouteSaveInput {
+            id: Some("cascade".into()),
+            name: "Cascade".into(),
+            mode: crate::config::VoiceRouteMode::Cascaded,
+            asr_provider_id: Some("asr".into()),
+            asr_model_id: Some("asr-1".into()),
+            llm_provider_id: Some("llm".into()),
+            llm_model_id: Some("llm-1".into()),
+            tts_provider_id: Some("tts".into()),
+            tts_model_id: Some("tts-1".into()),
+            voice_id: None,
+            e2e_provider_id: None,
+            e2e_model_id: None,
+        })
+        .unwrap();
+
+    let error = service.test("cascade").unwrap_err();
+    assert_eq!(error.code(), "VOICE_ROUTE_PROBE_FAILED");
+    assert_eq!(stage.tts_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(stage.realtime_calls.load(Ordering::SeqCst), 0);
+    let route = &config.load().unwrap().speech.voice_routes[0];
+    assert!(!route.ready);
+}
+
+#[test]
 fn incomplete_legacy_route_cannot_be_tested_or_activated() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("config.json");
@@ -737,7 +927,8 @@ fn incomplete_legacy_route_cannot_be_tested_or_activated() {
     .unwrap();
     let config = ConfigStore::new(path);
     let secrets = SecretService::new("test", Arc::new(MemorySecretStore::default())).unwrap();
-    let service = super::VoiceRouteService::new(&config, &secrets, &OpenProbe);
+    let stage = StageProbeStub::open();
+    let service = super::VoiceRouteService::new(&config, &secrets, &OpenProbe, &stage);
 
     assert_eq!(
         service.test("legacy").unwrap_err().code(),
@@ -1418,4 +1609,498 @@ fn livekit_issue_join_token_returns_short_lived_room_join_jwt() {
         .issue_join_token("interview-room", "candidate-1")
         .unwrap();
     assert!(*store.reads.lock().unwrap() > reads_before);
+}
+
+mod voice_references {
+    use std::sync::{Arc, Mutex};
+
+    use base64::Engine as _;
+
+    use crate::{
+        config::ConfigStore,
+        database::Database,
+        providers::{ProviderEndpoint, ProviderError},
+        secrets::{MemorySecretStore, SecretService},
+        services::{
+            ProviderSaveInput, ProviderService, VoiceCloneError, VoiceCloneGateway, VoiceReferenceSaveInput,
+            VoiceReferenceService,
+        },
+    };
+
+    struct Environment {
+        directory: tempfile::TempDir,
+        database: Database,
+        config: ConfigStore,
+        secrets: SecretService,
+    }
+
+    fn environment() -> Environment {
+        let directory = tempfile::tempdir().unwrap();
+        let database = Database::open(directory.path().join("app.sqlite3")).unwrap();
+        database.migrate().unwrap();
+        let config = ConfigStore::new(directory.path().join("config.json"));
+        config.restore_defaults().unwrap();
+        let secrets =
+            SecretService::new("test", Arc::new(MemorySecretStore::default())).unwrap();
+        Environment {
+            directory,
+            database,
+            config,
+            secrets,
+        }
+    }
+
+    fn wav_bytes(sample_rate: u32, channels: u16, bits: u16, data_len: usize) -> Vec<u8> {
+        let byte_rate = sample_rate * u32::from(channels) * u32::from(bits) / 8;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&((36 + data_len) as u32).to_le_bytes());
+        bytes.extend_from_slice(b"WAVE");
+        bytes.extend_from_slice(b"fmt ");
+        bytes.extend_from_slice(&16_u32.to_le_bytes());
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&channels.to_le_bytes());
+        bytes.extend_from_slice(&sample_rate.to_le_bytes());
+        bytes.extend_from_slice(&byte_rate.to_le_bytes());
+        bytes.extend_from_slice(&((channels * bits) / 8).to_le_bytes());
+        bytes.extend_from_slice(&bits.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&(data_len as u32).to_le_bytes());
+        bytes.extend(std::iter::repeat_n(0_u8, data_len));
+        bytes
+    }
+
+    fn save_input(id: Option<&str>, name: &str, provider: Option<&str>, path: &str) -> VoiceReferenceSaveInput {
+        VoiceReferenceSaveInput {
+            id: id.map(str::to_owned),
+            name: name.to_owned(),
+            provider_id: provider.map(str::to_owned),
+            transcript: Some(" 你好世界 ".into()),
+            audio_path: path.to_owned(),
+        }
+    }
+
+    fn service<'a>(
+        environment: &'a Environment,
+        gateway: &'a dyn VoiceCloneGateway,
+    ) -> VoiceReferenceService<'a> {
+        VoiceReferenceService::new(
+            &environment.database,
+            &environment.config,
+            &environment.secrets,
+            gateway,
+        )
+    }
+
+    #[derive(Clone)]
+    struct CapturedUpload {
+        endpoint: ProviderEndpoint,
+        credential: Option<String>,
+        file_name: String,
+        mime_type: String,
+        bytes_len: usize,
+    }
+
+    #[derive(Clone)]
+    struct CapturedClone {
+        credential: Option<String>,
+        voice_name: String,
+        transcript: String,
+        file_id: String,
+    }
+
+    struct OkGateway {
+        remote_file_id: &'static str,
+        voice_id: &'static str,
+        upload: Mutex<Option<CapturedUpload>>,
+        clone: Mutex<Option<CapturedClone>>,
+    }
+
+    impl OkGateway {
+        fn new() -> Self {
+            Self {
+                remote_file_id: "file_remote_1",
+                voice_id: "voice_clone_9",
+                upload: Mutex::new(None),
+                clone: Mutex::new(None),
+            }
+        }
+    }
+
+    impl VoiceCloneGateway for OkGateway {
+        fn upload_sample(
+            &self,
+            endpoint: &ProviderEndpoint,
+            credential: Option<&str>,
+            file_name: &str,
+            mime_type: &str,
+            bytes: Vec<u8>,
+        ) -> Result<String, VoiceCloneError> {
+            *self.upload.lock().unwrap() = Some(CapturedUpload {
+                endpoint: endpoint.clone(),
+                credential: credential.map(str::to_owned),
+                file_name: file_name.to_owned(),
+                mime_type: mime_type.to_owned(),
+                bytes_len: bytes.len(),
+            });
+            Ok(self.remote_file_id.to_owned())
+        }
+
+        fn clone_voice(
+            &self,
+            _endpoint: &ProviderEndpoint,
+            credential: Option<&str>,
+            voice_name: &str,
+            transcript: &str,
+            file_id: &str,
+        ) -> Result<String, VoiceCloneError> {
+            *self.clone.lock().unwrap() = Some(CapturedClone {
+                credential: credential.map(str::to_owned),
+                voice_name: voice_name.to_owned(),
+                transcript: transcript.to_owned(),
+                file_id: file_id.to_owned(),
+            });
+            Ok(self.voice_id.to_owned())
+        }
+    }
+
+    struct ErrGateway;
+
+    impl VoiceCloneGateway for ErrGateway {
+        fn upload_sample(
+            &self,
+            _endpoint: &ProviderEndpoint,
+            _credential: Option<&str>,
+            _file_name: &str,
+            _mime_type: &str,
+            _bytes: Vec<u8>,
+        ) -> Result<String, VoiceCloneError> {
+            Err(VoiceCloneError { kind: ProviderError::Unauthorized, provider_message: None })
+        }
+
+        fn clone_voice(
+            &self,
+            _endpoint: &ProviderEndpoint,
+            _credential: Option<&str>,
+            _voice_name: &str,
+            _transcript: &str,
+            _file_id: &str,
+        ) -> Result<String, VoiceCloneError> {
+            Err(VoiceCloneError { kind: ProviderError::RequestFailed, provider_message: None })
+        }
+    }
+
+    fn provider_with_credential(environment: &Environment) {
+        ProviderService::new(&environment.config, &environment.secrets, &super::FakeProbe)
+            .save(ProviderSaveInput {
+                web_capability: None,
+                id: Some("bigmodel".into()),
+                name: Some("BigModel".into()),
+                base_url: "https://open.bigmodel.cn/api/paas/v4".into(),
+                api_key: Some("credential-value".into()),
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn save_parses_wav_duration_and_summary_excludes_audio_bytes() {
+        let environment = environment();
+        let file = environment.directory.path().join("sample.wav");
+        std::fs::write(&file, wav_bytes(16_000, 1, 16, 32_000)).unwrap();
+        let gateway = ErrGateway;
+        let service = service(&environment, &gateway);
+
+        let summary = service
+            .save(save_input(None, " 我的音色 ", Some("bigmodel"), &file.to_string_lossy()))
+            .unwrap();
+
+        assert_eq!(summary.name, "我的音色");
+        assert_eq!(summary.mime_type, "audio/wav");
+        assert_eq!(summary.byte_size, 44 + 32_000);
+        assert_eq!(summary.duration_ms, Some(1000));
+        assert_eq!(summary.transcript, "你好世界");
+        assert_eq!(summary.provider_id.as_deref(), Some("bigmodel"));
+        assert_eq!(summary.clone_status, "pending");
+        assert!(summary.voice_id.is_none());
+        let payload = serde_json::to_value(&summary).unwrap();
+        assert!(payload.get("audio").is_none());
+        assert!(service.list().unwrap().len() == 1);
+    }
+
+    #[test]
+    fn save_rejects_bad_extension_relative_paths_and_oversize_audio() {
+        let environment = environment();
+        let gateway = ErrGateway;
+        let service = service(&environment, &gateway);
+
+        let text_file = environment.directory.path().join("note.txt");
+        std::fs::write(&text_file, b"hello").unwrap();
+        let error = service
+            .save(save_input(None, "a", None, &text_file.to_string_lossy()))
+            .unwrap_err();
+        assert_eq!(error.code(), "VOICE_REFERENCE_AUDIO_INVALID");
+
+        let error = service
+            .save(save_input(None, "a", None, "relative/sample.wav"))
+            .unwrap_err();
+        assert_eq!(error.code(), "VOICE_REFERENCE_AUDIO_INVALID");
+
+        let big = environment.directory.path().join("big.wav");
+        std::fs::write(&big, vec![0_u8; 10 * 1024 * 1024 + 1]).unwrap();
+        let error = service
+            .save(save_input(None, "a", None, &big.to_string_lossy()))
+            .unwrap_err();
+        assert_eq!(error.code(), "VOICE_REFERENCE_AUDIO_TOO_LARGE");
+    }
+
+    #[test]
+    fn save_updates_existing_row_and_resets_clone_state() {
+        let environment = environment();
+        let file = environment.directory.path().join("sample.wav");
+        std::fs::write(&file, wav_bytes(16_000, 1, 16, 32_000)).unwrap();
+        let gateway = ErrGateway;
+        let service = service(&environment, &gateway);
+        let saved = service
+            .save(save_input(Some("voice-1"), "音色", Some("bigmodel"), &file.to_string_lossy()))
+            .unwrap();
+
+        environment
+            .database
+            .with_connection(|connection| {
+                connection.execute(
+                    "UPDATE voice_references SET voice_id='voice_old', clone_status='cloned', remote_file_id='file_old' WHERE id='voice-1'",
+                    [],
+                )
+                .map(|_| ())
+            })
+            .unwrap();
+
+        let updated = service
+            .save(save_input(Some("voice-1"), "音色", Some("bigmodel"), &file.to_string_lossy()))
+            .unwrap();
+        assert_eq!(updated.id, saved.id);
+        assert_eq!(updated.clone_status, "pending");
+        assert!(updated.voice_id.is_none());
+    }
+
+    #[test]
+    fn delete_removes_reference_and_reports_missing() {
+        let environment = environment();
+        let file = environment.directory.path().join("sample.mp3");
+        std::fs::write(&file, b"mp3-bytes").unwrap();
+        let gateway = ErrGateway;
+        let service = service(&environment, &gateway);
+        let saved = service
+            .save(save_input(None, "mp3", None, &file.to_string_lossy()))
+            .unwrap();
+        assert_eq!(saved.mime_type, "audio/mpeg");
+        assert_eq!(saved.duration_ms, None);
+
+        service.delete(&saved.id).unwrap();
+        assert!(service.list().unwrap().is_empty());
+        let error = service.delete(&saved.id).unwrap_err();
+        assert_eq!(error.code(), "VOICE_REFERENCE_NOT_FOUND");
+    }
+
+    #[test]
+    fn clone_uploads_registers_and_persists_voice_id() {
+        let environment = environment();
+        provider_with_credential(&environment);
+        let file = environment.directory.path().join("sample.wav");
+        std::fs::write(&file, wav_bytes(16_000, 1, 16, 32_000)).unwrap();
+        let gateway = OkGateway::new();
+        let service = service(&environment, &gateway);
+        let saved = service
+            .save(save_input(None, " 音色 ", Some("bigmodel"), &file.to_string_lossy()))
+            .unwrap();
+
+        let result = service.clone_voice(&saved.id).unwrap();
+
+        assert_eq!(result.voice_id, "voice_clone_9");
+        assert_eq!(result.remote_file_id, "file_remote_1");
+        let upload = gateway.upload.lock().unwrap().clone().unwrap();
+        assert_eq!(upload.endpoint.base_url, "https://open.bigmodel.cn/api/paas/v4");
+        assert_eq!(upload.credential.as_deref(), Some("credential-value"));
+        assert_eq!(upload.mime_type, "audio/wav");
+        assert!(upload.file_name.ends_with(".wav"));
+        assert_eq!(upload.bytes_len, 44 + 32_000);
+        let clone = gateway.clone.lock().unwrap().clone().unwrap();
+        assert_eq!(clone.file_id, "file_remote_1");
+        assert_eq!(clone.transcript, "你好世界");
+        assert_eq!(clone.credential.as_deref(), Some("credential-value"));
+        assert!(clone.voice_name.starts_with("roleai_"));
+        assert!(clone.voice_name.len() <= 30);
+        let listed = service.list().unwrap().remove(0);
+        assert_eq!(listed.clone_status, "cloned");
+        assert_eq!(listed.voice_id.as_deref(), Some("voice_clone_9"));
+        assert_eq!(listed.remote_file_id.as_deref(), Some("file_remote_1"));
+    }
+
+    #[test]
+    fn clone_failure_marks_reference_failed_with_stable_code() {
+        let environment = environment();
+        provider_with_credential(&environment);
+        let file = environment.directory.path().join("sample.wav");
+        std::fs::write(&file, wav_bytes(16_000, 1, 16, 32_000)).unwrap();
+        let gateway = ErrGateway;
+        let service = service(&environment, &gateway);
+        let saved = service
+            .save(save_input(None, "音色", Some("bigmodel"), &file.to_string_lossy()))
+            .unwrap();
+
+        let error = service.clone_voice(&saved.id).unwrap_err();
+
+        assert_eq!(error.code(), "PROVIDER_UNAUTHORIZED");
+        let listed = service.list().unwrap().remove(0);
+        assert_eq!(listed.clone_status, "failed");
+        assert_eq!(
+            listed.clone_error.as_deref(),
+            Some("上传参考音频失败：PROVIDER_UNAUTHORIZED")
+        );
+    }
+
+    #[test]
+    fn clone_requires_a_provider_reference() {
+        let environment = environment();
+        let file = environment.directory.path().join("sample.wav");
+        std::fs::write(&file, wav_bytes(16_000, 1, 16, 32_000)).unwrap();
+        let gateway = OkGateway::new();
+        let service = service(&environment, &gateway);
+        let saved = service
+            .save(save_input(None, "音色", None, &file.to_string_lossy()))
+            .unwrap();
+
+        let error = service.clone_voice(&saved.id).unwrap_err();
+
+        assert_eq!(error.code(), "VOICE_REFERENCE_PROVIDER_MISSING");
+    }
+
+    fn audio_input(id: Option<&str>, name: &str, base64_audio: &str) -> super::super::VoiceReferenceAudioSaveInput {
+        super::super::VoiceReferenceAudioSaveInput {
+            id: id.map(str::to_owned),
+            name: name.to_owned(),
+            provider_id: None,
+            transcript: Some(" 你好世界 ".into()),
+            audio_base64: base64_audio.to_owned(),
+        }
+    }
+
+    fn update_input(id: &str, name: &str, provider: Option<&str>) -> super::super::VoiceReferenceUpdateInput {
+        super::super::VoiceReferenceUpdateInput {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            provider_id: provider.map(str::to_owned),
+            transcript: Some(" 更新文字 ".into()),
+        }
+    }
+
+    #[test]
+    fn update_metadata_changes_fields_and_preserves_audio_and_clone_state() {
+        let environment = environment();
+        let gateway = OkGateway::new();
+        let service = service(&environment, &gateway);
+        let encoded = base64::engine::general_purpose::STANDARD.encode(wav_bytes(16_000, 1, 16, 128_000));
+        let saved = service
+            .save_audio(audio_input(None, "原名", &encoded))
+            .unwrap();
+
+        let with_provider = service
+            .update_metadata(update_input(&saved.id, "原名", Some("bigmodel")))
+            .unwrap();
+        assert_eq!(with_provider.provider_id.as_deref(), Some("bigmodel"));
+        provider_with_credential(&environment);
+        let cloned = service.clone_voice(&saved.id).unwrap();
+
+        let updated = service
+            .update_metadata(update_input(&saved.id, " 新名 ", Some("other")))
+            .unwrap();
+
+        assert_eq!(updated.name, "新名");
+        assert_eq!(updated.provider_id.as_deref(), Some("other"));
+        assert_eq!(updated.transcript, "更新文字");
+        assert_eq!(updated.byte_size, saved.byte_size);
+        assert_eq!(updated.duration_ms, saved.duration_ms);
+        assert_eq!(updated.voice_id.as_deref(), Some(cloned.voice_id.as_str()));
+        assert_eq!(updated.clone_status, "cloned");
+    }
+
+    #[test]
+    fn update_metadata_rejects_empty_name_and_missing_rows() {
+        let environment = environment();
+        let gateway = ErrGateway;
+        let service = service(&environment, &gateway);
+
+        let error = service.update_metadata(update_input("ghost", "   ", None)).unwrap_err();
+        assert_eq!(error.code(), "VOICE_REFERENCE_FIELDS_INVALID");
+
+        let error = service.update_metadata(update_input("ghost", "名", None)).unwrap_err();
+        assert_eq!(error.code(), "VOICE_REFERENCE_NOT_FOUND");
+    }
+
+    #[test]
+    fn save_audio_persists_base64_wav_with_duration() {
+        let environment = environment();
+        let gateway = ErrGateway;
+        let service = service(&environment, &gateway);
+        let wav = wav_bytes(16_000, 1, 16, 128_000);
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&wav);
+
+        let summary = service
+            .save_audio(audio_input(None, " 录音音色 ", &encoded))
+            .unwrap();
+
+        assert_eq!(summary.name, "录音音色");
+        assert_eq!(summary.mime_type, "audio/wav");
+        assert_eq!(summary.byte_size, 44 + 128_000);
+        assert_eq!(summary.duration_ms, Some(4000));
+        assert_eq!(summary.clone_status, "pending");
+        let payload = serde_json::to_value(&summary).unwrap();
+        assert!(payload.get("audio").is_none());
+    }
+
+    #[test]
+    fn save_audio_accepts_mp3_payload_without_duration() {
+        let environment = environment();
+        let gateway = ErrGateway;
+        let service = service(&environment, &gateway);
+        let mut mp3 = Vec::new();
+        mp3.extend_from_slice(b"ID3\x04\x00\x00\x00\x00\x00\x00");
+        mp3.extend(std::iter::repeat_n(0xFF_u8, 2048));
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&mp3);
+
+        let summary = service
+            .save_audio(audio_input(None, "mp3 音色", &encoded))
+            .unwrap();
+
+        assert_eq!(summary.mime_type, "audio/mpeg");
+        assert_eq!(summary.duration_ms, None);
+    }
+
+    #[test]
+    fn save_audio_rejects_short_audio_and_bad_payloads() {
+        let environment = environment();
+        let gateway = ErrGateway;
+        let service = service(&environment, &gateway);
+
+        let short = base64::engine::general_purpose::STANDARD.encode(wav_bytes(16_000, 1, 16, 16_000));
+        let error = service.save_audio(audio_input(None, "短录音", &short)).unwrap_err();
+        assert_eq!(error.code(), "VOICE_REFERENCE_AUDIO_TOO_SHORT");
+
+        let error = service
+            .save_audio(audio_input(None, "坏编码", "not-base64!!"))
+            .unwrap_err();
+        assert_eq!(error.code(), "VOICE_REFERENCE_AUDIO_INVALID");
+
+        let not_audio = base64::engine::general_purpose::STANDARD.encode(b"hello");
+        let error = service
+            .save_audio(audio_input(None, "非音频", &not_audio))
+            .unwrap_err();
+        assert_eq!(error.code(), "VOICE_REFERENCE_AUDIO_INVALID");
+
+        let oversize = base64::engine::general_purpose::STANDARD.encode(vec![0_u8; 10 * 1024 * 1024 + 1]);
+        let error = service
+            .save_audio(audio_input(None, "过大", &oversize))
+            .unwrap_err();
+        assert_eq!(error.code(), "VOICE_REFERENCE_AUDIO_TOO_LARGE");
+    }
 }

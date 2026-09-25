@@ -6,6 +6,7 @@ mod providers;
 mod roles;
 mod sessions;
 pub use sessions::MeetingCapture;
+mod voice_references;
 mod voice_routes;
 
 pub use embeddings::{
@@ -29,6 +30,12 @@ pub use roles::{
 };
 pub use sessions::{
     SessionControl, SessionProbes, SessionService, SessionServiceError, SessionStartOutcome,
+};
+pub use crate::providers::VoiceCloneError;
+pub use voice_references::{
+    VoiceCloneGateway, VoiceReferenceAudioSaveInput, VoiceReferenceCloneResult,
+    VoiceReferenceSaveInput, VoiceReferenceService, VoiceReferenceServiceError,
+    VoiceReferenceSummary, VoiceReferenceUpdateInput,
 };
 pub use voice_routes::{
     VoiceRouteSaveInput, VoiceRouteService, VoiceRouteServiceError, VoiceRouteTestResult,

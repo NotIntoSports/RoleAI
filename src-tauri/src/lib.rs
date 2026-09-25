@@ -105,6 +105,12 @@ pub fn run() {
             commands::speech_route_test,
             commands::speech_route_activate,
             commands::speech_route_delete,
+            commands::voice_reference_save,
+            commands::voice_reference_save_audio,
+            commands::voice_reference_update,
+            commands::voice_reference_list,
+            commands::voice_reference_delete,
+            commands::voice_reference_clone,
             commands::role_profile_save,
             commands::role_profile_copy,
             commands::role_profile_activate,
@@ -142,6 +148,7 @@ pub fn run() {
             commands::virtual_audio_status,
             commands::virtual_audio_install,
             commands::session_audio_ready,
+            commands::session_push_mic_pcm,
             commands::livestream_create_draft,
             commands::livestream_generate,
             commands::livestream_get,
@@ -197,6 +204,11 @@ pub fn run() {
                 .title("RoleAI")
                 .inner_size(1180.0, 760.0)
                 .min_inner_size(900.0, 620.0)
+                // 设置后 wry 不再追加默认参数，需自行补全；--use-fake-ui-for-media-stream
+                // 让 WebView2 自动授予麦克风/摄像头权限（wry 默认不处理该权限请求，页面静默被拒）。
+                .additional_browser_args(
+                    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --use-fake-ui-for-media-stream",
+                )
                 .on_navigation(navigation_is_allowed)
                 .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
                 .build()?;

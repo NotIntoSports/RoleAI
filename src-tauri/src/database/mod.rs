@@ -19,6 +19,10 @@ const MIGRATIONS: &[(i64, &str)] = &[
         5,
         include_str!("../../migrations/0005_session_event_metadata.sql"),
     ),
+    (
+        6,
+        include_str!("../../migrations/0006_voice_references.sql"),
+    ),
 ];
 const LATEST_SCHEMA_VERSION: i64 = MIGRATIONS[MIGRATIONS.len() - 1].0;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);

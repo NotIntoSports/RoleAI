@@ -4,6 +4,8 @@ export type PublicError = { code: string, message: string, requestId: string, fi
 
 export type FoundationStatus = { ready: boolean, };
 
+export type MicPcmAcceptance = { accepted: boolean, };
+
 export type SecretStatus = { reference: string, configured: boolean, };
 
 export type DiagnosticsExportResult = { exported: boolean, };
@@ -77,6 +79,16 @@ export type ModelDiscoveryResult = { providerId: string, models: Array<Discovere
 export type VoiceRouteSaveInput = { id: string | null, name: string, mode: VoiceRouteMode, asrProviderId: string | null, asrModelId: string | null, llmProviderId: string | null, llmModelId: string | null, ttsProviderId: string | null, ttsModelId: string | null, voiceId: string | null, e2eProviderId: string | null, e2eModelId: string | null, };
 
 export type VoiceRouteTestResult = { routeId: string, ready: boolean, checkedProviderIds: Array<string>, };
+
+export type VoiceReferenceSaveInput = { id: string | null, name: string, providerId: string | null, transcript: string | null, audioPath: string, };
+
+export type VoiceReferenceAudioSaveInput = { id: string | null, name: string, providerId: string | null, transcript: string | null, audioBase64: string, };
+
+export type VoiceReferenceUpdateInput = { id: string, name: string, providerId: string | null, transcript: string | null, };
+
+export type VoiceReferenceSummary = { id: string, name: string, providerId: string | null, mimeType: string, byteSize: bigint, durationMs: bigint | null, transcript: string, remoteFileId: string | null, voiceId: string | null, cloneStatus: string, cloneError: string | null, createdAt: string, updatedAt: string, };
+
+export type VoiceReferenceCloneResult = { referenceId: string, voiceId: string, remoteFileId: string, };
 
 export type RoleProfileSaveInput = { id: string | null, name: string, systemPrompt: string, openingMessage: string, styleInstructions: string, };
 

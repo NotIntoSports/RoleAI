@@ -4,6 +4,7 @@ mod livekit;
 mod openai_compatible;
 mod openai_realtime;
 pub mod web_search;
+mod voice_clone;
 
 use std::fmt;
 
@@ -22,9 +23,11 @@ pub(crate) use livekit::room_join_token;
 pub use livekit::{LiveKitError, LiveKitProbe, OfficialLiveKitProbe, livekit_connect_src};
 #[cfg(test)]
 pub(crate) use livekit::{control_url, room_list_token};
-pub use openai_compatible::OpenAiCompatibleProbe;
+pub use openai_compatible::{OpenAiCompatibleProbe, StandardRouteProbe};
 #[cfg(test)]
-pub(crate) use openai_compatible::{normalize_models_url, parse_model_catalog};
+pub(crate) use openai_compatible::{
+    merge_builtin_catalog, normalize_models_url, parse_model_catalog,
+};
 #[cfg(test)]
 pub(crate) use openai_realtime::{
     InputTranscriptAssembler, RealtimeDialectName, RealtimeTransport, dialect_input_rate,
@@ -32,8 +35,9 @@ pub(crate) use openai_realtime::{
 };
 pub use openai_realtime::{
     OpenAiCompatibleRealtime, RealtimeAudioRequest, RealtimeError, RealtimeModel,
-    RealtimeTextRequest, RealtimeTurn,
+    RealtimeTextRequest, RealtimeTurn, probe_realtime_session,
 };
+pub use voice_clone::{VoiceCloneError, VoiceCloneProbe, VOICE_CLONE_TRIAL_TEXT};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderEndpoint {
@@ -53,6 +57,8 @@ pub enum ProviderError {
     Timeout,
     Unauthorized,
     RequestFailed,
+    /// 请求到达但供应商返回了非 2xx/401/403 的 HTTP 状态；携带状态码用于诊断。
+    RequestFailedWithStatus(u16),
     ResponseTooLarge,
     ResponseInvalid,
 }
@@ -64,16 +70,24 @@ impl ProviderError {
             Self::ClientUnavailable => "PROVIDER_CLIENT_UNAVAILABLE",
             Self::Timeout => "PROVIDER_TIMEOUT",
             Self::Unauthorized => "PROVIDER_UNAUTHORIZED",
-            Self::RequestFailed => "PROVIDER_REQUEST_FAILED",
+            Self::RequestFailed | Self::RequestFailedWithStatus(_) => "PROVIDER_REQUEST_FAILED",
             Self::ResponseTooLarge => "PROVIDER_RESPONSE_TOO_LARGE",
             Self::ResponseInvalid => "PROVIDER_RESPONSE_INVALID",
+        }
+    }
+
+    /// 供用户界面展示的完整说明；带状态码的变体会附上 HTTP 状态。
+    pub fn detail(self) -> String {
+        match self {
+            Self::RequestFailedWithStatus(status) => format!("Provider request failed (HTTP {status})"),
+            other => other.code().to_owned(),
         }
     }
 }
 
 impl fmt::Display for ProviderError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.code())
+        formatter.write_str(&self.detail())
     }
 }
 
@@ -85,6 +99,35 @@ pub trait ProviderProbe: Send + Sync {
         endpoint: &ProviderEndpoint,
         credential: Option<&str>,
     ) -> Result<Vec<DiscoveredModel>, ProviderError>;
+}
+
+/// 线路阶段探测失败：code 保留供应商原始错误码，message 为可直接展示的中文说明。
+#[derive(Debug, Clone)]
+pub struct RouteProbeError {
+    pub code: String,
+    pub message: String,
+}
+
+/// 线路测试的真实链路探测：目录比对无法发现账号级权限/余额问题，
+/// 只有真正发起一次最小调用才能在测试阶段暴露（如未开通实时语音模型）。
+pub trait RouteStageProbe: Send + Sync {
+    /// e2e 线路：完成一次 realtime 会话握手（session.update → session.updated），
+    /// 不发送任何音频。
+    fn probe_realtime_session(
+        &self,
+        endpoint: &ProviderEndpoint,
+        credential: Option<&str>,
+        model_id: &str,
+    ) -> Result<(), RouteProbeError>;
+
+    /// 级联线路：合成一个短字符，验证 TTS 阶段的权限与可用性。
+    fn probe_tts(
+        &self,
+        endpoint: &ProviderEndpoint,
+        credential: Option<&str>,
+        model_id: &str,
+        voice_id: Option<&str>,
+    ) -> Result<(), RouteProbeError>;
 }
 
 #[cfg(test)]

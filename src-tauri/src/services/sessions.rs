@@ -553,7 +553,10 @@ impl<S: PlaybackSink> SessionService<S> {
         let role_scenario = active_session_role_scenario(&config);
         let e2e_route =
             active_voice_route(&config).is_some_and(|route| route.mode == VoiceRouteMode::E2e);
+        // “未点名只转写”只应抑制会议音频会话（对方讨论不触发作答）；
+        // 本机麦克风是与角色直接对话，每句话都应得到回复。
         let transcribed_meeting_text = if user_text.is_none()
+            && self.capture.is_meeting_bridge()
             && role_scenario == Some(RoleScenario::MeetingAssistant)
             && !e2e_route
         {
@@ -1480,17 +1483,31 @@ fn run_e2e_turn(
         .map(|text| retrieve(deps, request, text))
         .unwrap_or_default();
     let instructions = e2e_instructions(active_role_profile(request.config), &citations);
-    let turn = realtime.transcribe_turn(
-        RealtimeAudioRequest {
-            endpoint: &endpoint,
-            credential: request.credentials.e2e,
-            model_id,
-            pcm16le: pcm,
-            sample_rate: request.sample_rate,
-            instructions: &instructions,
-        },
-        cancel,
-    )?;
+    let turn = if let Some(prompt) = known_text {
+        realtime.text_turn(
+            RealtimeTextRequest {
+                endpoint: &endpoint,
+                credential: request.credentials.e2e,
+                model_id,
+                instructions: &instructions,
+                prompt,
+                include_audio: true,
+            },
+            cancel,
+        )
+    } else {
+        realtime.transcribe_turn(
+            RealtimeAudioRequest {
+                endpoint: &endpoint,
+                credential: request.credentials.e2e,
+                model_id,
+                pcm16le: pcm,
+                sample_rate: request.sample_rate,
+                instructions: &instructions,
+            },
+            cancel,
+        )
+    }?;
     if cancel.load(Ordering::SeqCst) {
         return Err(RealtimeError::Cancelled);
     }
@@ -1884,6 +1901,8 @@ mod tests {
         ) -> Result<RealtimeTurn, RealtimeError> {
             self.text_calls.fetch_add(1, Ordering::SeqCst);
             *self.model_id.lock().expect("model") = Some(request.model_id.to_owned());
+            *self.instructions.lock().expect("instructions") =
+                Some(request.instructions.to_owned());
             if cancel.load(Ordering::SeqCst) {
                 return Err(RealtimeError::Cancelled);
             }
@@ -2417,7 +2436,7 @@ mod tests {
     }
 
     #[test]
-    fn meeting_assistant_only_transcribes_ordinary_voice_discussion() {
+    fn meeting_assistant_only_transcribes_ordinary_meeting_discussion() {
         let (_directory, database) = opened();
         let mut config = ready_public_config();
         config.role_profiles[0].id = "personal-meeting-assistant".into();
@@ -2429,6 +2448,7 @@ mod tests {
             SessionStartOutcome::Started { .. } => {}
             SessionStartOutcome::Blocked { issues } => panic!("blocked: {issues:?}"),
         }
+        service.capture_mut().mark_meeting_bridge_for_tests();
         service.push_pcm(&[1, 0, 2, 0, 3, 0]);
         let asr = ScriptedAsr::ok("今天讨论项目进度");
         let llm = ScriptedLlm::ok("不应生成回复");
@@ -2452,6 +2472,42 @@ mod tests {
         assert_eq!(llm.calls.load(Ordering::SeqCst), 0);
         assert_eq!(tts.calls.load(Ordering::SeqCst), 0);
         assert!(service.sink().recorded().is_empty());
+    }
+
+    #[test]
+    fn meeting_assistant_answers_voice_on_local_microphone() {
+        let (_directory, database) = opened();
+        let mut config = ready_public_config();
+        config.role_profiles[0].id = "personal-meeting-assistant".into();
+        config.role_profiles[0].name = "小助理".into();
+        config.role_profiles[0].scenario = Some(crate::config::RoleScenario::MeetingAssistant);
+        config.active_role_profile_id = Some("personal-meeting-assistant".into());
+        let mut service = SessionService::with_sink(RecordingSink::default());
+        match service.start(&database, &config, true, None, None).unwrap() {
+            SessionStartOutcome::Started { .. } => {}
+            SessionStartOutcome::Blocked { issues } => panic!("blocked: {issues:?}"),
+        }
+        service.push_pcm(&[1, 0, 2, 0, 3, 0]);
+        let asr = ScriptedAsr::ok("反应有点慢");
+        let llm = ScriptedLlm::ok("好的，我会加快响应");
+        let tts = ScriptedTts::ok(&[3, 4]);
+        let embed = UnusedEmbed;
+
+        let turn = service
+            .finalize_utterance(
+                &database,
+                &config,
+                &cascaded_probes(&asr, &llm, &tts, &embed),
+                credentials(),
+                None,
+            )
+            .unwrap()
+            .expect("answer turn");
+
+        assert_eq!(turn.assistant_text, "好的，我会加快响应");
+        assert_eq!(llm.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(tts.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(service.sink().recorded(), [3, 4]);
     }
 
     #[test]
@@ -3026,6 +3082,78 @@ mod tests {
     }
 
     #[test]
+    fn e2e_typed_message_uses_text_instead_of_empty_audio() {
+        let (_directory, database) = opened();
+        let mut service = SessionService::new();
+        let id = start_e2e(&mut service, &database);
+        let asr = ScriptedAsr::ok("unused");
+        let llm = ScriptedLlm::ok("unused");
+        let tts = ScriptedTts::ok(&[1]);
+        let embed = UnusedEmbed;
+        let realtime = FakeRealtime::ok("", "你好", &[1, 2]);
+        let probes = e2e_probes(&asr, &llm, &tts, &embed, &realtime);
+        let turn = service
+            .finalize_utterance(
+                &database,
+                &ready_e2e_public_config(),
+                &probes,
+                credentials(),
+                Some("你好啊"),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            realtime.calls.load(Ordering::SeqCst),
+            0,
+            "typed input must not submit empty PCM"
+        );
+        assert_eq!(realtime.text_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(turn.user_text, "你好啊");
+        assert_eq!(
+            SessionStore::new(&database).list_turns(&id).unwrap().len(),
+            1
+        );
+    }
+
+    #[test]
+    fn e2e_connection_failure_can_retry_without_creating_a_phantom_turn() {
+        let (_directory, database) = opened();
+        let mut service = SessionService::new();
+        let id = start_e2e(&mut service, &database);
+        let asr = ScriptedAsr::ok("unused");
+        let llm = ScriptedLlm::ok("unused");
+        let tts = ScriptedTts::ok(&[1]);
+        let embed = UnusedEmbed;
+        let realtime = FakeRealtime::ok("", "你好", &[1, 2]);
+        *realtime.error.lock().unwrap() = Some(RealtimeError::ConnectionClosed);
+        let probes = e2e_probes(&asr, &llm, &tts, &embed, &realtime);
+        let config = ready_e2e_public_config();
+        assert!(
+            service
+                .finalize_utterance(&database, &config, &probes, credentials(), Some("你好啊"))
+                .is_err()
+        );
+        assert_eq!(service.phase(), SessionPhase::Listening);
+        assert!(
+            SessionStore::new(&database)
+                .list_turns(&id)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            service
+                .finalize_utterance(&database, &config, &probes, credentials(), Some("你好啊"))
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(service.last_error_code(), None);
+        assert_eq!(
+            SessionStore::new(&database).list_turns(&id).unwrap().len(),
+            1
+        );
+    }
+
+    #[test]
     fn e2e_unauthorized_fails_session() {
         let (_directory, database) = opened();
         let mut service = SessionService::new();
@@ -3106,10 +3234,9 @@ mod tests {
         assert!(instructions.contains("UNIQUE_PROMPT_BODY_DO_NOT_SNAPSHOT"));
         assert!(instructions.contains("UNIQUE_STYLE_DO_NOT_SNAPSHOT"));
         assert!(instructions.contains("订单服务"));
-        assert_eq!(
-            realtime.sample_rate.lock().expect("sample_rate").as_ref(),
-            Some(&16_000)
-        );
+        assert_eq!(realtime.text_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(realtime.calls.load(Ordering::SeqCst), 0);
+        assert!(realtime.sample_rate.lock().expect("sample_rate").is_none());
     }
 
     #[test]

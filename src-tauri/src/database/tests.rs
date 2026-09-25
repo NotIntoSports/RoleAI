@@ -16,7 +16,7 @@ fn empty_database_migrates_once_and_passes_integrity_check() {
     database.migrate().unwrap();
     database.migrate().unwrap();
 
-    assert_eq!(database.schema_version().unwrap(), 5);
+    assert_eq!(database.schema_version().unwrap(), 6);
     assert_eq!(database.integrity_check().unwrap(), "ok");
     assert_eq!(
         database.application_table_names().unwrap(),
@@ -35,6 +35,7 @@ fn empty_database_migrates_once_and_passes_integrity_check() {
             "session_events",
             "session_turns",
             "sessions",
+            "voice_references",
         ]
     );
 }
@@ -111,7 +112,7 @@ fn foundation_database_migrates_to_materials_schema() {
     let database = Database::open(path).unwrap();
     database.migrate().unwrap();
 
-    assert_eq!(database.schema_version().unwrap(), 5);
+    assert_eq!(database.schema_version().unwrap(), 6);
     assert!(
         database
             .application_table_names()
@@ -148,7 +149,7 @@ fn materials_schema_migrates_to_cascade_session_schema() {
     let database = Database::open(path).unwrap();
     database.migrate().unwrap();
 
-    assert_eq!(database.schema_version().unwrap(), 5);
+    assert_eq!(database.schema_version().unwrap(), 6);
     let tables = database.application_table_names().unwrap();
     for name in [
         "sessions",
@@ -308,7 +309,7 @@ fn cascade_session_schema_migrates_to_livekit_transport() {
     let database = Database::open(path).unwrap();
     database.migrate().unwrap();
 
-    assert_eq!(database.schema_version().unwrap(), 5);
+    assert_eq!(database.schema_version().unwrap(), 6);
     assert_eq!(database.integrity_check().unwrap(), "ok");
     assert_eq!(
         database

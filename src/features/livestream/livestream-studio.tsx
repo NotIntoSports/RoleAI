@@ -148,6 +148,8 @@ export function LivestreamStudio() {
 
     {message && <p role="status">{message}</p>}
     {runtime && <p role="status">语音线路：{{ idle: "待机", synthesizing: "正在合成", playing: "正在实际播放", played: "已实际播放", cancelled: "已取消/人工接管", failed: "播放失败" }[runtime.stage.outputState]}{runtime.stage.outputErrorCode ? `（${runtime.stage.outputErrorCode}）` : ""}</p>}
+    <details className="livestream-configuration" open={!runtime}>
+    <summary>直播配置与产品资料</summary>
     <section className="session-selection livestream-setup" aria-label="直播向导">
       <label>OBS WebSocket 密码<input type="password" value={obsPassword} onChange={(event) => setObsPassword(event.target.value)} placeholder={obsPasswordConfigured ? "已配置；留空并保存可清除" : "仅保存到 Windows 凭据管理器"} /></label>
       <button disabled={busy} onClick={() => void saveObsCredential()}>{obsPasswordConfigured && !obsPassword ? "清除 OBS 密码" : "保存 OBS 密码"}</button>
@@ -160,6 +162,7 @@ export function LivestreamStudio() {
       <fieldset><legend>产品资料</legend>{materials.length === 0 ? <p>暂无已就绪资料，请先到“资料”页导入并建立索引。</p> : materials.map((material) => <label key={material.id}><input type="checkbox" checked={selectedMaterials.includes(material.id)} onChange={(event) => setSelectedMaterials((current) => event.target.checked ? [...current, material.id] : current.filter((id) => id !== material.id))} />{material.fileName}</label>)}</fieldset>
       <button className="button-primary" disabled={busy} onClick={() => void generate()}>生成分段讲稿</button>
     </section>
+    </details>
 
     {runtime && <section className="livestream-script" aria-label="讲稿编辑">
       <h3>{runtime.script.title}</h3>

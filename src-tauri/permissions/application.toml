@@ -94,6 +94,36 @@ description = "Allows deleting one voice route."
 commands.allow = ["speech_route_delete"]
 
 [[permission]]
+identifier = "allow-voice-reference-save"
+description = "Allows saving a voice reference audio file read from a local path."
+commands.allow = ["voice_reference_save"]
+
+[[permission]]
+identifier = "allow-voice-reference-save-audio"
+description = "Allows saving recorded or file-picker audio bytes as a voice reference."
+commands.allow = ["voice_reference_save_audio"]
+
+[[permission]]
+identifier = "allow-voice-reference-list"
+description = "Allows listing voice reference metadata without audio bytes."
+commands.allow = ["voice_reference_list"]
+
+[[permission]]
+identifier = "allow-voice-reference-delete"
+description = "Allows deleting one stored voice reference."
+commands.allow = ["voice_reference_delete"]
+
+[[permission]]
+identifier = "allow-voice-reference-clone"
+description = "Allows uploading a stored voice reference to its provider and cloning it into a voice id."
+commands.allow = ["voice_reference_clone"]
+
+[[permission]]
+identifier = "allow-voice-reference-update"
+description = "Allows updating voice reference metadata while keeping the stored audio."
+commands.allow = ["voice_reference_update"]
+
+[[permission]]
 identifier = "allow-role-profile-save"
 description = "Allows saving one local role profile."
 commands.allow = ["role_profile_save"]
@@ -262,6 +292,11 @@ commands.allow = ["virtual_audio_install"]
 identifier = "allow-session-audio-ready"
 description = "Allows checking whether the active meeting capture has one complete bounded utterance."
 commands.allow = ["session_audio_ready"]
+
+[[permission]]
+identifier = "allow-session-push-mic-pcm"
+description = "Allows streaming local microphone PCM into the active session utterance buffer."
+commands.allow = ["session_push_mic_pcm"]
 
 [[permission]]
 identifier = "allow-livestream-create-draft"

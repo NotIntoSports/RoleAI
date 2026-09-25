@@ -2,7 +2,7 @@
   display: grid;
   grid-template-columns: 156px minmax(0, 1fr);
   align-items: start;
-  gap: 28px;
+  gap: 32px;
 }
 
 .configuration-layout > .settings-nav {
@@ -19,7 +19,7 @@
   display: none;
 }
 
-.configuration-editor { padding: 20px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-muted); }
+.configuration-editor { padding: 24px; border: 0; border-radius: 12px; background: var(--surface-muted); }
 .configuration-editor :is(input, select, textarea) { background: var(--surface); }
 .configuration-list { padding-top: 4px; }
 
@@ -156,4 +156,28 @@
     flex-direction: row;
     flex-wrap: wrap;
   }
+}
+
+.configuration-content { padding-bottom: 24px; }
+.configuration-description { font-size: 13px; }
+.configuration-list .service-card { padding-block: 24px; }
+.settings-nav button { min-height: 40px; border-radius: 10px; }
+@media (max-width: 600px) { .configuration-editor { padding: 16px; } }
+
+.voice-recorder-field {
+  display: grid;
+  gap: 5px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.voice-recorder {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.voice-recorder > button {
+  justify-self: start;
 }

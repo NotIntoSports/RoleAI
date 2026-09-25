@@ -31,6 +31,13 @@ pub struct FoundationStatus {
     pub ready: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct MicPcmAcceptance {
+    pub accepted: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
@@ -301,6 +308,7 @@ fn generated_bindings() -> String {
     let decls = [
         PublicError::decl(&config),
         FoundationStatus::decl(&config),
+        MicPcmAcceptance::decl(&config),
         SecretStatus::decl(&config),
         DiagnosticsExportResult::decl(&config),
         StartupState::decl(&config),
@@ -341,6 +349,11 @@ fn generated_bindings() -> String {
         ModelDiscoveryResult::decl(&config),
         VoiceRouteSaveInput::decl(&config),
         VoiceRouteTestResult::decl(&config),
+        crate::services::VoiceReferenceSaveInput::decl(&config),
+        crate::services::VoiceReferenceAudioSaveInput::decl(&config),
+        crate::services::VoiceReferenceUpdateInput::decl(&config),
+        crate::services::VoiceReferenceSummary::decl(&config),
+        crate::services::VoiceReferenceCloneResult::decl(&config),
         RoleProfileSaveInput::decl(&config),
         RoleProfileCopyInput::decl(&config),
         EmbeddingConfigSaveInput::decl(&config),
@@ -481,6 +494,11 @@ mod tests {
             "AgentCommandInput",
             "AgentCommandResult",
             "LiveKitJoinToken",
+            "VoiceReferenceSummary",
+            "VoiceReferenceSaveInput",
+            "VoiceReferenceAudioSaveInput",
+            "VoiceReferenceUpdateInput",
+            "VoiceReferenceCloneResult",
             "LivestreamDraftInput",
             "LivestreamGenerateInput",
             "LivestreamRuntime",

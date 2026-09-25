@@ -1,10 +1,10 @@
 :root {
-  --surface: #ffffff;
-  --surface-muted: #f5f6f7;
-  --surface-hover: #efefec;
-  --text: #242424;
-  --text-muted: #73736d;
-  --border: #e5e7eb;
+  --surface: #fcfbf9;
+  --surface-muted: #f1f0ec;
+  --surface-hover: #e8e7e2;
+  --text: #292824;
+  --text-muted: #6d6c65;
+  --border: #e5e3dd;
   --border-strong: #c9c9c2;
   --accent: #292929;
   --accent-contrast: #ffffff;
@@ -54,9 +54,9 @@ p { margin-bottom: 12px; }
 button, input, textarea, select { font: inherit; }
 button {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  min-height: 34px; padding: 6px 12px; border: 1px solid var(--border);
-  border-radius: 7px; color: var(--text); background: var(--surface); cursor: pointer;
-  line-height: 1.4; transition: background 120ms ease, border-color 120ms ease;
+  min-height: 36px; padding: 6px 12px; border: 1px solid var(--border);
+  border-radius: 10px; color: var(--text); background: var(--surface); cursor: pointer;
+  line-height: 1.4; transition: background 150ms ease, border-color 150ms ease, color 150ms ease;
 }
 button:hover:not(:disabled) { background: var(--surface-hover); border-color: var(--border-strong); }
 button:disabled { opacity: 0.42; cursor: not-allowed; }
@@ -104,4 +104,9 @@ summary::marker { color: var(--text-muted); }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 0s; animation-duration: 0s; scroll-behavior: auto; }
+}
+
+/* Native controls keep keyboard and WebView2 behavior; motion is decorative. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
 }

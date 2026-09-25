@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-import type { AgentCommandInput, AgentCommandResult, CommandResult, DiagnosticsExportResult, EmbeddingConfig, EmbeddingConfigSaveInput, EmbeddingTestResult, FoundationStatus, LegacyMigrationStatus, LegacySessionImport, LiveKitConfig, LiveKitJoinToken, LiveKitSettingsSaveInput, LiveKitTestResult, LivestreamDraftInput, LivestreamGenerateInput, LivestreamRuntime, MaterialIndexResult, MaterialSearchHit, MaterialSummary, ModelDiscoveryResult, ObsRuntimeStatus, ProviderConfig, ProviderSaveInput, ProviderTestResult, PublicConfig, RoleProfileConfig, RoleProfileCopyInput, RoleProfileSaveInput, RuntimeStatus, SecretStatus, SessionDetail, SessionExportResult, SessionStartResult, SessionSummary, SessionTurnView, StartupState, VoiceRouteConfig, VoiceRouteSaveInput, VoiceRouteTestResult } from "../generated/bindings";
+import type { AgentCommandInput, AgentCommandResult, CommandResult, DiagnosticsExportResult, EmbeddingConfig, EmbeddingConfigSaveInput, EmbeddingTestResult, FoundationStatus, LegacyMigrationStatus, LegacySessionImport, LiveKitConfig, LiveKitJoinToken, LiveKitSettingsSaveInput, LiveKitTestResult, LivestreamDraftInput, LivestreamGenerateInput, LivestreamRuntime, MaterialIndexResult, MaterialSearchHit, MaterialSummary, MicPcmAcceptance, ModelDiscoveryResult, ObsRuntimeStatus, ProviderConfig, ProviderSaveInput, ProviderTestResult, PublicConfig, RoleProfileConfig, RoleProfileCopyInput, RoleProfileSaveInput, RuntimeStatus, SecretStatus, SessionDetail, SessionExportResult, SessionStartResult, SessionSummary, SessionTurnView, StartupState, VoiceReferenceAudioSaveInput, VoiceReferenceCloneResult, VoiceReferenceSaveInput, VoiceReferenceSummary, VoiceReferenceUpdateInput, VoiceRouteConfig, VoiceRouteSaveInput, VoiceRouteTestResult } from "../generated/bindings";
 
 export function getFoundationStatus() {
   return invoke<CommandResult<FoundationStatus>>("foundation_get_status");
@@ -214,6 +214,10 @@ export function isSessionAudioReady() {
   return invoke<CommandResult<FoundationStatus>>("session_audio_ready");
 }
 
+export function pushMicPcm(pcm: string, sampleRate: number) {
+  return invoke<CommandResult<MicPcmAcceptance>>("session_push_mic_pcm", { pcm, sampleRate });
+}
+
 export function createLivestreamDraft(input: LivestreamDraftInput) {
   return invoke<CommandResult<LivestreamRuntime>>("livestream_create_draft", { input });
 }
@@ -252,4 +256,28 @@ export function getObsPasswordStatus() {
 
 export function saveObsPassword(password: string) {
   return invoke<CommandResult<SecretStatus>>("obs_password_save", { password });
+}
+
+export function listVoiceReferences() {
+  return invoke<CommandResult<VoiceReferenceSummary[]>>("voice_reference_list");
+}
+
+export function saveVoiceReference(input: VoiceReferenceSaveInput) {
+  return invoke<CommandResult<VoiceReferenceSummary>>("voice_reference_save", { input });
+}
+
+export function cloneVoiceReference(id: string) {
+  return invoke<CommandResult<VoiceReferenceCloneResult>>("voice_reference_clone", { id });
+}
+
+export function deleteVoiceReference(id: string) {
+  return invoke<CommandResult<FoundationStatus>>("voice_reference_delete", { id });
+}
+
+export function saveVoiceReferenceAudio(input: VoiceReferenceAudioSaveInput) {
+  return invoke<CommandResult<VoiceReferenceSummary>>("voice_reference_save_audio", { input });
+}
+
+export function updateVoiceReference(input: VoiceReferenceUpdateInput) {
+  return invoke<CommandResult<VoiceReferenceSummary>>("voice_reference_update", { input });
 }

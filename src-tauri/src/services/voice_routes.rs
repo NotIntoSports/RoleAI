@@ -5,7 +5,7 @@ use ts_rs::TS;
 
 use crate::{
     config::{ConfigError, ConfigStore, VoiceRouteConfig, VoiceRouteMode},
-    providers::ProviderProbe,
+    providers::{ProviderEndpoint, ProviderProbe, RouteProbeError, RouteStageProbe},
     secrets::SecretService,
 };
 
@@ -46,6 +46,7 @@ pub enum VoiceRouteServiceError {
     NotFound,
     NotReady,
     ModelNotFound,
+    Probe(RouteProbeError),
     Config(ConfigError),
     Provider(ProviderServiceError),
 }
@@ -58,6 +59,7 @@ impl VoiceRouteServiceError {
             Self::NotFound => "VOICE_ROUTE_NOT_FOUND",
             Self::NotReady => "VOICE_ROUTE_NOT_READY",
             Self::ModelNotFound => "VOICE_ROUTE_MODEL_NOT_FOUND",
+            Self::Probe(_) => "VOICE_ROUTE_PROBE_FAILED",
             Self::Config(error) => error.code(),
             Self::Provider(error) => error.code(),
         }
@@ -68,6 +70,7 @@ pub struct VoiceRouteService<'a> {
     config: &'a ConfigStore,
     secrets: &'a SecretService,
     probe: &'a dyn ProviderProbe,
+    stage_probe: &'a dyn RouteStageProbe,
 }
 
 impl<'a> VoiceRouteService<'a> {
@@ -75,11 +78,13 @@ impl<'a> VoiceRouteService<'a> {
         config: &'a ConfigStore,
         secrets: &'a SecretService,
         probe: &'a dyn ProviderProbe,
+        stage_probe: &'a dyn RouteStageProbe,
     ) -> Self {
         Self {
             config,
             secrets,
             probe,
+            stage_probe,
         }
     }
 
@@ -169,6 +174,12 @@ impl<'a> VoiceRouteService<'a> {
                 return Err(VoiceRouteServiceError::ModelNotFound);
             }
         }
+        // 目录比对无法发现账号级的权限/余额问题（例如未开通实时语音模型），
+        // 必须真实调用一次线路的阶段链路才能在测试阶段暴露。
+        if let Err(error) = self.probe_route_stages(&route) {
+            mark_test_failed(self.config, route_id)?;
+            return Err(VoiceRouteServiceError::Probe(error));
+        }
         self.config
             .update(|config| {
                 let current = config
@@ -195,6 +206,63 @@ impl<'a> VoiceRouteService<'a> {
             ready: true,
             checked_provider_ids: providers,
         })
+    }
+
+    fn probe_route_stages(&self, route: &VoiceRouteConfig) -> Result<(), RouteProbeError> {
+        match route.mode {
+            VoiceRouteMode::E2e => {
+                let provider_id = clean(route.e2e_provider_id.clone())
+                    .ok_or_else(probe_config_error)?;
+                let model_id = clean(route.e2e_model_id.clone()).ok_or_else(probe_config_error)?;
+                let (endpoint, credential) = self.stage_endpoint_credential(&provider_id)?;
+                self.stage_probe
+                    .probe_realtime_session(&endpoint, credential.as_deref(), &model_id)
+            }
+            VoiceRouteMode::Cascaded => {
+                let provider_id =
+                    clean(route.tts_provider_id.clone()).ok_or_else(probe_config_error)?;
+                let model_id = clean(route.tts_model_id.clone()).ok_or_else(probe_config_error)?;
+                let voice_id = clean(route.voice_id.clone());
+                let (endpoint, credential) = self.stage_endpoint_credential(&provider_id)?;
+                self.stage_probe
+                    .probe_tts(&endpoint, credential.as_deref(), &model_id, voice_id.as_deref())
+            }
+        }
+    }
+
+    fn stage_endpoint_credential(
+        &self,
+        provider_id: &str,
+    ) -> Result<(ProviderEndpoint, Option<String>), RouteProbeError> {
+        let config = self.config.load().map_err(|error| RouteProbeError {
+            code: error.code().to_owned(),
+            message: "线路测试无法读取本地配置。".into(),
+        })?;
+        let provider = config
+            .models
+            .providers
+            .iter()
+            .find(|provider| provider.id == provider_id)
+            .ok_or_else(probe_config_error)?;
+        let credential = provider
+            .credential
+            .as_ref()
+            .filter(|slot| slot.configured)
+            .map(|slot| self.secrets.read(&slot.reference))
+            .transpose()
+            .map_err(|_| RouteProbeError {
+                code: "SECRET_BACKEND_UNAVAILABLE".into(),
+                message: "线路测试无法读取供应商密钥，请重新保存 API Key 后重试。".into(),
+            })?
+            .flatten()
+            .map(|value| value.to_string());
+        Ok((
+            ProviderEndpoint {
+                provider_id: provider.id.clone(),
+                base_url: provider.base_url.clone(),
+            },
+            credential,
+        ))
     }
 
     pub fn activate(&self, route_id: &str) -> Result<VoiceRouteConfig, VoiceRouteServiceError> {
@@ -297,6 +365,13 @@ fn present(value: Option<&str>) -> bool {
     value.is_some_and(|value| !value.trim().is_empty())
 }
 
+fn probe_config_error() -> RouteProbeError {
+    RouteProbeError {
+        code: "VOICE_ROUTE_FIELDS_INVALID".into(),
+        message: "线路配置不完整，无法发起链路测试。".into(),
+    }
+}
+
 fn clean(value: Option<String>) -> Option<String> {
     value.and_then(|value| {
         let value = value.trim().to_owned();
@@ -304,8 +379,7 @@ fn clean(value: Option<String>) -> Option<String> {
     })
 }
 
-fn provider_models(route: &VoiceRouteConfig) -> BTreeMap<String, BTreeSet<String>> {
-    let mut providers = BTreeMap::<String, BTreeSet<String>>::new();
+fn provider_models(route: &VoiceRouteConfig) -> BTreeMap<String, BTreeSet<String>> {    let mut providers = BTreeMap::<String, BTreeSet<String>>::new();
     for (provider, model) in [
         (&route.asr_provider_id, &route.asr_model_id),
         (&route.llm_provider_id, &route.llm_model_id),

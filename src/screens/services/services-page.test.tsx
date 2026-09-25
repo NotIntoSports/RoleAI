@@ -24,6 +24,23 @@ vi.mock("../../api/commands", () => ({
   saveLiveKitSettings: vi.fn(),
   testLiveKitSettings: vi.fn(),
   enableLiveKitSettings: vi.fn(),
+  listVoiceReferences: vi.fn(),
+  saveVoiceReference: vi.fn(),
+  saveVoiceReferenceAudio: vi.fn(),
+  updateVoiceReference: vi.fn(),
+  cloneVoiceReference: vi.fn(),
+  deleteVoiceReference: vi.fn(),
+}));
+
+vi.mock("../../features/services/wav-recorder", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../features/services/wav-recorder")>()),
+  VoiceRecorder: class {
+    start = vi.fn(async () => undefined);
+    stop = vi.fn(async () => ({ base64: "UklGRg==", durationMs: 12000 }));
+    cancel = vi.fn();
+    get recordedMs() { return 0; }
+    get recording() { return false; }
+  },
 }));
 
 const emptyConfig = {
@@ -68,11 +85,91 @@ describe("ServicesPage", () => {
     expect(screen.queryByRole("heading", { name: "语音线路" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "Embedding" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "LiveKit" })).toBeNull();
-    for (const name of ["语音线路", "Embedding", "LiveKit"]) {
+    for (const name of ["语音线路", "音色克隆", "Embedding", "LiveKit"]) {
       fireEvent.click(navigation.getByRole("button", { name }));
       expect(screen.getByRole("heading", { name })).toBeTruthy();
       expect(screen.queryByRole("heading", { name: "模型供应商" })).toBeNull();
     }
+  });
+
+  it("lists voice references and saves a picked audio file", async () => {
+    const reference = {
+      id: "ref-1", name: "我的音色", providerId: null, mimeType: "audio/wav",
+      byteSize: BigInt(32000), durationMs: BigInt(12000), transcript: "你好世界",
+      remoteFileId: null, voiceId: null, cloneStatus: "pending", cloneError: null,
+      createdAt: "2026-09-25T00:00:00Z", updatedAt: "2026-09-25T00:00:00Z",
+    };
+    vi.mocked(commands.listVoiceReferences).mockResolvedValue({ ok: true, data: [reference] });
+    vi.mocked(commands.saveVoiceReferenceAudio).mockResolvedValue({ ok: true, data: { ...reference, id: "ref-2", name: "新音色" } });
+    render(<ServicesPage />);
+    const navigation = within(screen.getByRole("navigation", { name: "服务分类" }));
+    fireEvent.click(navigation.getByRole("button", { name: "音色克隆" }));
+    expect(await screen.findByRole("heading", { name: "音色克隆" })).toBeTruthy();
+    expect(await screen.findByText("我的音色")).toBeTruthy();
+    const wavBytes = new Uint8Array([82, 73, 70, 70, 0, 0, 0, 0, 87, 65, 86, 69]);
+    const file = new File([wavBytes], "sample.wav", { type: "audio/wav" });
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    Object.defineProperty(fileInput, "files", { value: [file] });
+    fireEvent.change(fileInput);
+    expect(await screen.findByText(/已选择 sample\.wav/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("名称"), { target: { value: "新音色" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存音色" }));
+    expect(await screen.findByText("音色已保存，请点击「克隆」生成音色 ID")).toBeTruthy();
+    const expectedBase64 = btoa(Array.from(wavBytes, (byte) => String.fromCharCode(byte)).join(""));
+    expect(commands.saveVoiceReferenceAudio).toHaveBeenCalledWith(expect.objectContaining({ name: "新音色", audioBase64: expectedBase64 }));
+  });
+
+  it("edits an existing reference and updates metadata without rerecording", async () => {
+    const reference = {
+      id: "ref-1", name: "我的音色", providerId: null, mimeType: "audio/wav",
+      byteSize: BigInt(32000), durationMs: BigInt(12000), transcript: "你好世界",
+      remoteFileId: null, voiceId: null, cloneStatus: "pending", cloneError: null,
+      createdAt: "2026-09-25T00:00:00Z", updatedAt: "2026-09-25T00:00:00Z",
+    };
+    vi.mocked(commands.listVoiceReferences).mockResolvedValue({ ok: true, data: [reference] });
+    vi.mocked(commands.getConfigPublic).mockResolvedValue({
+      ok: true,
+      data: { ...emptyConfig, models: { providers: [{ id: "zcode", name: "zcode", baseUrl: "https://open.bigmodel.cn/api/paas/v4", credential: null }], activeProviderId: null } },
+    });
+    vi.mocked(commands.updateVoiceReference).mockResolvedValue({
+      ok: true,
+      data: { ...reference, name: "我的音色", providerId: "zcode" },
+    });
+    render(<ServicesPage />);
+    const navigation = within(screen.getByRole("navigation", { name: "服务分类" }));
+    fireEvent.click(navigation.getByRole("button", { name: "音色克隆" }));
+    expect(await screen.findByText("我的音色")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "编辑 我的音色" }));
+    expect(await screen.findByText(/正在编辑「我的音色」/)).toBeTruthy();
+    const voicesPanel = document.getElementById("services-panel-voices") as HTMLElement;
+    fireEvent.change(within(voicesPanel).getByLabelText("供应商"), { target: { value: "zcode" } });
+    fireEvent.click(within(voicesPanel).getByRole("button", { name: "保存修改" }));
+    expect(await screen.findByText("音色信息已更新，原音频与克隆状态保持不变")).toBeTruthy();
+    expect(commands.updateVoiceReference).toHaveBeenCalledWith(expect.objectContaining({ id: "ref-1", providerId: "zcode" }));
+    expect(commands.saveVoiceReferenceAudio).not.toHaveBeenCalled();
+  });
+
+  it("records in-app audio and saves it as a voice reference", async () => {
+    vi.mocked(commands.listVoiceReferences).mockResolvedValue({ ok: true, data: [] });
+    vi.mocked(commands.saveVoiceReferenceAudio).mockResolvedValue({
+      ok: true,
+      data: {
+        id: "ref-9", name: "录音音色", providerId: null, mimeType: "audio/wav",
+        byteSize: BigInt(192044), durationMs: BigInt(12000), transcript: "",
+        remoteFileId: null, voiceId: null, cloneStatus: "pending", cloneError: null,
+        createdAt: "2026-09-25T00:00:00Z", updatedAt: "2026-09-25T00:00:00Z",
+      },
+    });
+    render(<ServicesPage />);
+    const navigation = within(screen.getByRole("navigation", { name: "服务分类" }));
+    fireEvent.click(navigation.getByRole("button", { name: "音色克隆" }));
+    fireEvent.click(await screen.findByRole("button", { name: "开始录音" }));
+    fireEvent.click(await screen.findByRole("button", { name: /停止录音/ }));
+    expect(await screen.findByText(/已录制 12 秒/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("名称"), { target: { value: "录音音色" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存音色" }));
+    expect(await screen.findByText("音色已保存，请点击「克隆」生成音色 ID")).toBeTruthy();
+    expect(commands.saveVoiceReferenceAudio).toHaveBeenCalledWith(expect.objectContaining({ name: "录音音色", audioBase64: "UklGRg==" }));
   });
 
   it("preserves provider, route, embedding and LiveKit drafts across category switches", async () => {
@@ -284,6 +381,25 @@ describe("ServicesPage", () => {
     fireEvent.change(screen.getByLabelText("ASR 供应商"), { target: { value: "openai" } });
     await waitFor(() => expect(container.querySelector('#models-asr option[value="model-a"]')).not.toBeNull());
     expect((screen.getByLabelText("ASR 模型") as HTMLInputElement).getAttribute("list")).toBe("models-asr");
+  });
+
+  it("discovers models automatically when a route provider is selected", async () => {
+    vi.mocked(commands.getConfigPublic).mockResolvedValue({
+      ok: true,
+      data: { ...emptyConfig, models: { providers: [{ id: "openai", name: "OpenAI", baseUrl: "https://example.test/v1", credential: null }], activeProviderId: null } },
+    });
+    vi.mocked(commands.discoverModelProvider).mockResolvedValue({
+      ok: true,
+      data: { providerId: "openai", models: [{ id: "model-a" }, { id: "model-b" }] },
+    });
+    const { container } = render(<ServicesPage />);
+    // 无需先到供应商页点"发现模型"：在线路表单选中供应商即自动发现。
+    fireEvent.click(await screen.findByRole("button", { name: "语音线路" }));
+    fireEvent.change(screen.getByLabelText("ASR 供应商"), { target: { value: "openai" } });
+    await waitFor(() => expect(commands.discoverModelProvider).toHaveBeenCalledWith("openai"));
+    await waitFor(() => expect(container.querySelector('#models-asr option[value="model-a"]')).not.toBeNull());
+    fireEvent.change(screen.getByLabelText("LLM 供应商"), { target: { value: "openai" } });
+    await waitFor(() => expect(container.querySelector('#models-llm option[value="model-b"]')).not.toBeNull());
   });
 
   it("saves an end-to-end route with only realtime fields and requires a successful test before activation", async () => {

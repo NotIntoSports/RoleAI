@@ -360,3 +360,17 @@
     align-items: flex-start;
   }
 }
+
+.library-toolbar { gap: 16px; margin-bottom: 24px; }
+.library-row { padding: 20px 12px; border-radius: 12px; transition: background 150ms ease; }
+.library-row:hover { background: var(--surface-muted); }
+.library-import { border: 0; border-radius: 12px; }
+.record-detail-heading { padding-block: 24px; }
+.record-message { font-size: 15px; border-radius: 16px; }
+@media (max-width: 600px) {
+  .library-search { min-width: 0; width: 100%; flex-basis: 100%; }
+  .library-row { padding: 16px 0; gap: 12px; }
+  .library-row-actions { padding-left: 0; }
+  .library-import-form { padding: 0 16px 16px; }
+  .record-message { padding: 12px; }
+}

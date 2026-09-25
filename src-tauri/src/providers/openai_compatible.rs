@@ -3,7 +3,7 @@ use std::{io::Read, time::Duration};
 use reqwest::{StatusCode, Url, blocking::Client, redirect::Policy};
 use serde::Deserialize;
 
-use super::{DiscoveredModel, ProviderEndpoint, ProviderError, ProviderProbe};
+use super::{DiscoveredModel, ProviderEndpoint, ProviderError, ProviderProbe, TextToSpeech};
 
 pub(crate) const MAX_RESPONSE_BYTES: u64 = 1024 * 1024;
 
@@ -75,7 +75,10 @@ impl ProviderProbe for OpenAiCompatibleProbe {
         credential: Option<&str>,
     ) -> Result<Vec<DiscoveredModel>, ProviderError> {
         let url = normalize_models_url(&endpoint.base_url)?;
-        let mut request = self.client.get(url).header("Accept", "application/json");
+        let mut request = self
+            .client
+            .get(url.clone())
+            .header("Accept", "application/json");
         if let Some(credential) = credential.filter(|value| !value.is_empty()) {
             request = request.bearer_auth(credential);
         }
@@ -98,7 +101,9 @@ impl ProviderProbe for OpenAiCompatibleProbe {
             BoundedBodyError::TooLarge => ProviderError::ResponseTooLarge,
             BoundedBodyError::Failed => ProviderError::RequestFailed,
         })?;
-        parse_model_catalog(&bytes)
+        let mut models = parse_model_catalog(&bytes)?;
+        merge_builtin_catalog(&url, &mut models);
+        Ok(models)
     }
 }
 
@@ -143,4 +148,93 @@ pub(crate) fn parse_model_catalog(bytes: &[u8]) -> Result<Vec<DiscoveredModel>, 
     ids.sort();
     ids.dedup();
     Ok(ids.into_iter().map(|id| DiscoveredModel { id }).collect())
+}
+
+/// 智谱开放平台的 /models 只返回对话模型；语音、向量、实时模型 ID
+/// 依据官方文档内置（2026-09-24 核对 docs.bigmodel.cn），仅作界面填写建议。
+const ZHIPU_BUILTIN_MODELS: &[&str] = &[
+    "embedding-2",
+    "embedding-3",
+    "glm-asr-2512",
+    "glm-realtime",
+    "glm-realtime-air",
+    "glm-realtime-flash",
+    "glm-tts",
+];
+
+/// 按接入地址主机名合并内置已知模型 ID；结果保持排序去重，用户仍可手填目录外的模型。
+pub(crate) fn merge_builtin_catalog(url: &Url, models: &mut Vec<DiscoveredModel>) {
+    let known = match url.host_str() {
+        Some(host) if host.eq_ignore_ascii_case("open.bigmodel.cn") => ZHIPU_BUILTIN_MODELS,
+        _ => return,
+    };
+    let mut ids = models
+        .iter()
+        .map(|model| model.id.clone())
+        .collect::<Vec<_>>();
+    for id in known {
+        if !ids.iter().any(|existing| existing.as_str() == *id) {
+            ids.push((*id).to_owned());
+        }
+    }
+    ids.sort();
+    ids.dedup();
+    *models = ids
+        .into_iter()
+        .map(|id| DiscoveredModel { id })
+        .collect();
+}
+
+/// 线路测试的阶段探测实现：e2e 走真实 realtime 握手，级联走一次最小 TTS 合成。
+pub struct StandardRouteProbe;
+
+impl StandardRouteProbe {
+    pub fn new() -> Result<Self, ProviderError> {
+        // 仅验证本机 HTTP 栈可用，真正探测时按线路供应商逐个发起请求。
+        build_bounded_client().map_err(|_| ProviderError::ClientUnavailable).map(|_| Self)
+    }
+}
+
+fn realtime_probe_error(error: crate::providers::RealtimeError) -> super::RouteProbeError {
+    super::RouteProbeError {
+        code: error.code().to_owned(),
+        message: error.public_message(),
+    }
+}
+
+fn tts_probe_error(error: crate::providers::CascadeError) -> super::RouteProbeError {
+    super::RouteProbeError {
+        code: error.code().to_owned(),
+        message: format!(
+            "语音合成测试未通过（{}），请确认账号已开通语音合成并有余量。",
+            error.code()
+        ),
+    }
+}
+
+impl super::RouteStageProbe for StandardRouteProbe {
+    fn probe_realtime_session(
+        &self,
+        endpoint: &ProviderEndpoint,
+        credential: Option<&str>,
+        model_id: &str,
+    ) -> Result<(), super::RouteProbeError> {
+        crate::providers::openai_realtime::probe_realtime_session(endpoint, credential, model_id)
+            .map_err(realtime_probe_error)
+    }
+
+    fn probe_tts(
+        &self,
+        endpoint: &ProviderEndpoint,
+        credential: Option<&str>,
+        model_id: &str,
+        voice_id: Option<&str>,
+    ) -> Result<(), super::RouteProbeError> {
+        let cascade = crate::providers::OpenAiCompatibleCascade::new()
+            .map_err(tts_probe_error)?;
+        cascade
+            .synthesize(endpoint, credential, model_id, voice_id.unwrap_or(""), "你好")
+            .map(|_| ())
+            .map_err(tts_probe_error)
+    }
 }

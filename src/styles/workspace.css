@@ -4,7 +4,7 @@
   flex-direction: column;
   gap: 20px;
   height: 100%;
-  min-height: 500px;
+  min-height: 0;
 }
 
 .workspace-page > .page-header {
@@ -233,7 +233,7 @@
   display: flex;
   flex-direction: column;
   gap: 24px;
-  width: min(100%, 760px);
+  width: min(100%, 800px);
   margin: 0 auto;
 }
 
@@ -417,7 +417,7 @@
 @media (max-height: 680px) {
   .workspace-page {
     gap: 14px;
-    min-height: 460px;
+    min-height: 0;
   }
 
   .session-toolbar {
@@ -449,4 +449,67 @@
     margin: 0 16px 12px;
     padding: 9px;
   }
+}
+
+/* Conversation shell: controls stay reachable, the transcript owns its scroll. */
+.workspace-page { gap: 24px; }
+.workspace-page > .workspace-session { border: 0; border-radius: 0; overflow-x: hidden; overflow-y: auto; }
+.workspace-page .session-toolbar { padding: 0 0 16px; flex-shrink: 0; gap: 12px; }
+.session-toolbar-meta { gap: 12px; }
+.session-role { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 12px; margin-right: auto; min-width: 0; }
+.session-role select { width: auto; max-width: 220px; background: transparent; border-color: transparent; font-weight: 500; }
+.session-config-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.session-config-summary { font-size: 12px; color: var(--text-muted); overflow-wrap: anywhere; }
+.session-configuration { max-height: 28vh; overflow-y: auto; padding: 16px; background: var(--surface-muted); border-radius: 12px; }
+.session-configuration[hidden] { display: none; }
+.session-configuration .session-selection { gap: 16px; }
+.session-configuration .session-transport { margin-top: 16px; width: fit-content; background: var(--surface); }
+.session-configuration .session-transport input:checked + span { background: var(--surface-hover); }
+.session-config-heading button svg:last-child { transition: transform 150ms ease; }
+.session-config-heading button[aria-expanded="true"] svg:last-child { transform: rotate(180deg); }
+.workspace-page .session-controls { gap: 8px; }
+.workspace-page .session-controls button:not(.button-primary) { background: transparent; border-color: transparent; }
+.workspace-page .session-controls button:not(.button-primary):hover:enabled { background: var(--surface-hover); }
+.workspace-page .session-conversation { min-height: 80px; padding: 24px 8px; }
+.session-bubble p { font-size: 15px; line-height: 1.85; }
+.session-bubble-user { padding: 16px 20px; border-radius: 16px 16px 4px 16px; }
+.session-welcome { gap: 16px; max-width: 440px; padding: 24px 16px; }
+.session-welcome-icon { border: 0; width: 56px; height: 56px; }
+.session-welcome-eyebrow { font-size: 11px; color: var(--text-muted); letter-spacing: 0.12em; }
+.session-welcome h3 { font-size: 26px; letter-spacing: -0.04em; font-weight: 600; }
+.workspace-page .session-compose { flex-shrink: 0; width: min(100%, 800px); margin: 0 auto 8px; padding: 16px; border-radius: 16px; background: var(--surface); box-shadow: 0 4px 24px rgb(0 0 0 / 4%); }
+.session-compose:focus-within { border-color: var(--border-strong); }
+.workspace-page .session-tools { flex-shrink: 0; border: 0; width: min(100%, 800px); margin-inline: auto; }
+.workspace-page .session-tools-body { max-height: 25vh; overflow-y: auto; }
+.workspace-page .session-tools summary { padding: 8px 12px; }
+.workspace-page .services-message { flex-shrink: 0; margin: 8px 0; max-height: 16vh; overflow-y: auto; }
+.livestream-studio { border: 0; background: transparent; }
+.livestream-studio .session-toolbar { padding: 0 0 24px; }
+.livestream-configuration { margin-top: 16px; border-radius: 12px; background: var(--surface-muted); }
+.livestream-configuration > summary { padding: 16px 24px; font-weight: 500; }
+.livestream-setup { gap: 16px; }
+.livestream-script { padding: 32px 0; border: 0; }
+.livestream-script .preflight-card { background: transparent; padding: 24px; margin-bottom: 24px; }
+.livestream-script .service-actions { position: sticky; bottom: 0; background: var(--surface); padding: 16px; border-radius: 12px; border: 1px solid var(--border); z-index: 1; }
+.livestream-script .service-actions + .service-actions { position: static; }
+@media (max-width: 600px) {
+  .workspace-page { gap: 16px; }
+  .workspace-page > .page-header p { display: none; }
+  .session-toolbar-meta h2 { display: none; }
+  .session-role select { max-width: 160px; }
+  .session-config-summary { max-width: 55%; }
+  .workspace-page .session-controls { gap: 4px; }
+  .workspace-page .session-controls button { padding: 6px 8px; }
+  .session-selection { grid-template-columns: minmax(0, 1fr); }
+  .session-welcome h3 { font-size: 22px; }
+  .session-welcome-eyebrow { display: none; }
+  .workspace-page .session-compose { padding: 12px; }
+  .session-tools-body { padding: 8px; }
+  .session-tool-row { flex-wrap: wrap; }
+  .session-tool-row input { flex-basis: 100%; }
+  .livestream-setup, .livestream-script .preflight-card { padding: 16px; }
+  .livestream-script .service-actions > label { min-width: 0; flex-basis: 100%; }
+}
+@media (max-height: 560px) {
+  .workspace-page { min-height: 440px; }
 }

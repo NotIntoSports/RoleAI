@@ -1,9 +1,10 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import { ArrowUp, Bot, ChevronDown, FileText, Hand, MessageSquare, MicOff, Play, RotateCcw, Square, Volume2, Wrench } from "lucide-react";
+import { Bot, ChevronDown, FileText, Hand, MessageSquare, MicOff, Play, RotateCcw, Square, Volume2, Wrench } from "lucide-react";
 
 import * as api from "../../api/commands";
 import "../../styles/workspace.css";
 import { connectLiveKitRoom, disconnectLiveKitRoom } from "./livekit-room";
+import { MicStreamer, type MicStreamCallbacks, type MicStreamController } from "./mic-recorder";
 import { PreflightIssues } from "./preflight-issues";
 import type {
   AgentCommandInput,
@@ -45,6 +46,19 @@ function roleScenario(config: PublicConfig | null, roleId: string): RoleScenario
 
 const errorText = (error: { code: string; message: string; field?: string | null }) =>
   ({ SESSION_SIDECAR_MISSING: "缺少 AudioBridge 音频组件，请安装或修复音频组件后重试。",
+    PROVIDER_CREDENTIAL_MISSING: "本机未找到供应商密钥，请在供应商设置中重新保存 API Key。",
+    REALTIME_UNAUTHORIZED: "实时语音鉴权失败，请检查 Token Plan API Key、套餐状态和模型权限。",
+    REALTIME_DNS_FAILED: "无法解析实时语音服务地址，请检查网络和服务地址后重试。",
+    REALTIME_TCP_FAILED: "无法连接实时语音服务，请检查网络后重试。",
+    REALTIME_TLS_FAILED: "实时语音安全连接失败，请检查系统时间、证书或代理设置。",
+    REALTIME_CONNECT_FAILED: "实时语音连接失败，请检查网络和供应商设置后重试。",
+    REALTIME_PROTOCOL_FAILED: "实时语音协议协商失败，请检查服务地址是否支持 Realtime。",
+    REALTIME_CONNECTION_CLOSED: "实时语音服务已断开连接，输入已保留，请重试。",
+    REALTIME_READ_FAILED: "接收实时语音回复失败，输入已保留，请重试。",
+    REALTIME_WRITE_FAILED: "发送至实时语音服务失败，输入已保留，请重试。",
+    REALTIME_TIMEOUT: "实时语音请求超时，输入已保留，请重试。",
+    REALTIME_SESSION_UPDATE_TIMEOUT: "实时语音服务未及时确认会话，输入已保留，请重试。",
+    SESSION_CANCELLED: "已取消本次发送，输入已保留。",
     MEETING_PROCESS_NOT_AVAILABLE: "所选会议已退出或不再可用，请刷新会议进程。",
     SESSION_SIDECAR_INVALID_PID: "请选择有效的会议进程。",
     SESSION_SIDECAR_SPAWN_FAILED: "音频组件启动失败，请检查安装后重试。",
@@ -54,6 +68,19 @@ const errorText = (error: { code: string; message: string; field?: string | null
     PLAYBACK_CANCELLED: "语音播放已取消。",
     PLAYBACK_NOT_CONFIRMED: "音频组件未确认播放完成，不能标记为已播报。文字回答已保留。",
   }[error.code] ?? `${error.field ? error.field + "：" : ""}${error.code}：${error.message}`);
+
+// 供应商透传的原始错误码（出现在 message 前缀里）翻译成可行动的提示。
+const REMOTE_ERROR_HINTS: Record<string, string> = {
+  downstream_reconnect_exceeded: "语音模型不可用：当前供应商账号可能未开通实时语音模型权限。请在服务页更换语音线路，或到供应商控制台开通后重试。",
+  "1113": "供应商余额不足：账号没有可用的语音资源包，请充值或更换语音线路。",
+};
+
+function humanizeRemoteError(message: string): string {
+  for (const [code, hint] of Object.entries(REMOTE_ERROR_HINTS)) {
+    if (message.startsWith(code)) return hint;
+  }
+  return message;
+}
 
 const ACTIVE_PHASES = new Set([
   "preparing",
@@ -93,6 +120,11 @@ export type SessionListen = <T>(
 export interface WorkspaceSessionProps {
   finalizeUtterance?: (text: string) => Promise<void>;
   listen?: SessionListen;
+  createMicStreamer?: (callbacks: MicStreamCallbacks) => MicStreamController;
+}
+
+function defaultCreateMicStreamer(callbacks: MicStreamCallbacks): MicStreamController {
+  return new MicStreamer(callbacks);
 }
 
 async function defaultFinalizeUtterance(text: string) {
@@ -117,6 +149,7 @@ async function defaultListen<T>(event: string, handler: (payload: T) => void) {
 export function WorkspaceSession({
   finalizeUtterance = defaultFinalizeUtterance,
   listen = defaultListen,
+  createMicStreamer = defaultCreateMicStreamer,
 }: WorkspaceSessionProps) {
   const [phase, setPhase] = useState("idle");
   const [mode, setMode] = useState("ai_active");
@@ -126,6 +159,7 @@ export function WorkspaceSession({
   const [unusedMaterials, setUnusedMaterials] = useState(false);
   const [message, setMessage] = useState("正在读取会话状态…");
   const [issues, setIssues] = useState<PreflightIssue[]>([]);
+  const [configurationOpen, setConfigurationOpen] = useState(true);
   const [config, setConfig] = useState<PublicConfig | null>(null);
   const [roleProfileId, setRoleProfileId] = useState("");
   const [voiceRouteId, setVoiceRouteId] = useState("");
@@ -134,7 +168,7 @@ export function WorkspaceSession({
   const [webDegraded, setWebDegraded] = useState(false);
   const [pendingConfirmation, setPendingConfirmation] = useState(false);
   const [confirmationText, setConfirmationText] = useState("");
-  const [inputSource, setInputSource] = useState("text");
+  const [inputSource, setInputSource] = useState("mic");
   const [meetingProcesses, setMeetingProcesses] = useState<MeetingProcess[]>([]);
   const [meetingPid, setMeetingPid] = useState("");
   const [audioOutputs, setAudioOutputs] = useState<AudioOutputDevice[]>([]);
@@ -202,16 +236,24 @@ export function WorkspaceSession({
         const result = await api.getConfigPublic();
         if (!cancelled && result.ok) {
           setConfig(result.data);
+          const role = result.data.roleProfiles.find((item) => item.id === result.data.activeRoleProfileId && item.configVersion > 0);
+          const route = result.data.speech.voiceRoutes.find((item) => item.id === result.data.speech.activeVoiceRouteId && item.configVersion > 0);
+          setConfigurationOpen(!role || !route?.ready);
           setRoleProfileId(result.data.activeRoleProfileId ?? "");
           setVoiceRouteId(result.data.speech.activeVoiceRouteId ?? "");
           setAllowWebSearch(roleScenario(result.data, result.data.activeRoleProfileId ?? "") === "meetingAssistant");
+          // 语音输出设备列表用于手动文字/本机麦克风模式播报 AI 回复；
+          // 进入页面即加载，避免用户必须手点"刷新音频设备"。
+          void refreshAudioOutputs();
         }
       } catch { /* The runtime preflight supplies actionable configuration errors. */ }
     })();
     return () => { cancelled = true; };
   }, []);
-  const [busy, setBusy] = useState(false);
-  const [utterance, setUtterance] = useState("");
+  const [operationBusy, setBusy] = useState(false);
+  const busy = operationBusy;
+  const requestEpoch = useRef(0);
+  useEffect(() => () => { requestEpoch.current += 1; }, []);
   const [sayText, setSayText] = useState("");
   const [correctText, setCorrectText] = useState("");
   const [revision, setRevision] = useState(0);
@@ -254,9 +296,11 @@ export function WorkspaceSession({
 
   const refresh = useCallback(
     async (id?: string | null) => {
+      const epoch = requestEpoch.current;
       const target = id ?? sessionIdRef.current;
       try {
         const statusResult = await api.getRuntimeStatus();
+        if (epoch !== requestEpoch.current) return;
         if (statusResult.ok) {
           applyStatus(statusResult.data);
         } else {
@@ -264,6 +308,7 @@ export function WorkspaceSession({
         }
         if (target) {
           const detail = await api.getSession(target);
+          if (epoch !== requestEpoch.current) return;
           if (detail.ok) {
             const last = detail.data.turns.at(-1);
             if (last) {
@@ -282,7 +327,7 @@ export function WorkspaceSession({
           }
         }
       } catch {
-        setMessage("IPC_UNAVAILABLE：无法读取会话状态");
+        if (epoch === requestEpoch.current) setMessage("IPC_UNAVAILABLE：无法读取会话状态");
       }
     },
     [applyStatus],
@@ -356,9 +401,11 @@ export function WorkspaceSession({
   }
 
   async function start() {
+    requestEpoch.current += 1;
     setBusy(true);
     setIssues([]);
     if (config && (!roleProfileId || !voiceRouteId)) {
+      setConfigurationOpen(true);
       setIssues([
         ...(!roleProfileId ? [{ code: "SESSION_ROLE_REQUIRED", area: "role", action: "open_services" }] : []),
         ...(!voiceRouteId ? [{ code: "SESSION_ROUTE_REQUIRED", area: "speech", action: "open_services" }] : []),
@@ -368,20 +415,23 @@ export function WorkspaceSession({
       return;
     }
     try {
-      if (inputSource === "meeting" && !meetingPid) { setMessage("请刷新并选择会议进程。"); return; }
-      if (inputSource === "meeting" && !virtualAudio?.installed) { setMessage(virtualAudio?.rebootRequired ? "请重启 Windows，使虚拟声卡生效后再开始会议。" : "请先安装并自动配置虚拟声卡。"); return; }
+      if (inputSource === "meeting" && !meetingPid) { setConfigurationOpen(true); setMessage("请刷新并选择会议进程。"); return; }
+      if (inputSource === "meeting" && !virtualAudio?.installed) { setConfigurationOpen(true); setMessage(virtualAudio?.rebootRequired ? "请重启 Windows，使虚拟声卡生效后再开始会议。" : "请先安装并自动配置虚拟声卡。"); return; }
       const result = roleProfileId && voiceRouteId
         ? await api.startSession(transport, { roleProfileId, voiceRouteId, allowWebSearch: allowWebSearch && canSearch, ...(inputSource === "meeting" ? { meetingPid: Number(meetingPid) } : {}), ...(outputDeviceId ? { outputDeviceId } : {}) })
         : await api.startSession(transport);
       if (!result.ok) {
+        setConfigurationOpen(true);
         setMessage(errorText(result.error));
         return;
       }
       if (result.data.kind === "blocked") {
+        setConfigurationOpen(true);
         setIssues(result.data.issues);
         setMessage("");
         return;
       }
+      setConfigurationOpen(false);
       setSessionId(result.data.session.id);
       sessionIdRef.current = result.data.session.id;
       setPhase(result.data.session.status);
@@ -392,7 +442,6 @@ export function WorkspaceSession({
       setPendingConfirmation(false);
       setConfirmationText("");
       setUnusedMaterials(false);
-      setUtterance("");
       setSayText("");
       setCorrectText("");
       setReportSummary("");
@@ -404,12 +453,14 @@ export function WorkspaceSession({
           livekitRoom.current = await connectLiveKitRoom(result.data.livekit);
           setLivekitState("connected");
         } catch {
+          setConfigurationOpen(true);
           setLivekitState("error");
           setMessage("LIVEKIT_CONNECT_FAILED：无法进入房间");
         }
       }
       await refresh(result.data.session.id);
     } catch {
+      setConfigurationOpen(true);
       setMessage("IPC_UNAVAILABLE：本地操作失败");
     } finally {
       setBusy(false);
@@ -417,11 +468,13 @@ export function WorkspaceSession({
   }
 
   async function stop() {
+    requestEpoch.current += 1;
     await disconnectLiveKitRoom(livekitRoom.current);
     livekitRoom.current = null;
     setLivekitState("idle");
     const ok = await run(() => api.stopSession());
     if (ok) {
+      setPhase("completed");
       setPendingConfirmation(false);
       await refresh();
     }
@@ -542,25 +595,6 @@ export function WorkspaceSession({
     });
   }
 
-  async function submitFinalize(event: FormEvent) {
-    event.preventDefault();
-    if (!ACTIVE_PHASES.has(phase)) {
-      setMessage("还没有开始会话，请先点开始");
-      return;
-    }
-    setBusy(true);
-    try {
-      await finalizeUtterance(utterance.trim());
-      setMessage("");
-      await refresh();
-    } catch (error) {
-      const text = error instanceof Error ? error.message : "";
-      setMessage(text.includes("：") ? text : "IPC_UNAVAILABLE：本地操作失败");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   const active = ACTIVE_PHASES.has(phase);
   const selectedRoleScenario = roleScenario(config, roleProfileId);
   const hotkeyInFlight = useRef(false);
@@ -590,12 +624,38 @@ export function WorkspaceSession({
       unlisten();
     };
   }, [active, inputSource, selectedRoleScenario, refresh, listen]);
+  const modeRef = useRef(mode);
+  useEffect(() => { modeRef.current = mode; }, [mode]);
+  const [micActive, setMicActive] = useState(false);
+  useEffect(() => {
+    if (!active || inputSource !== "mic") return;
+    let disposed = false;
+    const streamer = createMicStreamer({
+      onChunk: (pcm, sampleRate) => {
+        // 接管/静音期间不推流，避免人工发言被当作对练内容转写。
+        if (disposed || modeRef.current !== "ai_active") return;
+        void api.pushMicPcm(pcm, sampleRate).then((result) => {
+          if (!disposed && !result.ok) setMessage(errorText(result.error));
+        }).catch(() => { if (!disposed) setMessage("IPC_UNAVAILABLE：麦克风数据发送失败"); });
+      },
+      onError: (micError) => { if (!disposed) setMessage(micError); },
+    });
+    setMicActive(true);
+    streamer.start().catch(() => {
+      if (disposed) return;
+      setMicActive(false);
+      setMessage("无法访问麦克风，请检查系统麦克风权限后重试。");
+    });
+    return () => { disposed = true; streamer.stop(); setMicActive(false); };
+  }, [active, inputSource, createMicStreamer]);
   const audioFinalizePending = useRef(false);
   useEffect(() => {
-    if (!active || inputSource !== "meeting" || phase !== "listening" || busy) return;
-    if (!new Set<RoleScenario>(["interviewer", "hr", "candidate", "meetingAssistant"]).has(selectedRoleScenario as RoleScenario)) return;
+    if (!active || phase !== "listening" || busy) return;
+    if (inputSource === "meeting" && !new Set<RoleScenario>(["interviewer", "hr", "candidate", "meetingAssistant"]).has(selectedRoleScenario as RoleScenario)) return;
     const timer = window.setInterval(() => {
       if (audioFinalizePending.current) return;
+      // 接管/静音期间后端不会应答，此时 finalize 只会产生无意义的报错。
+      if (modeRef.current !== "ai_active") return;
       void (async () => {
         try {
           const ready = await api.isSessionAudioReady();
@@ -603,8 +663,14 @@ export function WorkspaceSession({
           audioFinalizePending.current = true;
           await finalizeUtterance("");
           await refresh();
-        } catch { setMessage("自动转写失败，已保留会话，可重试或人工接管。"); }
-        finally { audioFinalizePending.current = false; }
+        } catch (error) {
+          // 透出真实错误码（如 REALTIME_REMOTE_ERROR），否则用户只能看到笼统提示。
+          setMessage(
+            humanizeRemoteError(
+              error instanceof Error && error.message ? error.message : "",
+            ) || "自动转写失败，已保留会话，可重试或人工接管。",
+          );
+        } finally { audioFinalizePending.current = false; }
       })();
     }, 250);
     return () => window.clearInterval(timer);
@@ -618,6 +684,10 @@ export function WorkspaceSession({
       <header className="session-toolbar">
         <div className="session-toolbar-meta">
           <h2 id="workspace-session-heading">当前会话</h2>
+          {config && <label className="session-role">角色<select disabled={busy || active} value={roleProfileId} onChange={(event) => { const next = event.target.value; setRoleProfileId(next); setAllowWebSearch(roleScenario(config, next) === "meetingAssistant"); }}>
+              <option value="">请选择角色</option>
+              {config.roleProfiles.filter((role) => role.configVersion > 0).map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}
+            </select></label>}
           <span className="status-badge" data-active={active}>
             {PHASE_LABELS[phase] ?? phase}
           </span>
@@ -626,12 +696,18 @@ export function WorkspaceSession({
             <span className="session-mode">LiveKit {livekitState === "connected" ? "已连接" : "连接失败"}</span>
           )}
         </div>
-        <div className="session-toolbar-controls">
+        <div className="session-config-heading">
+          <span className="session-config-summary">{inputSource === "meeting" ? "会议音频" : "本机麦克风"} · {config?.speech.voiceRoutes.find((route) => route.id === voiceRouteId)?.name ?? "尚未选择语音线路"}</span>
+          <button type="button" className="button-ghost" aria-expanded={configurationOpen} aria-controls="session-configuration" onClick={() => setConfigurationOpen((open) => !open)}><Wrench size={15} aria-hidden="true" />会话配置<ChevronDown size={14} aria-hidden="true" /></button>
+        </div>
+        <div id="session-configuration" className="session-configuration" hidden={!configurationOpen}>
+          {!config && <p className="muted">尚未读取到会话配置，请到“服务”和“设置”检查线路与角色。</p>}
           {config && <fieldset disabled={busy || active} className="session-selection">
             <legend>本场会话配置</legend>
             <label>输入来源<select value={inputSource} onChange={(event) => { setInputSource(event.target.value); if (event.target.value === "meeting") { void refreshMeetings(); void refreshVirtualAudio(); } }}>
-              <option value="text">手动文字</option><option value="meeting">会议音频</option>
+              <option value="mic">本机麦克风</option><option value="meeting">会议音频</option>
             </select></label>
+            {inputSource === "mic" && <small>不用会议或直播：直接对麦克风说话，检测到停顿自动提交给角色；AI 播报时自动抑制回声。{micActive ? "麦克风已开启。" : ""}</small>}
             {inputSource === "meeting" && <>
               <label>会议进程<select value={meetingPid} onChange={(event) => setMeetingPid(event.target.value)}>
                 <option value="">请选择会议进程</option>
@@ -639,7 +715,7 @@ export function WorkspaceSession({
               </select></label>
               <button type="button" onClick={() => void refreshMeetings()}>刷新会议进程</button>
               <small>仅采集所选会议的音频，不采集屏幕。请告知参会者 AI 参与和转写；检测停顿后自动提交完整语句。</small>
-              {selectedRoleScenario === "meetingAssistant" && <small>会议助手普通讨论只转写；被点名、点击发送，或按 Ctrl+Alt+A 时才回答。</small>}
+              {selectedRoleScenario === "meetingAssistant" && <small>会议助手普通讨论只转写；被点名，或按 Ctrl+Alt+A 时才回答。</small>}
               {virtualAudio?.state === "missing" && <div className="preflight-card" role="alert">
                 <span>检测到缺少虚拟声卡，是否安装并自动配置？</span>
                 <button type="button" disabled={installingAudio || audioRetryBlocked} onClick={() => void installVirtualAudio()}>{installingAudio ? "正在安装…" : "是，自动安装"}</button>
@@ -658,10 +734,7 @@ export function WorkspaceSession({
             <button type="button" onClick={() => void refreshAudioOutputs()}>刷新音频设备</button>
             <small>{outputDeviceId ? "只向所选设备播放。会议需选择虚拟声卡的输入端，并在会议软件选择对应麦克风。" : "当前仅显示文字，AI 语音不会进入会议。"}</small>
             </>}
-            <label>角色<select value={roleProfileId} onChange={(event) => { const next = event.target.value; setRoleProfileId(next); setAllowWebSearch(roleScenario(config, next) === "meetingAssistant"); }}>
-              <option value="">请选择角色</option>
-              {config.roleProfiles.filter((role) => role.configVersion > 0).map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}
-            </select></label>
+
             <label>语音线路<select value={voiceRouteId} onChange={(event) => setVoiceRouteId(event.target.value)}>
               <option value="">请选择语音线路</option>
               {config.speech.voiceRoutes.filter((route) => route.configVersion > 0).map((route) => <option key={route.id} value={route.id}>{route.name} · {route.llmModelId ?? route.e2eModelId}</option>)}
@@ -694,6 +767,8 @@ export function WorkspaceSession({
               <span>LiveKit</span>
             </label>
           </fieldset>
+        </div>
+        <div className="session-toolbar-controls">
           <div className="service-actions session-controls">
             <button className="button-primary" disabled={busy || active} type="button" onClick={() => void start()}>
               <Play size={14} aria-hidden="true" />开始会话
@@ -739,8 +814,14 @@ export function WorkspaceSession({
         {!transcript && !reply ? (
           <div className="session-welcome">
             <span className="session-welcome-icon"><MessageSquare size={25} strokeWidth={1.5} aria-hidden="true" /></span>
+            <span className="session-welcome-eyebrow">ROLEAI · 你的对话助手</span>
             <h3>{active ? "正在等待你的输入" : "开始一段新对话"}</h3>
-            <p>{active ? "说出问题，或在下方输入语句。" : "点击「开始会话」，与 RoleAI 交流。"}</p>
+            <p>{active ? "开口说出问题，停顿后自动提交。" : "点击「开始会话」，与 RoleAI 交流。"}</p>
+            <p>{config?.roleProfiles.find((role) => role.id === roleProfileId)?.name ?? "选择一个角色，让对话从这里开始"}</p>
+            {!active && <button className="button-ghost" type="button" onClick={() => {
+              setConfigurationOpen(true);
+              requestAnimationFrame(() => document.getElementById("session-configuration")?.querySelector<HTMLElement>("select, input, button")?.focus());
+            }}>调整会话配置</button>}
           </div>
         ) : (
           <div className="session-turn">
@@ -775,20 +856,6 @@ export function WorkspaceSession({
         )}
         {unusedMaterials && <p className="session-materials-note">本轮未使用资料</p>}
       </div>
-      <form className="session-compose" onSubmit={submitFinalize}>
-        <label htmlFor="session-utterance">语句输入</label>
-        <div className="session-compose-row">
-          <input
-            id="session-utterance"
-            value={utterance}
-            placeholder={active ? "输入你想说的话…" : "开始会话后发送语句…"}
-            onChange={(event) => setUtterance(event.target.value)}
-          />
-          <button className="button-primary" disabled={busy || !active} type="submit">
-            <ArrowUp size={16} aria-hidden="true" />发送
-          </button>
-        </div>
-      </form>
       <details className="session-tools">
         <summary><Wrench size={15} aria-hidden="true" />会话工具<ChevronDown size={15} className="session-tools-chevron" aria-hidden="true" /></summary>
         <div className="session-tools-body" role="region" aria-label="会话工具">

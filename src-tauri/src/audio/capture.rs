@@ -134,6 +134,16 @@ impl AudioCapture {
         Self::empty()
     }
 
+    /// 会议桥接会话由 AudioBridge sidecar 采集；为 false 时音频来自本机麦克风 IPC。
+    pub fn is_meeting_bridge(&self) -> bool {
+        self.spawn.is_some()
+    }
+
+    #[cfg(test)]
+    pub fn mark_meeting_bridge_for_tests(&mut self) {
+        self.spawn = Some((PathBuf::from("AudioBridge-tests.exe"), 4242));
+    }
+
     pub fn spawn_bridge(
         exe: &Path,
         pid: u32,

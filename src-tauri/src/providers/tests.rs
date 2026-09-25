@@ -1,4 +1,4 @@
-use super::{normalize_models_url, parse_model_catalog};
+use super::{merge_builtin_catalog, normalize_models_url, parse_model_catalog};
 
 mod cascade {
     use super::super::{
@@ -602,6 +602,47 @@ fn parses_deduplicated_sorted_model_ids() {
 }
 
 #[test]
+fn merges_builtin_catalog_for_zhipu_models_endpoint() {
+    let mut models =
+        parse_model_catalog(br#"{"data":[{"id":"glm-5"},{"id":"glm-4.5"}]}"#).unwrap();
+    let url = normalize_models_url("https://open.bigmodel.cn/api/paas/v4").unwrap();
+    merge_builtin_catalog(&url, &mut models);
+    let ids = models.into_iter().map(|model| model.id).collect::<Vec<_>>();
+    assert_eq!(
+        ids,
+        vec![
+            "embedding-2",
+            "embedding-3",
+            "glm-4.5",
+            "glm-5",
+            "glm-asr-2512",
+            "glm-realtime",
+            "glm-realtime-air",
+            "glm-realtime-flash",
+            "glm-tts",
+        ]
+    );
+}
+
+#[test]
+fn builtin_catalog_dedupes_against_discovered_ids() {
+    let mut models = parse_model_catalog(br#"{"data":[{"id":"glm-tts"}]}"#).unwrap();
+    let url = normalize_models_url("https://open.bigmodel.cn/api/paas/v4").unwrap();
+    merge_builtin_catalog(&url, &mut models);
+    let ids = models.into_iter().map(|model| model.id).collect::<Vec<_>>();
+    assert_eq!(ids.iter().filter(|id| *id == "glm-tts").count(), 1);
+}
+
+#[test]
+fn builtin_catalog_skips_unknown_hosts() {
+    let mut models = parse_model_catalog(br#"{"data":[{"id":"gpt-4o"}]}"#).unwrap();
+    let url = normalize_models_url("https://api.openai.com/v1").unwrap();
+    merge_builtin_catalog(&url, &mut models);
+    let ids = models.into_iter().map(|model| model.id).collect::<Vec<_>>();
+    assert_eq!(ids, vec!["gpt-4o"]);
+}
+
+#[test]
 fn malformed_catalog_has_stable_error_without_body() {
     let error = parse_model_catalog(br#"{"upstreamSecret":"must-not-escape"}"#).unwrap_err();
     assert_eq!(error.code(), "PROVIDER_RESPONSE_INVALID");
@@ -1198,6 +1239,19 @@ mod openai_realtime {
     }
 
     #[test]
+    fn maps_bigmodel_to_16k_input_dialect() {
+        // GLM 的 "pcm16" 表示 16kHz（与 OpenAI 的 24kHz 语义不同），VAD 也按 16kHz 解码；
+        // 若按 OpenAI 方言重采样到 24kHz，服务端会听到变调音频导致转写失败。
+        // 输出按官方文档只支持 "pcm"（固定 24kHz），音色用 GLM 自己的默认值。
+        let glm = realtime_dialect("https://open.bigmodel.cn/api/paas/v4");
+        assert_eq!(glm.name, RealtimeDialectName::Bigmodel);
+        assert_eq!(glm.audio_format, "pcm16");
+        assert_eq!(dialect_input_rate(&glm), 16_000);
+        assert_eq!(glm.output_audio_format, "pcm");
+        assert_eq!(glm.default_voice, Some("tongtong"));
+    }
+
+    #[test]
     fn maps_http_and_https_realtime_urls() {
         assert_eq!(
             realtime_url("http://example.test/v1", "gpt-4o-realtime-preview")
@@ -1360,5 +1414,214 @@ mod openai_realtime {
             )),
             16_000
         );
+    }
+}
+
+mod mock_http {
+    use std::{
+        io::{Read, Write},
+        net::{TcpListener, TcpStream},
+        sync::mpsc::{self, Receiver},
+        thread,
+        time::Duration,
+    };
+
+    use super::super::ProviderEndpoint;
+
+    pub struct CapturedRequest {
+        pub request_line: String,
+        pub headers: String,
+        pub body: Vec<u8>,
+    }
+
+    pub fn serve_once(response: Vec<u8>) -> (String, Receiver<CapturedRequest>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (sender, receiver) = mpsc::channel();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let request = read_request(&mut stream);
+            stream.write_all(&response).unwrap();
+            let _ = sender.send(request);
+        });
+        (format!("http://{address}/v1"), receiver)
+    }
+
+    fn read_request(stream: &mut TcpStream) -> CapturedRequest {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut received = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        let header_end = loop {
+            let count = stream.read(&mut buffer).unwrap();
+            assert!(count > 0, "request ended before headers completed");
+            received.extend_from_slice(&buffer[..count]);
+            if let Some(position) = received.windows(4).position(|part| part == b"\r\n\r\n") {
+                break position + 4;
+            }
+        };
+        let headers = String::from_utf8(received[..header_end].to_vec()).unwrap();
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().unwrap())
+            })
+            .unwrap_or(0);
+        while received.len() - header_end < content_length {
+            let count = stream.read(&mut buffer).unwrap();
+            assert!(count > 0, "request ended before body completed");
+            received.extend_from_slice(&buffer[..count]);
+        }
+        CapturedRequest {
+            request_line: headers.lines().next().unwrap().to_owned(),
+            headers,
+            body: received[header_end..].to_vec(),
+        }
+    }
+
+    pub fn response(status: &str, body: &[u8], extra_headers: &str) -> Vec<u8> {
+        format!(
+            "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: application/json\r\n{extra_headers}Connection: close\r\n\r\n",
+            body.len()
+        )
+        .into_bytes()
+        .into_iter()
+        .chain(body.iter().copied())
+        .collect()
+    }
+
+    pub fn endpoint(base_url: String) -> ProviderEndpoint {
+        ProviderEndpoint {
+            provider_id: "provider-1".into(),
+            base_url,
+        }
+    }
+}
+
+mod voice_clone {
+    use std::time::Duration;
+
+    use super::super::VoiceCloneProbe;
+    use super::mock_http::{endpoint, response, serve_once};
+
+    const SAMPLE: &[u8] = b"RIFFsynthetic-voice-sample-bytes";
+
+    #[test]
+    fn uploads_sample_as_multipart_with_purpose_and_returns_file_id() {
+        let (base_url, captured) = serve_once(response("200 OK", br#"{"id":"file_test_001"}"#, ""));
+        let probe = VoiceCloneProbe::new().unwrap();
+
+        let file_id = probe
+            .upload_sample(
+                &endpoint(base_url),
+                Some("key-marker"),
+                "sample.wav",
+                "audio/wav",
+                SAMPLE.to_vec(),
+            )
+            .unwrap();
+
+        assert_eq!(file_id, "file_test_001");
+        let captured = captured.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(captured.request_line, "POST /v1/files HTTP/1.1");
+        let headers = captured.headers.to_ascii_lowercase();
+        assert!(headers.contains("authorization: bearer key-marker\r\n"));
+        assert!(headers.contains("content-type: multipart/form-data; boundary="));
+        assert!(contains_bytes(&captured.body, b"voice-clone-input"));
+        assert!(contains_bytes(&captured.body, SAMPLE));
+    }
+
+    #[test]
+    fn clone_voice_posts_required_fields_with_transcript_and_returns_voice_id() {
+        let body = br#"{"voice":"voice_clone_abc","file_id":"file_out","file_purpose":"voice-clone-output","request_id":"req-1"}"#;
+        let (base_url, captured) = serve_once(response("200 OK", body, ""));
+        let probe = VoiceCloneProbe::new().unwrap();
+
+        let voice = probe
+            .clone_voice(
+                &endpoint(base_url),
+                None,
+                "roleai_abc123def",
+                "你好，参考文字。",
+                "file_in_123",
+            )
+            .unwrap();
+
+        assert_eq!(voice, "voice_clone_abc");
+        let captured = captured.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(captured.request_line, "POST /v1/voice/clone HTTP/1.1");
+        assert!(!captured.headers.to_ascii_lowercase().contains("authorization:"));
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&captured.body).unwrap(),
+            serde_json::json!({
+                "model": "glm-tts-clone",
+                "voice_name": "roleai_abc123def",
+                "input": "你好，这是一段用于确认克隆音色效果的试听文本。",
+                "file_id": "file_in_123",
+                "text": "你好，参考文字。",
+            })
+        );
+    }
+
+    #[test]
+    fn clone_voice_omits_blank_transcript_and_maps_unauthorized() {
+        let marker = br#"{"message":"synthetic-upstream-marker"}"#;
+        let (base_url, captured) = serve_once(response("401 Unauthorized", marker, ""));
+        let probe = VoiceCloneProbe::new().unwrap();
+
+        let error = probe
+            .clone_voice(&endpoint(base_url), None, "roleai_abc123def", "   ", "file_in_123")
+            .unwrap_err();
+
+        assert_eq!(error.code(), "PROVIDER_UNAUTHORIZED");
+        // 只透出供应商错误消息字段本身（限长），不是原始响应体。
+        assert_eq!(
+            error.provider_message.as_deref(),
+            Some("synthetic-upstream-marker")
+        );
+        assert!(!error.to_string().contains("{\"message\""));
+        let captured = captured.recv_timeout(Duration::from_secs(2)).unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&captured.body).unwrap();
+        assert!(payload.get("text").is_none());
+    }
+
+    #[test]
+    fn rejects_malformed_clone_response_without_exposing_it() {
+        let marker = br#"{"syntheticResponseMarker":"must-not-escape"}"#;
+        let (base_url, _) = serve_once(response("200 OK", marker, ""));
+        let probe = VoiceCloneProbe::new().unwrap();
+
+        let error = probe
+            .clone_voice(&endpoint(base_url), None, "roleai_abc123def", "", "file_in_123")
+            .unwrap_err();
+
+        assert_eq!(error.code(), "PROVIDER_RESPONSE_INVALID");
+        assert!(!error.to_string().contains("must-not-escape"));
+    }
+
+    #[test]
+    fn rejects_oversize_upload_response_body() {
+        let body = vec![b'x'; 1024 * 1024 + 1];
+        let (base_url, _) = serve_once(response("200 OK", &body, ""));
+        let probe = VoiceCloneProbe::new().unwrap();
+
+        let error = probe
+            .upload_sample(
+                &endpoint(base_url),
+                None,
+                "sample.wav",
+                "audio/wav",
+                SAMPLE.to_vec(),
+            )
+            .unwrap_err();
+
+        assert_eq!(error.code(), "PROVIDER_RESPONSE_TOO_LARGE");
+    }
+
+    fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack.windows(needle.len()).any(|part| part == needle)
     }
 }

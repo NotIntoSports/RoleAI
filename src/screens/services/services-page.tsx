@@ -1,9 +1,10 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
-import { AudioLines, Boxes, Cable, Server } from "lucide-react";
+import { AudioLines, Boxes, Cable, Mic, Server } from "lucide-react";
 import * as api from "../../api/commands";
 import { EmbeddingEditor } from "../../features/services/embedding-editor";
 import { LiveKitEditor } from "../../features/services/livekit-editor";
-import type { CommandResult, ProviderDependency, ProviderTestResult, PublicConfig, VoiceRouteMode, WebCapability } from "../../generated/bindings";
+import { VoiceReferenceEditor } from "../../features/services/voice-reference-editor";
+import type { CommandResult, ProviderDependency, ProviderTestResult, PublicConfig, VoiceReferenceSummary, VoiceRouteMode, WebCapability } from "../../generated/bindings";
 import { PageShell } from "../page-shell";
 import "../../styles/configuration.css";
 
@@ -43,6 +44,7 @@ type ProviderTestState = { tone: Exclude<MessageTone, "info">; text: string };
 const categories = [
   { id: "providers", label: "模型供应商", icon: Server },
   { id: "routes", label: "语音线路", icon: AudioLines },
+  { id: "voices", label: "音色克隆", icon: Mic },
   { id: "embedding", label: "Embedding", icon: Boxes },
   { id: "livekit", label: "LiveKit", icon: Cable },
 ] as const;
@@ -62,6 +64,18 @@ export function ServicesPage() {
   const [route, setRoute] = useState(initialRoute);
   const [deletion, setDeletion] = useState<{ id: string; name: string; references: ProviderDependency[]; cleanup?: boolean } | null>(null);
   const [embeddingFocusId, setEmbeddingFocusId] = useState<string | null>(null);
+  const [voiceReferences, setVoiceReferences] = useState<VoiceReferenceSummary[]>([]);
+
+  const refreshVoiceReferences = useCallback(async () => {
+    try {
+      const result = await api.listVoiceReferences();
+      if (result.ok) setVoiceReferences(result.data);
+    } catch { /* 音色 ID 建议加载失败时保持当前列表 */ }
+  }, []);
+
+  useEffect(() => {
+    if (category === "routes" || category === "voices") void refreshVoiceReferences();
+  }, [category, refreshVoiceReferences]);
 
   async function inspectDeletion(id: string, name: string) {
     setBusy(true);
@@ -195,6 +209,21 @@ export function ServicesPage() {
     } finally { setBusy(false); }
   }
 
+  // 线路表单里选中供应商即自动发现模型，模型字段的建议列表无需先去供应商页操作。
+  // 静默进行：不占用全局 busy（避免打断填写/保存），失败时建议列表为空，模型 ID 仍可手动填写。
+  // 已发现过的供应商不重复请求。
+  function ensureDiscovered(id: string) {
+    if (!id || models[id]) return;
+    void (async () => {
+      try {
+        const result = await api.discoverModelProvider(id);
+        if (result.ok) {
+          setModels((current) => ({ ...current, [id]: result.data.models.map((model) => model.id) }));
+        }
+      } catch { /* 静默降级：建议列表不可用时用户仍可手填模型 ID */ }
+    })();
+  }
+
   async function submitRoute(event: FormEvent) {
     event.preventDefault();
     const cascaded = route.mode === "cascaded";
@@ -275,11 +304,12 @@ export function ServicesPage() {
           <label>线路名称<input required value={route.name} onChange={(e) => setRouteField("name", e.target.value)}/></label>
           <label>模式<select value={route.mode} onChange={(e) => setRouteField("mode", e.target.value)}><option value="cascaded">级联 ASR → LLM → TTS</option><option value="e2e">端到端 Realtime</option></select></label>
           {route.mode === "cascaded" ? <>
-            <ProviderModelFields prefix="ASR" providers={providers} provider={route.asrProviderId} model={route.asrModelId} modelChoices={models[route.asrProviderId] ?? []} onProvider={(v) => setRouteField("asrProviderId", v)} onModel={(v) => setRouteField("asrModelId", v)}/>
-            <ProviderModelFields prefix="LLM" providers={providers} provider={route.llmProviderId} model={route.llmModelId} modelChoices={models[route.llmProviderId] ?? []} onProvider={(v) => setRouteField("llmProviderId", v)} onModel={(v) => setRouteField("llmModelId", v)}/>
-            <ProviderModelFields prefix="TTS" providers={providers} provider={route.ttsProviderId} model={route.ttsModelId} modelChoices={models[route.ttsProviderId] ?? []} onProvider={(v) => setRouteField("ttsProviderId", v)} onModel={(v) => setRouteField("ttsModelId", v)}/>
-          </> : <ProviderModelFields prefix="Realtime" providers={providers} provider={route.e2eProviderId} model={route.e2eModelId} modelChoices={models[route.e2eProviderId] ?? []} onProvider={(v) => setRouteField("e2eProviderId", v)} onModel={(v) => setRouteField("e2eModelId", v)}/>}
-          <label>音色 ID（可选）<input value={route.voiceId} onChange={(e) => setRouteField("voiceId", e.target.value)}/></label>
+            <ProviderModelFields prefix="ASR" providers={providers} provider={route.asrProviderId} model={route.asrModelId} modelChoices={models[route.asrProviderId] ?? []} onProvider={(v) => { setRouteField("asrProviderId", v); ensureDiscovered(v); }} onModel={(v) => setRouteField("asrModelId", v)}/>
+            <ProviderModelFields prefix="LLM" providers={providers} provider={route.llmProviderId} model={route.llmModelId} modelChoices={models[route.llmProviderId] ?? []} onProvider={(v) => { setRouteField("llmProviderId", v); ensureDiscovered(v); }} onModel={(v) => setRouteField("llmModelId", v)}/>
+            <ProviderModelFields prefix="TTS" providers={providers} provider={route.ttsProviderId} model={route.ttsModelId} modelChoices={models[route.ttsProviderId] ?? []} onProvider={(v) => { setRouteField("ttsProviderId", v); ensureDiscovered(v); }} onModel={(v) => setRouteField("ttsModelId", v)}/>
+          </> : <ProviderModelFields prefix="Realtime" providers={providers} provider={route.e2eProviderId} model={route.e2eModelId} modelChoices={models[route.e2eProviderId] ?? []} onProvider={(v) => { setRouteField("e2eProviderId", v); ensureDiscovered(v); }} onModel={(v) => setRouteField("e2eModelId", v)}/>}
+          <label>音色 ID（可选）<input list="cloned-voice-ids" value={route.voiceId} onChange={(e) => setRouteField("voiceId", e.target.value)}/></label>
+          <datalist id="cloned-voice-ids">{voiceReferences.filter((item) => item.cloneStatus === "cloned" && item.voiceId).map((item) => <option key={item.id} value={item.voiceId ?? ""} label={item.name}/>)}</datalist>
           {providers.length === 0 && <p className="muted">请先在“模型供应商”中添加服务。</p>}
           <button className="button-primary" disabled={busy || providers.length === 0} type="submit">保存语音线路</button>
         </form>
@@ -307,6 +337,7 @@ export function ServicesPage() {
         </div>
       </section>
       <section id="services-panel-embedding" hidden={category !== "embedding"} aria-labelledby="services-category-embedding"><EmbeddingEditor focusId={embeddingFocusId} /></section>
+      <section id="services-panel-voices" hidden={category !== "voices"} aria-labelledby="services-category-voices"><VoiceReferenceEditor /></section>
       <section id="services-panel-livekit" hidden={category !== "livekit"} aria-labelledby="services-category-livekit"><LiveKitEditor /></section>
       </div>
     </div>

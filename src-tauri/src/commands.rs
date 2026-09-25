@@ -14,15 +14,15 @@ use crate::{
     contracts::{
         AgentCommandInput, AgentCommandResult, AudioLevelEvent, CommandResult,
         DiagnosticsExportResult, FoundationStatus, LegacyMigrationStatus, LegacySessionImport,
-        LivestreamDraftInput, LivestreamGenerateInput, LivestreamRuntime, RuntimeStatus,
-        SessionCitationView, SessionDetail, SessionExportResult, SessionReplyEvent,
+        LivestreamDraftInput, LivestreamGenerateInput, LivestreamRuntime, MicPcmAcceptance,
+        RuntimeStatus, SessionCitationView, SessionDetail, SessionExportResult, SessionReplyEvent,
         SessionStartResult, SessionSummary, SessionTranscriptEvent, SessionTurnView, StartupState,
     },
     error::PublicError,
     providers::{
         ChatMessage, ChatModel, OfficialLiveKitProbe, OpenAiCompatibleCascade,
         OpenAiCompatibleEmbeddingProbe, OpenAiCompatibleProbe, OpenAiCompatibleRealtime,
-        ProviderEndpoint, TextToSpeech,
+        ProviderEndpoint, StandardRouteProbe, TextToSpeech, VoiceCloneProbe,
     },
     runtime::{
         AgentMode, CascadeCredentials, active_embedding, active_voice_route, parse_agent_command,
@@ -35,8 +35,10 @@ use crate::{
         MaterialServiceError, MaterialSummary, ModelDiscoveryResult, ProviderSaveInput,
         ProviderService, ProviderServiceError, ProviderTestResult, RoleProfileCopyInput,
         RoleProfileSaveInput, RoleProfileService, RoleProfileServiceError, SessionProbes,
-        SessionServiceError, SessionStartOutcome, VoiceRouteSaveInput, VoiceRouteService,
-        VoiceRouteServiceError, VoiceRouteTestResult,
+        SessionServiceError, SessionStartOutcome, VoiceReferenceAudioSaveInput,
+        VoiceReferenceCloneResult, VoiceReferenceSaveInput, VoiceReferenceService,
+        VoiceReferenceServiceError, VoiceReferenceSummary, VoiceReferenceUpdateInput,
+        VoiceRouteSaveInput, VoiceRouteService, VoiceRouteServiceError, VoiceRouteTestResult,
     },
     sessions::{SessionExportError, SessionExportFormat, SessionStore, export_session},
 };
@@ -350,9 +352,7 @@ fn prepare_livestream_control(
         }
         _ => {}
     }
-    if let Err(error) = write_livestream_stage(&state, stage) {
-        return Err(error);
-    }
+    write_livestream_stage(state, stage)?;
     let output = LivestreamRuntime {
         script: script.clone(),
         stage: stage.clone(),
@@ -1301,10 +1301,18 @@ fn livekit_service_error<T: ts_rs::TS>(error: LiveKitSettingsError) -> CommandRe
 
 fn route_service_error<T: ts_rs::TS>(error: VoiceRouteServiceError) -> CommandResult<T> {
     let code = error.code();
+    let probe_message = if let VoiceRouteServiceError::Probe(probe) = &error {
+        Some(probe.message.clone())
+    } else {
+        None
+    };
     let mut public = PublicError::new(
         code,
-        "Voice route operation failed",
-        matches!(code, "PROVIDER_TIMEOUT" | "PROVIDER_REQUEST_FAILED"),
+        probe_message.unwrap_or_else(|| "Voice route operation failed".into()),
+        matches!(
+            code,
+            "PROVIDER_TIMEOUT" | "PROVIDER_REQUEST_FAILED" | "VOICE_ROUTE_PROBE_FAILED"
+        ),
     );
     if let Some(field) = match code {
         "VOICE_ROUTE_ID_INVALID" => Some("id"),
@@ -1318,6 +1326,11 @@ fn route_service_error<T: ts_rs::TS>(error: VoiceRouteServiceError) -> CommandRe
 
 fn provider_probe<T: ts_rs::TS>() -> Result<OpenAiCompatibleProbe, CommandResult<T>> {
     OpenAiCompatibleProbe::new()
+        .map_err(|error| service_error(error.code(), "Provider client is unavailable"))
+}
+
+fn route_stage_probe<T: ts_rs::TS>() -> Result<StandardRouteProbe, CommandResult<T>> {
+    StandardRouteProbe::new()
         .map_err(|error| service_error(error.code(), "Provider client is unavailable"))
 }
 
@@ -1472,6 +1485,15 @@ const EVENT_SESSION_TRANSCRIPT: &str = "session.transcript.v1";
 const EVENT_SESSION_REPLY: &str = "session.reply.v1";
 
 fn session_service_error<T: ts_rs::TS>(error: SessionServiceError) -> CommandResult<T> {
+    if let SessionServiceError::Realtime(ref realtime) = error {
+        return CommandResult::Err {
+            error: PublicError::new(
+                realtime.code(),
+                realtime.public_message(),
+                realtime.retryable(),
+            ),
+        };
+    }
     let code = error.code();
     let message = match code {
         "SESSION_ALREADY_ACTIVE" => "A session is already active",
@@ -1659,13 +1681,21 @@ fn read_provider_secret(
     let Some(slot) = provider.credential.as_ref().filter(|slot| slot.configured) else {
         return Ok(None);
     };
-    state.secrets.read(&slot.reference).map_err(|_| {
+    let secret = state.secrets.read(&slot.reference).map_err(|_| {
         PublicError::new(
             "SECRET_BACKEND_UNAVAILABLE",
             "Secret backend is unavailable",
             false,
         )
-    })
+    })?;
+    match secret {
+        Some(value) if !value.trim().is_empty() => Ok(Some(value)),
+        _ => Err(PublicError::new(
+            "PROVIDER_CREDENTIAL_MISSING",
+            "本机未找到供应商密钥，请在供应商设置中重新保存 API Key。",
+            false,
+        )),
+    }
 }
 
 fn read_embedding_secret(
@@ -2272,13 +2302,71 @@ fn runtime_get_status_cmd(state: &AppState) -> CommandResult<RuntimeStatus> {
 
 #[tauri::command]
 pub fn session_audio_ready(state: State<'_, AppState>) -> CommandResult<FoundationStatus> {
-    match state.sessions.lock() {
+    session_audio_ready_cmd(&state)
+}
+
+fn session_audio_ready_cmd(state: &AppState) -> CommandResult<FoundationStatus> {
+    match state.sessions.try_lock() {
         Ok(sessions) => CommandResult::Ok {
             data: FoundationStatus {
                 ready: sessions.utterance_ready(),
             },
         },
-        Err(_) => service_error("SERVICE_BUSY", "会话音频状态暂时不可用"),
+        // This synchronous IPC command runs on the UI thread. An active model
+        // request holds sessions; polling must never wait for that request.
+        Err(TryLockError::WouldBlock) => CommandResult::Ok {
+            data: FoundationStatus { ready: false },
+        },
+        Err(TryLockError::Poisoned(_)) => service_error("SERVICE_BUSY", "会话音频状态暂时不可用"),
+    }
+}
+
+#[tauri::command]
+pub fn session_push_mic_pcm(
+    state: State<'_, AppState>,
+    pcm: String,
+    sample_rate: u32,
+) -> CommandResult<MicPcmAcceptance> {
+    session_push_mic_pcm_cmd(&state, &pcm, sample_rate)
+}
+
+fn session_push_mic_pcm_cmd(
+    state: &AppState,
+    pcm: &str,
+    sample_rate: u32,
+) -> CommandResult<MicPcmAcceptance> {
+    use base64::Engine as _;
+    let decoded = match base64::engine::general_purpose::STANDARD.decode(pcm) {
+        Ok(decoded) => decoded,
+        Err(_) => {
+            return service_error("SESSION_MIC_PCM_INVALID", "麦克风音频数据无效，请重新开始对练。");
+        }
+    };
+    let pcm = if sample_rate != crate::audio::pcm::CAPTURE_SAMPLE_RATE {
+        crate::audio::pcm::resample_pcm16_mono(
+            &decoded,
+            sample_rate,
+            crate::audio::pcm::CAPTURE_SAMPLE_RATE,
+        )
+    } else {
+        decoded
+    };
+    match state.sessions.try_lock() {
+        Ok(mut sessions) => {
+            if sessions.session_id().is_none() {
+                return session_service_error(SessionServiceError::NotFound);
+            }
+            sessions.push_pcm(&pcm);
+            CommandResult::Ok {
+                data: MicPcmAcceptance { accepted: true },
+            }
+        }
+        // Same UI-thread rule as session_audio_ready: a model request holding
+        // the lock must never stall mic streaming; drop the chunk instead.
+        Err(TryLockError::WouldBlock) => CommandResult::Ok {
+            data: MicPcmAcceptance { accepted: false },
+        },
+        Err(TryLockError::Poisoned(_)) => service_error("SERVICE_BUSY", "会话音频状态暂时不可用"),
     }
 }
 
@@ -2944,7 +3032,11 @@ pub fn speech_route_save_blocking(
         Ok(probe) => probe,
         Err(error) => return error,
     };
-    VoiceRouteService::new(&state.config, &state.secrets, &probe)
+    let stage_probe = match route_stage_probe() {
+        Ok(probe) => probe,
+        Err(error) => return error,
+    };
+    VoiceRouteService::new(&state.config, &state.secrets, &probe, &stage_probe)
         .save(input)
         .map_or_else(route_service_error, |data| CommandResult::Ok { data })
 }
@@ -2961,7 +3053,11 @@ pub fn speech_route_test_blocking(
         Ok(probe) => probe,
         Err(error) => return error,
     };
-    VoiceRouteService::new(&state.config, &state.secrets, &probe)
+    let stage_probe = match route_stage_probe() {
+        Ok(probe) => probe,
+        Err(error) => return error,
+    };
+    VoiceRouteService::new(&state.config, &state.secrets, &probe, &stage_probe)
         .test(&route_id)
         .map_or_else(route_service_error, |data| CommandResult::Ok { data })
 }
@@ -2978,7 +3074,11 @@ pub fn speech_route_activate_blocking(
         Ok(probe) => probe,
         Err(error) => return error,
     };
-    VoiceRouteService::new(&state.config, &state.secrets, &probe)
+    let stage_probe = match route_stage_probe() {
+        Ok(probe) => probe,
+        Err(error) => return error,
+    };
+    VoiceRouteService::new(&state.config, &state.secrets, &probe, &stage_probe)
         .activate(&route_id)
         .map_or_else(route_service_error, |data| CommandResult::Ok { data })
 }
@@ -2995,11 +3095,137 @@ pub fn speech_route_delete_blocking(
         Ok(probe) => probe,
         Err(error) => return error,
     };
-    VoiceRouteService::new(&state.config, &state.secrets, &probe)
+    let stage_probe = match route_stage_probe() {
+        Ok(probe) => probe,
+        Err(error) => return error,
+    };
+    VoiceRouteService::new(&state.config, &state.secrets, &probe, &stage_probe)
         .delete(&route_id)
         .map_or_else(route_service_error, |_| CommandResult::Ok {
             data: FoundationStatus { ready: true },
         })
+}
+
+fn voice_reference_service_error<T: ts_rs::TS>(
+    error: VoiceReferenceServiceError,
+) -> CommandResult<T> {
+    let code = error.code();
+    let message = match code {
+        "VOICE_REFERENCE_ID_INVALID" => "Voice reference id is invalid",
+        "VOICE_REFERENCE_FIELDS_INVALID" => "Voice reference name must not be empty",
+        "VOICE_REFERENCE_AUDIO_INVALID" => {
+            "Reference audio must be an existing local .wav or .mp3 file"
+        }
+        "VOICE_REFERENCE_AUDIO_TOO_LARGE" => "Reference audio must be 10 MB or smaller",
+        "VOICE_REFERENCE_AUDIO_TOO_SHORT" => "Recorded audio must be at least 3 seconds",
+        "VOICE_REFERENCE_NOT_FOUND" => "Voice reference not found",
+        "VOICE_REFERENCE_PROVIDER_MISSING" => {
+            "Voice reference needs a model provider before cloning"
+        }
+        "PROVIDER_UNAUTHORIZED" => "Provider rejected the credentials",
+        "PROVIDER_TIMEOUT" => "Provider request timed out",
+        "PROVIDER_REQUEST_FAILED" => "Provider request failed",
+        "PROVIDER_RESPONSE_INVALID" => "Provider response could not be parsed",
+        "PROVIDER_RESPONSE_TOO_LARGE" => "Provider response is too large",
+        "PROVIDER_ENDPOINT_INVALID" => "Provider endpoint is invalid",
+        _ => "Voice reference operation failed",
+    };
+    service_error(code, message)
+}
+
+fn voice_reference_cmd<T: serde::Serialize + ts_rs::TS>(
+    state: &AppState,
+    work: impl FnOnce(&VoiceReferenceService<'_>) -> Result<T, VoiceReferenceServiceError>,
+) -> CommandResult<T> {
+    let database = match state.database.lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            return service_error("DATABASE_OPERATION_FAILED", "Database is unavailable");
+        }
+    };
+    let Some(database) = database.as_ref() else {
+        return service_error("DATABASE_OPERATION_FAILED", "Database is unavailable");
+    };
+    let gateway = match VoiceCloneProbe::new() {
+        Ok(gateway) => gateway,
+        Err(error) => {
+            return service_error(error.code(), "Provider client is unavailable");
+        }
+    };
+    work(&VoiceReferenceService::new(
+        database,
+        &state.config,
+        &state.secrets,
+        &gateway,
+    ))
+    .map_or_else(voice_reference_service_error, |data| CommandResult::Ok { data })
+}
+
+pub fn voice_reference_save_blocking(
+    state: State<'_, AppState>,
+    input: VoiceReferenceSaveInput,
+) -> CommandResult<VoiceReferenceSummary> {
+    let _guard = match service_guard(&state) {
+        Ok(guard) => guard,
+        Err(error) => return error,
+    };
+    voice_reference_cmd(&state, |service| service.save(input))
+}
+
+pub fn voice_reference_save_audio_blocking(
+    state: State<'_, AppState>,
+    input: VoiceReferenceAudioSaveInput,
+) -> CommandResult<VoiceReferenceSummary> {
+    let _guard = match service_guard(&state) {
+        Ok(guard) => guard,
+        Err(error) => return error,
+    };
+    voice_reference_cmd(&state, |service| service.save_audio(input))
+}
+
+pub fn voice_reference_update_blocking(
+    state: State<'_, AppState>,
+    input: VoiceReferenceUpdateInput,
+) -> CommandResult<VoiceReferenceSummary> {
+    let _guard = match service_guard(&state) {
+        Ok(guard) => guard,
+        Err(error) => return error,
+    };
+    voice_reference_cmd(&state, |service| service.update_metadata(input))
+}
+
+pub fn voice_reference_list_blocking(
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<VoiceReferenceSummary>> {
+    voice_reference_cmd(&state, |service| service.list())
+}
+
+pub fn voice_reference_delete_blocking(
+    state: State<'_, AppState>,
+    id: String,
+) -> CommandResult<FoundationStatus> {
+    let _guard = match service_guard(&state) {
+        Ok(guard) => guard,
+        Err(error) => return error,
+    };
+    let result = voice_reference_cmd(&state, |service| service.delete(&id));
+    match result {
+        CommandResult::Ok { .. } => CommandResult::Ok {
+            data: FoundationStatus { ready: true },
+        },
+        CommandResult::Err { error } => CommandResult::Err { error },
+    }
+}
+
+pub fn voice_reference_clone_blocking(
+    state: State<'_, AppState>,
+    id: String,
+) -> CommandResult<VoiceReferenceCloneResult> {
+    let _guard = match service_guard(&state) {
+        Ok(guard) => guard,
+        Err(error) => return error,
+    };
+    voice_reference_cmd(&state, |service| service.clone_voice(&id))
 }
 
 pub fn role_profile_save_blocking(
@@ -3704,6 +3930,12 @@ blocking_command!(speech_route_save, speech_route_save_blocking(input: VoiceRout
 blocking_command!(speech_route_test, speech_route_test_blocking(route_id: String) -> VoiceRouteTestResult);
 blocking_command!(speech_route_activate, speech_route_activate_blocking(route_id: String) -> VoiceRouteConfig);
 blocking_command!(speech_route_delete, speech_route_delete_blocking(route_id: String) -> FoundationStatus);
+blocking_command!(voice_reference_save, voice_reference_save_blocking(input: VoiceReferenceSaveInput) -> VoiceReferenceSummary);
+blocking_command!(voice_reference_save_audio, voice_reference_save_audio_blocking(input: VoiceReferenceAudioSaveInput) -> VoiceReferenceSummary);
+blocking_command!(voice_reference_update, voice_reference_update_blocking(input: VoiceReferenceUpdateInput) -> VoiceReferenceSummary);
+blocking_command!(voice_reference_list, voice_reference_list_blocking() -> Vec<VoiceReferenceSummary>);
+blocking_command!(voice_reference_delete, voice_reference_delete_blocking(id: String) -> FoundationStatus);
+blocking_command!(voice_reference_clone, voice_reference_clone_blocking(id: String) -> VoiceReferenceCloneResult);
 blocking_command!(role_profile_save, role_profile_save_blocking(input: RoleProfileSaveInput) -> RoleProfileConfig);
 blocking_command!(role_profile_copy, role_profile_copy_blocking(input: RoleProfileCopyInput) -> RoleProfileConfig);
 blocking_command!(role_profile_activate, role_profile_activate_blocking(role_id: String) -> RoleProfileConfig);
@@ -4328,6 +4560,41 @@ mod tests {
     }
 
     #[test]
+    fn configured_but_missing_provider_credential_fails_before_network() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = session_state(
+            &directory,
+            r#"{"configVersion":1,"models":{"providers":[{"id":"qwen","baseUrl":"https://example.test/v1","credential":{"reference":"providers/qwen/api-key","configured":true}}]}}"#,
+        );
+        let config = super::load_session_config(&state).unwrap();
+        let result = super::read_provider_secret(&state, &config, Some("qwen"));
+        assert!(matches!(result, Err(ref e) if e.code == "PROVIDER_CREDENTIAL_MISSING"));
+    }
+
+    #[test]
+    fn audio_ready_poll_does_not_block_while_a_turn_holds_the_session() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = session_state(&directory, &ready_session_config());
+        let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            let state_ref = &state;
+            scope.spawn(move || {
+                let _guard = state_ref.sessions.lock().unwrap();
+                locked_tx.send(()).unwrap();
+                let _ = release_rx.recv_timeout(std::time::Duration::from_millis(500));
+            });
+            locked_rx.recv().unwrap();
+            let start = std::time::Instant::now();
+            let result = serde_json::to_value(super::session_audio_ready_cmd(&state)).unwrap();
+            let elapsed = start.elapsed();
+            let _ = release_tx.send(());
+            assert_eq!(result["data"]["ready"], false);
+            assert!(elapsed < std::time::Duration::from_millis(200));
+        });
+    }
+
+    #[test]
     fn session_start_returns_blocked_or_started_without_secret_or_pcm() {
         let empty_dir = tempfile::tempdir().unwrap();
         let empty = session_state(&empty_dir, r#"{"configVersion":1}"#);
@@ -4841,6 +5108,104 @@ mod tests {
         .unwrap();
         assert_eq!(missing["ok"], false);
         assert_eq!(missing["error"]["code"], "SESSION_NOT_FOUND");
+    }
+
+    fn voiced_pcm(frames: usize) -> Vec<u8> {
+        let mut pcm = Vec::with_capacity(frames * 1920);
+        for _ in 0..frames {
+            for sample in 0..960i16 {
+                let value = if sample % 2 == 0 { 2000i16 } else { -2000i16 };
+                pcm.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        pcm
+    }
+
+    fn silence_pcm(frames: usize) -> Vec<u8> {
+        vec![0x00; frames * 1920]
+    }
+
+    fn push_mic_pcm(state: &AppState, pcm: &[u8], sample_rate: u32) -> serde_json::Value {
+        use base64::Engine as _;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(pcm);
+        serde_json::to_value(super::session_push_mic_pcm_cmd(state, &encoded, sample_rate))
+            .unwrap()
+    }
+
+    #[test]
+    fn session_push_mic_pcm_feeds_segmenter_and_finalizes_via_asr() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = session_state(&directory, &ready_session_config());
+        assert_eq!(
+            serde_json::to_value(super::session_start_cmd(&state, None)).unwrap()["ok"],
+            true
+        );
+
+        // 240ms 语音 + 800ms 静音：超过 START/MIN_SPEECH/END_SILENCE 阈值，应产出一条待转写语句。
+        let pcm = voiced_pcm(12);
+        let pcm = [pcm, silence_pcm(40)].concat();
+        let pushed = push_mic_pcm(&state, &pcm, 48_000);
+        assert_eq!(pushed["ok"], true, "{pushed}");
+        assert_eq!(pushed["data"]["accepted"], true);
+
+        let ready = serde_json::to_value(super::session_audio_ready_cmd(&state)).unwrap();
+        assert_eq!(ready["data"]["ready"], true);
+
+        let asr = ScriptedAsr;
+        let llm = ScriptedLlm("收到");
+        let tts = ScriptedTts;
+        let embed = UnusedEmbed;
+        let probes = crate::services::SessionProbes {
+            asr: &asr,
+            llm: &llm,
+            tts: &tts,
+            embed: &embed,
+            realtime: &UnusedRealtime,
+        };
+        let finalized = serde_json::to_value(super::session_finalize_utterance_cmd(
+            &state,
+            &probes,
+            crate::runtime::CascadeCredentials::default(),
+            None,
+        ))
+        .unwrap();
+        assert_eq!(finalized["ok"], true, "{finalized}");
+        assert_eq!(finalized["data"]["userText"], "ignored");
+        assert_eq!(finalized["data"]["assistantText"], "收到");
+    }
+
+    #[test]
+    fn session_push_mic_pcm_resamples_non_48k_input() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = session_state(&directory, &ready_session_config());
+        assert_eq!(
+            serde_json::to_value(super::session_start_cmd(&state, None)).unwrap()["ok"],
+            true
+        );
+
+        // 16kHz 采集：300ms 语音 + 900ms 静音。若命令忽略 sample_rate，
+        // 这段音频会被当成 48kHz 解析，语句永远不会达到断句阈值。
+        let mut speech_16k = Vec::new();
+        for sample in 0..4_800i16 {
+            let value = if sample % 2 == 0 { 2000i16 } else { -2000i16 };
+            speech_16k.extend_from_slice(&value.to_le_bytes());
+        }
+        let silence_16k = vec![0x00; 14_400 * 2];
+        let pcm = [speech_16k, silence_16k].concat();
+        let pushed = push_mic_pcm(&state, &pcm, 16_000);
+        assert_eq!(pushed["ok"], true, "{pushed}");
+
+        let ready = serde_json::to_value(super::session_audio_ready_cmd(&state)).unwrap();
+        assert_eq!(ready["data"]["ready"], true);
+    }
+
+    #[test]
+    fn session_push_mic_pcm_without_session_reports_not_found() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = session_state(&directory, &ready_session_config());
+        let pushed = push_mic_pcm(&state, &voiced_pcm(3), 48_000);
+        assert_eq!(pushed["ok"], false, "{pushed}");
+        assert_eq!(pushed["error"]["code"], "SESSION_NOT_FOUND");
     }
 
     #[test]
