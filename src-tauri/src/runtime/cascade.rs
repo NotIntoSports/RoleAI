@@ -120,7 +120,7 @@ pub fn run_cascade_turn(
     cancelled(cancel)?;
     let citations = retrieve(deps, &request, &user_text);
     cancelled(cancel)?;
-    let messages = build_messages(role, request.history, &user_text, &citations);
+    let messages = build_messages(role, None, request.history, &user_text, &citations);
     let assistant_text = run_with_retry(deps.sleep, classify_cascade, || {
         deps.llm.complete(
             &llm_endpoint,
@@ -308,6 +308,7 @@ fn required_endpoint(
 
 fn build_messages(
     role: &RoleProfileConfig,
+    context_summary: Option<&str>,
     history: &[HistoryTurn],
     user_text: &str,
     citations: &[TurnCitation],
@@ -318,6 +319,13 @@ fn build_messages(
             system.push_str("\n\n");
         }
         system.push_str(&role.style_instructions);
+    }
+    if let Some(summary) = context_summary.filter(|s| !s.trim().is_empty()) {
+        if !system.is_empty() {
+            system.push_str("\n\n");
+        }
+        system.push_str("此前对话摘要：");
+        system.push_str(summary);
     }
     let mut messages = vec![ChatMessage {
         role: "system".into(),
@@ -353,7 +361,8 @@ fn build_messages(
 #[cfg(test)]
 mod tests {
     use super::{
-        CascadeCredentials, CascadeTurnDeps, CascadeTurnRequest, HistoryTurn, run_cascade_turn,
+        CascadeCredentials, CascadeTurnDeps, CascadeTurnRequest, HistoryTurn, build_messages,
+        run_cascade_turn,
     };
     use crate::{
         config::PublicConfig,
@@ -363,7 +372,7 @@ mod tests {
             CascadeError, CascadeStage, ChatMessage, ChatModel, EmbeddingError, EmbeddingProbe,
             ProviderEndpoint, SpeechToText, TextToSpeech,
         },
-        runtime::{SessionRuntime, test_support::ready_public_config},
+        runtime::{SessionRuntime, active_role_profile, test_support::ready_public_config},
         services::MaterialService,
     };
     use std::{
@@ -603,6 +612,11 @@ mod tests {
         config.speech.voice_routes[0].voice_id = Some("Cherry".into());
         config.knowledge.embedding_configs[0].dimensions = 4;
         config
+    }
+
+    fn role_profile() -> crate::config::RoleProfileConfig {
+        let config = ready_public_config();
+        active_role_profile(&config).expect("role profile").clone()
     }
 
     fn import(
@@ -1123,5 +1137,21 @@ mod tests {
         assert_eq!(user_turns.first().map(String::as_str), Some("u1"));
         assert_eq!(user_turns.last().map(String::as_str), Some("现场转写"));
         assert_eq!(user_turns.len(), 21);
+    }
+
+    #[test]
+    fn context_summary_is_merged_into_system_message() {
+        let role = role_profile(); // 既有测试助手
+        let history = vec![HistoryTurn {
+            user_text: "旧问题".into(),
+            assistant_text: "旧回答".into(),
+        }];
+        let messages = build_messages(&role, Some("此前讨论了时间"), &history, "新问题", &[]);
+        // history 按既有方式追加 user/assistant 成对消息：system + 2 + 1 = 4。
+        assert_eq!(messages.len(), 4);
+        assert!(messages[0].content.contains("此前对话摘要：此前讨论了时间"));
+        assert_eq!(messages[1].content, "旧问题");
+        assert_eq!(messages[2].content, "旧回答");
+        assert_eq!(messages[3].content, "新问题");
     }
 }
