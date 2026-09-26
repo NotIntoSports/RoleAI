@@ -84,7 +84,6 @@ export function routeCapabilities(id: RouteId): readonly string[] {
     services: [
       "模型提供方配置与状态",
       "语音路由配置与测试",
-      "传输服务（LiveKit）状态",
       "密钥管理（Windows Credential Manager）",
       "连接测试与健康检查",
     ],

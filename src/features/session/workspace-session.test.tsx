@@ -32,12 +32,6 @@ vi.mock("../../api/commands", () => ({
   pushMicPcm: vi.fn(),
 }));
 
-vi.mock("./livekit-room", () => ({
-  connectLiveKitRoom: vi.fn(),
-  disconnectLiveKitRoom: vi.fn(),
-}));
-
-import * as livekitRoom from "./livekit-room";
 
 function summary(overrides: Partial<SessionSummary> = {}): SessionSummary {
   return {
@@ -109,7 +103,6 @@ describe("WorkspaceSession", () => {
     return {
       configVersion: 1, application: { locale: null }, models: { providers: [], activeProviderId: null },
       speech: { activeVoiceRouteId: "route-1", voiceRoutes: [{ id: "route-1", name: "测试线路", mode: "cascaded", asrProviderId: null, asrModelId: null, llmProviderId: null, llmModelId: null, ttsProviderId: null, ttsModelId: null, voiceId: null, e2eProviderId: null, e2eModelId: null, active: true, ready: true, status: null, configVersion: 1 }] },
-      transport: { livekit: { enabled: false, url: null, apiKey: null, apiSecret: null, ready: false, status: null, configVersion: 0 } },
       knowledge: { embeddingConfigs: [], activeEmbeddingConfigId: null }, storage: { exportDirectory: null },
       roleProfiles: [{ id: "role-1", name: "会议助手", systemPrompt: "listen", openingMessage: "", styleInstructions: "", active: true, configVersion: 1 }],
       activeRoleProfileId: "role-1", diagnostics: { logRetentionDays: 14 },
@@ -121,7 +114,7 @@ describe("WorkspaceSession", () => {
     vi.mocked(commands.getRuntimeStatus).mockResolvedValue({ ok: true, data: status() });
     vi.mocked(commands.startSession).mockResolvedValue({
       ok: true,
-      data: { kind: "started", session: summary(), livekit: null },
+      data: { kind: "started", session: summary() },
     });
     vi.mocked(commands.stopSession).mockResolvedValue({
       ok: true,
@@ -150,8 +143,6 @@ describe("WorkspaceSession", () => {
       ok: true,
       data: [{ id: "spk-1", name: "扬声器" }],
     });
-    vi.mocked(livekitRoom.connectLiveKitRoom).mockResolvedValue({} as never);
-    vi.mocked(livekitRoom.disconnectLiveKitRoom).mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -175,7 +166,6 @@ describe("WorkspaceSession", () => {
     const config: PublicConfig = {
       configVersion: 1, application: { locale: null }, models: { providers: [], activeProviderId: null },
       speech: { activeVoiceRouteId: "route-1", voiceRoutes: [{ id: "route-1", name: "测试线路", mode: "cascaded", asrProviderId: null, asrModelId: null, llmProviderId: null, llmModelId: null, ttsProviderId: null, ttsModelId: null, voiceId: null, e2eProviderId: null, e2eModelId: null, active: true, ready: true, status: null, configVersion: 1 }] },
-      transport: { livekit: { enabled: false, url: null, apiKey: null, apiSecret: null, ready: false, status: null, configVersion: 0 } },
       knowledge: { embeddingConfigs: [], activeEmbeddingConfigId: null }, storage: { exportDirectory: null },
       roleProfiles: [{ id: "role-1", name: "会议助手", systemPrompt: "listen", openingMessage: "", styleInstructions: "", active: true, configVersion: 1 }],
       activeRoleProfileId: "role-1", diagnostics: { logRetentionDays: 14 },
@@ -195,14 +185,13 @@ describe("WorkspaceSession", () => {
     expect(commands.startSession).not.toHaveBeenCalled();
     fireEvent.change(screen.getByLabelText("会议进程"), { target: { value: "202" } });
     fireEvent.click(screen.getByRole("button", { name: "开始会话" }));
-    await waitFor(() => expect(commands.startSession).toHaveBeenCalledWith("direct", expect.objectContaining({ meetingPid: 202 })));
+    await waitFor(() => expect(commands.startSession).toHaveBeenCalledWith(expect.objectContaining({ meetingPid: 202 })));
   });
 
   it("answers once when the Rust global-hotkey event reaches an active meeting assistant", async () => {
     const config: PublicConfig = {
       configVersion: 1, application: { locale: null }, models: { providers: [], activeProviderId: null },
       speech: { activeVoiceRouteId: "route-1", voiceRoutes: [{ id: "route-1", name: "测试线路", mode: "cascaded", asrProviderId: null, asrModelId: null, llmProviderId: null, llmModelId: null, ttsProviderId: null, ttsModelId: null, voiceId: null, e2eProviderId: null, e2eModelId: null, active: true, ready: true, status: null, configVersion: 1 }] },
-      transport: { livekit: { enabled: false, url: null, apiKey: null, apiSecret: null, ready: false, status: null, configVersion: 0 } },
       knowledge: { embeddingConfigs: [], activeEmbeddingConfigId: null }, storage: { exportDirectory: null },
       roleProfiles: [{ id: "role-1", name: "会议助手", systemPrompt: "listen", openingMessage: "", styleInstructions: "", scenario: "meetingAssistant", active: true, configVersion: 1 }],
       activeRoleProfileId: "role-1", diagnostics: { logRetentionDays: 14 },
@@ -233,7 +222,7 @@ describe("WorkspaceSession", () => {
     render(<WorkspaceSession />);
     fireEvent.click(await screen.findByRole("button", { name: "开始会话" }));
     await waitFor(() => expect(document.body.textContent).toContain("聆听中"));
-    expect(commands.startSession).toHaveBeenCalledWith("direct");
+    expect(commands.startSession).toHaveBeenCalled();
     expect((screen.getByRole("button", { name: "开始会话" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: "停止" }) as HTMLButtonElement).disabled).toBe(false);
   });
@@ -266,37 +255,6 @@ describe("WorkspaceSession", () => {
     await screen.findByText("聆听中");
     const conversation = screen.getByRole("region", { name: "会话对话" });
     expect(conversation.tabIndex).toBe(0);
-  });
-
-  it("connects LiveKit with the join token and disconnects on stop", async () => {
-    const join = {
-      url: "wss://livekit.example.test",
-      token: "eyJhbGciOiJIUzI1NiJ9.payload.signature",
-      room: "session-1",
-      identity: "tauri-1",
-      expiresInSec: 60,
-    };
-    vi.mocked(commands.startSession).mockResolvedValue({
-      ok: true,
-      data: {
-        kind: "started",
-        session: summary({ transportMode: "livekit" }),
-        livekit: join,
-      },
-    });
-    vi.mocked(commands.getRuntimeStatus)
-      .mockResolvedValueOnce({ ok: true, data: status() })
-      .mockResolvedValue({ ok: true, data: status({ phase: "listening", seq: 2 }) });
-
-    render(<WorkspaceSession />);
-    fireEvent.click(await screen.findByLabelText("LiveKit"));
-    fireEvent.click(await screen.findByRole("button", { name: "开始会话" }));
-    await waitFor(() => expect(livekitRoom.connectLiveKitRoom).toHaveBeenCalledWith(join));
-    expect(commands.startSession).toHaveBeenCalledWith("livekit");
-    expect(document.body.textContent).toContain("LiveKit 已连接");
-
-    fireEvent.click(screen.getByRole("button", { name: "停止" }));
-    await waitFor(() => expect(livekitRoom.disconnectLiveKitRoom).toHaveBeenCalled());
   });
 
   it("surfaces blocked preflight issues and start field errors", async () => {
@@ -423,10 +381,8 @@ describe("WorkspaceSession", () => {
     expect(screen.getByLabelText("输入来源")).not.toBeVisible();
     fireEvent.click(toggle);
     expect(screen.getByLabelText("输入来源")).toBeVisible();
-    fireEvent.click(screen.getByLabelText("LiveKit"));
     fireEvent.click(toggle);
     fireEvent.click(toggle);
-    expect(screen.getByLabelText("LiveKit")).toBeChecked();
     expect(screen.getByRole("button", { name: "开始会话" })).toBeVisible();
   });
 
@@ -457,7 +413,6 @@ describe("WorkspaceSession", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "停止" })).toBeEnabled());
     expect(screen.getByLabelText("角色")).toBeDisabled();
     expect(screen.getByLabelText("输入来源")).toBeDisabled();
-    expect(screen.getByLabelText("LiveKit")).toBeDisabled();
   });
 
   it("shows 本轮未使用资料 after finalize when materials_used is false", async () => {
@@ -504,7 +459,7 @@ describe("WorkspaceSession", () => {
     });
     vi.mocked(commands.startSession).mockResolvedValue({
       ok: true,
-      data: { kind: "started", session: summary({ id: "sess-2" }), livekit: null },
+      data: { kind: "started", session: summary({ id: "sess-2" }) },
     });
     fireEvent.click(screen.getByRole("button", { name: "开始会话" }));
     await waitFor(() => {
@@ -833,7 +788,6 @@ describe("WorkspaceSession", () => {
   const meetingConfig: PublicConfig = {
     configVersion: 1, application: { locale: null }, models: { providers: [], activeProviderId: null },
     speech: { activeVoiceRouteId: "route-1", voiceRoutes: [{ id: "route-1", name: "测试线路", mode: "cascaded", asrProviderId: null, asrModelId: null, llmProviderId: null, llmModelId: null, ttsProviderId: null, ttsModelId: null, voiceId: null, e2eProviderId: null, e2eModelId: null, active: true, ready: true, status: null, configVersion: 1 }] },
-    transport: { livekit: { enabled: false, url: null, apiKey: null, apiSecret: null, ready: false, status: null, configVersion: 0 } },
     knowledge: { embeddingConfigs: [], activeEmbeddingConfigId: null }, storage: { exportDirectory: null },
     roleProfiles: [{ id: "role-1", name: "会议助手", systemPrompt: "listen", openingMessage: "", styleInstructions: "", scenario: "meetingAssistant", active: true, configVersion: 1 }],
     activeRoleProfileId: "role-1", diagnostics: { logRetentionDays: 14 },
@@ -967,7 +921,6 @@ describe("WorkspaceSession", () => {
   const micConfig: PublicConfig = {
     configVersion: 1, application: { locale: null }, models: { providers: [], activeProviderId: null },
     speech: { activeVoiceRouteId: "route-1", voiceRoutes: [{ id: "route-1", name: "测试线路", mode: "cascaded", asrProviderId: null, asrModelId: null, llmProviderId: null, llmModelId: null, ttsProviderId: null, ttsModelId: null, voiceId: null, e2eProviderId: null, e2eModelId: null, active: true, ready: true, status: null, configVersion: 1 }] },
-    transport: { livekit: { enabled: false, url: null, apiKey: null, apiSecret: null, ready: false, status: null, configVersion: 0 } },
     knowledge: { embeddingConfigs: [], activeEmbeddingConfigId: null }, storage: { exportDirectory: null },
     roleProfiles: [{ id: "role-1", name: "面试官", systemPrompt: "listen", openingMessage: "", styleInstructions: "", scenario: "interviewer", active: true, configVersion: 1 }],
     activeRoleProfileId: "role-1", diagnostics: { logRetentionDays: 14 },

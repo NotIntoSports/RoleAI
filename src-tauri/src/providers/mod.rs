@@ -1,6 +1,5 @@
 mod cascade;
 mod embedding;
-mod livekit;
 mod openai_compatible;
 mod openai_realtime;
 pub mod web_search;
@@ -19,10 +18,6 @@ pub(crate) use cascade::{
     parse_chat_completion, parse_transcript, parse_tts_pcm, pcm_to_wav, tts_body_too_large,
 };
 pub use embedding::{EmbeddingError, EmbeddingProbe, OpenAiCompatibleEmbeddingProbe};
-pub(crate) use livekit::room_join_token;
-pub use livekit::{LiveKitError, LiveKitProbe, OfficialLiveKitProbe, livekit_connect_src};
-#[cfg(test)]
-pub(crate) use livekit::{control_url, room_list_token};
 pub use openai_compatible::{OpenAiCompatibleProbe, StandardRouteProbe};
 #[cfg(test)]
 pub(crate) use openai_compatible::{

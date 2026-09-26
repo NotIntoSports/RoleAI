@@ -21,9 +21,6 @@ vi.mock("../../api/commands", () => ({
   testEmbeddingConfig: vi.fn(),
   activateEmbeddingConfig: vi.fn(),
   deleteEmbeddingConfig: vi.fn(),
-  saveLiveKitSettings: vi.fn(),
-  testLiveKitSettings: vi.fn(),
-  enableLiveKitSettings: vi.fn(),
   listVoiceReferences: vi.fn(),
   saveVoiceReference: vi.fn(),
   saveVoiceReferenceAudio: vi.fn(),
@@ -48,17 +45,6 @@ const emptyConfig = {
   application: { locale: null },
   models: { providers: [], activeProviderId: null },
   speech: { voiceRoutes: [], activeVoiceRouteId: null },
-  transport: {
-    livekit: {
-      enabled: false,
-      url: null,
-      apiKey: null,
-      apiSecret: null,
-      ready: false,
-      status: null,
-      configVersion: 0,
-    },
-  },
   knowledge: { embeddingConfigs: [], activeEmbeddingConfigId: null },
   storage: { exportDirectory: null },
   roleProfiles: [],
@@ -85,7 +71,7 @@ describe("ServicesPage", () => {
     expect(screen.queryByRole("heading", { name: "语音线路" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "Embedding" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "LiveKit" })).toBeNull();
-    for (const name of ["语音线路", "音色克隆", "Embedding", "LiveKit"]) {
+    for (const name of ["语音线路", "音色克隆", "Embedding"]) {
       fireEvent.click(navigation.getByRole("button", { name }));
       expect(screen.getByRole("heading", { name })).toBeTruthy();
       expect(screen.queryByRole("heading", { name: "模型供应商" })).toBeNull();
@@ -172,7 +158,7 @@ describe("ServicesPage", () => {
     expect(commands.saveVoiceReferenceAudio).toHaveBeenCalledWith(expect.objectContaining({ name: "录音音色", audioBase64: "UklGRg==" }));
   });
 
-  it("preserves provider, route, embedding and LiveKit drafts across category switches", async () => {
+  it("preserves provider, route and embedding drafts across category switches", async () => {
     render(<ServicesPage />);
     await screen.findByText("还没有供应商。");
     const providerPanel = within(screen.getByRole("region", { name: "模型供应商" }));
@@ -184,16 +170,12 @@ describe("ServicesPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Embedding" }));
     fireEvent.change(screen.getByLabelText("模型"), { target: { value: "embedding-draft" } });
-    fireEvent.click(screen.getByRole("button", { name: "LiveKit" }));
-    fireEvent.change(screen.getByLabelText("服务 URL"), { target: { value: "wss://draft.test" } });
     fireEvent.click(screen.getByRole("button", { name: "模型供应商" }));
     expect((providerPanel.getByLabelText("显示名称") as HTMLInputElement).value).toBe("草稿供应商");
     fireEvent.click(screen.getByRole("button", { name: "语音线路" }));
     expect((screen.getByLabelText("线路名称") as HTMLInputElement).value).toBe("草稿线路");
     fireEvent.click(screen.getByRole("button", { name: "Embedding" }));
     expect((screen.getByLabelText("模型") as HTMLInputElement).value).toBe("embedding-draft");
-    fireEvent.click(screen.getByRole("button", { name: "LiveKit" }));
-    expect((screen.getByLabelText("服务 URL") as HTMLInputElement).value).toBe("wss://draft.test");
   });
 
   it("submits a provider key and clears the password field", async () => {

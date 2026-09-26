@@ -1,79 +1,76 @@
 {
   "configVersion": 1,
-  "application": { "locale": "zh-CN" },
+  "application": {
+    "locale": "zh-CN"
+  },
   "models": {
-    "providers": [{
-      "id": "example-provider",
-      "name": "示例供应商",
-      "baseUrl": "https://api.example.com/v1",
-      "credential": {
-        "reference": "providers/example-provider/api-key",
-        "configured": false
+    "providers": [
+      {
+        "id": "example-provider",
+        "name": "示例供应商",
+        "baseUrl": "https://api.example.com/v1",
+        "credential": {
+          "reference": "providers/example-provider/api-key",
+          "configured": false
+        }
       }
-    }],
+    ],
     "activeProviderId": "example-provider"
   },
   "speech": {
-    "voiceRoutes": [{
-      "id": "example-route",
-      "name": "示例级联线路",
-      "mode": "cascaded",
-      "asrProviderId": "example-provider",
-      "asrModelId": "example-asr-model",
-      "llmProviderId": "example-provider",
-      "llmModelId": "example-llm-model",
-      "ttsProviderId": "example-provider",
-      "ttsModelId": "example-tts-model",
-      "voiceId": "example-voice",
-      "active": false,
-      "ready": false,
-      "status": "model_not_ready",
-      "configVersion": 1
-    }],
+    "voiceRoutes": [
+      {
+        "id": "example-route",
+        "name": "示例级联线路",
+        "mode": "cascaded",
+        "asrProviderId": "example-provider",
+        "asrModelId": "example-asr-model",
+        "llmProviderId": "example-provider",
+        "llmModelId": "example-llm-model",
+        "ttsProviderId": "example-provider",
+        "ttsModelId": "example-tts-model",
+        "voiceId": "example-voice",
+        "active": false,
+        "ready": false,
+        "status": "model_not_ready",
+        "configVersion": 1
+      }
+    ],
     "activeVoiceRouteId": null
   },
-  "transport": {
-    "livekit": {
-      "enabled": false,
-      "url": null,
-      "apiKey": {
-        "reference": "transport/livekit/api-key",
-        "configured": false
-      },
-      "apiSecret": {
-        "reference": "transport/livekit/api-secret",
-        "configured": false
-      },
-      "ready": false,
-      "status": null,
-      "configVersion": 1
-    }
-  },
   "knowledge": {
-    "embeddingConfigs": [{
-      "id": "example-embedding",
-      "providerId": "example-provider",
-      "modelId": "example-embedding-model",
-      "dimensions": 1536,
-      "distance": "cosine",
-      "normalized": true,
-      "active": false,
-      "ready": false,
-      "status": "not_tested",
-      "configVersion": 1
-    }],
+    "embeddingConfigs": [
+      {
+        "id": "example-embedding",
+        "providerId": "example-provider",
+        "modelId": "example-embedding-model",
+        "dimensions": 1536,
+        "distance": "cosine",
+        "normalized": true,
+        "active": false,
+        "ready": false,
+        "status": "not_tested",
+        "configVersion": 1
+      }
+    ],
     "activeEmbeddingConfigId": null
   },
-  "storage": { "exportDirectory": null },
-  "roleProfiles": [{
-    "id": "example-interviewer",
-    "name": "示例面试官",
-    "systemPrompt": "一次只提出一个清晰问题。",
-    "openingMessage": "你好，我们开始吧。",
-    "styleInstructions": "保持专业、简洁。",
-    "active": false,
-    "configVersion": 1
-  }],
+  "storage": {
+    "exportDirectory": null
+  },
+  "roleProfiles": [
+    {
+      "id": "example-interviewer",
+      "name": "示例面试官",
+      "systemPrompt": "一次只提出一个清晰问题。",
+      "openingMessage": "你好，我们开始吧。",
+      "styleInstructions": "保持专业、简洁。",
+      "active": false,
+      "configVersion": 1
+    }
+  ],
   "activeRoleProfileId": null,
-  "diagnostics": { "logRetentionDays": 14 }
+  "diagnostics": {
+    "logRetentionDays": 14
+  }
 }

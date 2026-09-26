@@ -1,6 +1,5 @@
 mod embeddings;
 mod ids;
-mod livekit;
 mod materials;
 mod providers;
 mod roles;
@@ -12,10 +11,6 @@ mod voice_routes;
 pub use embeddings::{
     EmbeddingConfigSaveInput, EmbeddingService, EmbeddingServiceError, EmbeddingTestResult,
     embedding_credential_slot, embedding_endpoint, embedding_space_provider_id,
-};
-pub use livekit::{
-    LiveKitJoinToken, LiveKitSettingsError, LiveKitSettingsSaveInput, LiveKitSettingsService,
-    LiveKitTestResult,
 };
 pub use materials::{
     EmbeddingSpace, MaterialIndexResult, MaterialSearchHit, MaterialService, MaterialServiceError,

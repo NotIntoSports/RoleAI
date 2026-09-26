@@ -847,7 +847,7 @@ fn status_and_marker_never_include_secret_material() {
 }
 
 #[test]
-fn secret_slots_configured_reads_provider_and_livekit_flags() {
+fn secret_slots_configured_reads_provider_flags_and_ignores_removed_transport() {
     let empty = AppConfigV1::from_json(SAFE_CONFIG).unwrap();
     assert!(!secret_slots_configured(&empty));
 
@@ -857,11 +857,13 @@ fn secret_slots_configured_reads_provider_and_livekit_flags() {
     .unwrap();
     assert!(secret_slots_configured(&provider));
 
-    let livekit = AppConfigV1::from_json(
+    // 已移除的 LiveKit transport 配置仍需能被旧配置文件解析，但其凭据
+    // 不再参与"是否已配置密钥"的判定。
+    let legacy_transport = AppConfigV1::from_json(
         r#"{"configVersion":1,"transport":{"livekit":{"enabled":false,"url":null,"apiKey":{"reference":"transport/livekit/api-key","configured":true},"apiSecret":{"reference":"transport/livekit/api-secret","configured":false},"ready":false,"status":null,"configVersion":0}}}"#,
     )
     .unwrap();
-    assert!(secret_slots_configured(&livekit));
+    assert!(!secret_slots_configured(&legacy_transport));
 }
 
 #[test]

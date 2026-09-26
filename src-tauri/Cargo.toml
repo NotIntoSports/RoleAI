@@ -21,7 +21,6 @@ tauri-build = { version = "=2.6.3", features = [] }
 [dependencies]
 chrono = { version = "=0.4.45", default-features = false, features = ["clock", "serde", "std"] }
 docx-rs = { version = "=0.4.22", default-features = false }
-livekit-api = { version = "=0.6.4", default-features = false, features = ["access-token"] }
 obws = { version = "=0.15.0", default-features = false }
 pdf-extract = "=0.12.0"
 rusqlite = { version = "=0.40.2", features = ["bundled", "backup"] }

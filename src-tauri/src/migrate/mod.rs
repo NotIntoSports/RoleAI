@@ -163,25 +163,12 @@ pub fn import_legacy_sessions_from_user_path(
 }
 
 pub fn secret_slots_configured(config: &AppConfigV1) -> bool {
-    let provider = config.models.providers.iter().any(|provider| {
+    config.models.providers.iter().any(|provider| {
         provider
             .credential
             .as_ref()
             .is_some_and(|slot| slot.configured)
-    });
-    let livekit = config
-        .transport
-        .livekit
-        .api_key
-        .as_ref()
-        .is_some_and(|slot| slot.configured)
-        || config
-            .transport
-            .livekit
-            .api_secret
-            .as_ref()
-            .is_some_and(|slot| slot.configured);
-    provider || livekit
+    })
 }
 
 pub fn legacy_migration_status(

@@ -3,7 +3,6 @@ import { Bot, ChevronDown, FileText, Hand, MessageSquare, MicOff, Play, RotateCc
 
 import * as api from "../../api/commands";
 import "../../styles/workspace.css";
-import { connectLiveKitRoom, disconnectLiveKitRoom } from "./livekit-room";
 import { MicStreamer, type MicStreamCallbacks, type MicStreamController } from "./mic-recorder";
 import { PreflightIssues } from "./preflight-issues";
 import type {
@@ -261,9 +260,6 @@ export function WorkspaceSession({
   const [revision, setRevision] = useState(0);
   const [reportSummary, setReportSummary] = useState("");
   const [reportDetail, setReportDetail] = useState("");
-  const [transport, setTransport] = useState<"direct" | "livekit">("direct");
-  const [livekitState, setLivekitState] = useState("idle");
-  const livekitRoom = useRef<Awaited<ReturnType<typeof connectLiveKitRoom>> | null>(null);
   const statusSeq = useRef(0);
   const transcriptSeq = useRef(0);
   const replySeq = useRef(0);
@@ -443,8 +439,8 @@ export function WorkspaceSession({
       if (inputSource === "meeting" && !meetingPid) { setConfigurationOpen(true); setMessage("请刷新并选择会议进程。"); return; }
       if (inputSource === "meeting" && !virtualAudio?.installed) { setConfigurationOpen(true); setMessage(virtualAudio?.rebootRequired ? "请重启 Windows，使虚拟声卡生效后再开始会议。" : "请先安装并自动配置虚拟声卡。"); return; }
       const result = roleProfileId && voiceRouteId
-        ? await api.startSession(transport, { roleProfileId, voiceRouteId, allowWebSearch: allowWebSearch && canSearch, ...(inputSource === "meeting" ? { meetingPid: Number(meetingPid) } : {}), ...(outputDeviceId ? { outputDeviceId } : {}) })
-        : await api.startSession(transport);
+        ? await api.startSession({ roleProfileId, voiceRouteId, allowWebSearch: allowWebSearch && canSearch, ...(inputSource === "meeting" ? { meetingPid: Number(meetingPid) } : {}), ...(outputDeviceId ? { outputDeviceId } : {}) })
+        : await api.startSession();
       if (!result.ok) {
         setConfigurationOpen(true);
         setMessage(errorText(result.error));
@@ -473,17 +469,6 @@ export function WorkspaceSession({
       setReportSummary("");
       setReportDetail("");
       setMessage("");
-      setLivekitState("idle");
-      if (result.data.livekit) {
-        try {
-          livekitRoom.current = await connectLiveKitRoom(result.data.livekit);
-          setLivekitState("connected");
-        } catch {
-          setConfigurationOpen(true);
-          setLivekitState("error");
-          setMessage("LIVEKIT_CONNECT_FAILED：无法进入房间");
-        }
-      }
       await refresh(result.data.session.id);
     } catch {
       setConfigurationOpen(true);
@@ -495,9 +480,6 @@ export function WorkspaceSession({
 
   async function stop() {
     requestEpoch.current += 1;
-    await disconnectLiveKitRoom(livekitRoom.current);
-    livekitRoom.current = null;
-    setLivekitState("idle");
     const ok = await run(() => api.stopSession());
     if (ok) {
       setPhase("completed");
@@ -718,9 +700,6 @@ export function WorkspaceSession({
             {PHASE_LABELS[phase] ?? phase}
           </span>
           <span className="session-mode">{MODE_LABELS[mode] ?? mode}</span>
-          {livekitState !== "idle" && (
-            <span className="session-mode">LiveKit {livekitState === "connected" ? "已连接" : "连接失败"}</span>
-          )}
         </div>
         <div className="session-config-heading">
           <span className="session-config-summary">{inputSource === "meeting" ? "会议音频" : "本机麦克风"} · {config?.speech.voiceRoutes.find((route) => route.id === voiceRouteId)?.name ?? "尚未选择语音线路"}</span>
@@ -768,31 +747,6 @@ export function WorkspaceSession({
             <label><input type="checkbox" disabled={!canSearch} checked={allowWebSearch && canSearch} onChange={(event) => setAllowWebSearch(event.target.checked)} />允许本场联网搜索（可能产生费用）</label>
             {!canSearch && <small>联网问答需要级联语音线路，并在模型供应商设置中选择支持的搜索协议。</small>}
           </fieldset>}
-          <fieldset className="session-transport">
-            <legend>传输方式</legend>
-            <label>
-              <input
-                type="radio"
-                name="transport"
-                value="direct"
-                checked={transport === "direct"}
-                disabled={busy || active}
-                onChange={() => setTransport("direct")}
-              />
-              <span>本机直连</span>
-            </label>
-            <label>
-              <input
-                type="radio"
-                name="transport"
-                value="livekit"
-                checked={transport === "livekit"}
-                disabled={busy || active}
-                onChange={() => setTransport("livekit")}
-              />
-              <span>LiveKit</span>
-            </label>
-          </fieldset>
         </div>
         <div className="session-toolbar-controls">
           <div className="service-actions session-controls">

@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-import type { AgentCommandInput, AgentCommandResult, CommandResult, DiagnosticsExportResult, EmbeddingConfig, EmbeddingConfigSaveInput, EmbeddingTestResult, FoundationStatus, LegacyMigrationStatus, LegacySessionImport, LiveKitConfig, LiveKitJoinToken, LiveKitSettingsSaveInput, LiveKitTestResult, LivestreamDraftInput, LivestreamGenerateInput, LivestreamRuntime, MaterialIndexResult, MaterialSearchHit, MaterialSummary, MicPcmAcceptance, ModelDiscoveryResult, ObsRuntimeStatus, ProviderConfig, ProviderSaveInput, ProviderTestResult, PublicConfig, RoleProfileConfig, RoleProfileCopyInput, RoleProfileSaveInput, RuntimeStatus, SecretStatus, SessionDetail, SessionExportResult, SessionStartResult, SessionSummary, SessionTurnView, StartupState, VoiceReferenceAudioSaveInput, VoiceReferenceCloneResult, VoiceReferenceSaveInput, VoiceReferenceSummary, VoiceReferenceUpdateInput, VoiceRouteConfig, VoiceRouteSaveInput, VoiceRouteTestResult } from "../generated/bindings";
+import type { AgentCommandInput, AgentCommandResult, CommandResult, DiagnosticsExportResult, EmbeddingConfig, EmbeddingConfigSaveInput, EmbeddingTestResult, FoundationStatus, LegacyMigrationStatus, LegacySessionImport, LivestreamDraftInput, LivestreamGenerateInput, LivestreamRuntime, MaterialIndexResult, MaterialSearchHit, MaterialSummary, MicPcmAcceptance, ModelDiscoveryResult, ObsRuntimeStatus, ProviderConfig, ProviderSaveInput, ProviderTestResult, PublicConfig, RoleProfileConfig, RoleProfileCopyInput, RoleProfileSaveInput, RuntimeStatus, SecretStatus, SessionDetail, SessionExportResult, SessionStartResult, SessionSummary, SessionTurnView, StartupState, VoiceReferenceAudioSaveInput, VoiceReferenceCloneResult, VoiceReferenceSaveInput, VoiceReferenceSummary, VoiceReferenceUpdateInput, VoiceRouteConfig, VoiceRouteSaveInput, VoiceRouteTestResult } from "../generated/bindings";
 
 export function getFoundationStatus() {
   return invoke<CommandResult<FoundationStatus>>("foundation_get_status");
@@ -98,22 +98,6 @@ export function deleteEmbeddingConfig(embeddingId: string) {
   return invoke<CommandResult<FoundationStatus>>("embedding_config_delete", { embeddingId });
 }
 
-export function saveLiveKitSettings(input: LiveKitSettingsSaveInput) {
-  return invoke<CommandResult<LiveKitConfig>>("livekit_settings_save", { input });
-}
-
-export function testLiveKitSettings() {
-  return invoke<CommandResult<LiveKitTestResult>>("livekit_settings_test");
-}
-
-export function enableLiveKitSettings(enabled: boolean) {
-  return invoke<CommandResult<LiveKitConfig>>("livekit_settings_enable", { enabled });
-}
-
-export function issueLiveKitJoinToken(room: string, identity: string) {
-  return invoke<CommandResult<LiveKitJoinToken>>("livekit_issue_join_token", { room, identity });
-}
-
 export function restoreLastGoodConfig() {
   return invoke<CommandResult<StartupState>>("config_restore_last_good");
 }
@@ -162,8 +146,8 @@ export function installVirtualAudio() {
   return invoke<CommandResult<import("../generated/bindings").VirtualAudioPreparation>>("virtual_audio_install");
 }
 
-export function startSession(transportMode?: "direct" | "livekit", selection?: { roleProfileId: string; voiceRouteId: string; allowWebSearch?: boolean; meetingPid?: number; outputDeviceId?: string }) {
-  return invoke<CommandResult<SessionStartResult>>("session_start", { transportMode, ...selection });
+export function startSession(selection?: { roleProfileId: string; voiceRouteId: string; allowWebSearch?: boolean; meetingPid?: number; outputDeviceId?: string }) {
+  return invoke<CommandResult<SessionStartResult>>("session_start", { ...selection });
 }
 
 export function stopSession() {

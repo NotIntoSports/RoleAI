@@ -163,25 +163,9 @@ identifier = "allow-embedding-config-delete"
 description = "Allows deleting one embedding configuration."
 commands.allow = ["embedding_config_delete"]
 
-[[permission]]
-identifier = "allow-livekit-settings-save"
-description = "Allows saving optional LiveKit URL and storing credentials in Windows Credential Manager."
-commands.allow = ["livekit_settings_save"]
 
-[[permission]]
-identifier = "allow-livekit-settings-test"
-description = "Allows testing the saved LiveKit transport configuration."
-commands.allow = ["livekit_settings_test"]
 
-[[permission]]
-identifier = "allow-livekit-settings-enable"
-description = "Allows enabling or disabling a tested LiveKit transport."
-commands.allow = ["livekit_settings_enable"]
 
-[[permission]]
-identifier = "allow-livekit-issue-join-token"
-description = "Allows minting a short-lived LiveKit room-join token when transport is enabled."
-commands.allow = ["livekit_issue_join_token"]
 
 [[permission]]
 identifier = "allow-material-list"

@@ -142,14 +142,6 @@ pub struct SpeechConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[ts(rename_all = "camelCase")]
-pub struct TransportConfig {
-    #[serde(default)]
-    pub livekit: LiveKitConfig,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, TS)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[ts(rename_all = "camelCase")]
 pub struct KnowledgeConfig {
     #[serde(default)]
     pub embedding_configs: Vec<EmbeddingConfig>,
@@ -238,26 +230,6 @@ pub struct EmbeddingConfig {
     pub config_version: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, TS)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[ts(rename_all = "camelCase")]
-pub struct LiveKitConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default)]
-    pub url: Option<String>,
-    #[serde(default)]
-    pub api_key: Option<SecretSlot>,
-    #[serde(default)]
-    pub api_secret: Option<SecretSlot>,
-    #[serde(default)]
-    pub ready: bool,
-    #[serde(default)]
-    pub status: Option<String>,
-    #[serde(default)]
-    pub config_version: u32,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[ts(rename_all = "camelCase")]
@@ -289,8 +261,6 @@ pub struct AppConfigV1 {
     #[serde(default)]
     pub speech: SpeechConfig,
     #[serde(default)]
-    pub transport: TransportConfig,
-    #[serde(default)]
     pub knowledge: KnowledgeConfig,
     #[serde(default)]
     pub storage: StorageConfig,
@@ -312,8 +282,11 @@ struct AppConfigV1Input {
     models: ModelConfig,
     #[serde(default)]
     speech: SpeechConfig,
+    /// Deprecated LiveKit transport settings. Accepted so existing config
+    /// files keep parsing, then dropped: sessions always run local direct.
     #[serde(default)]
-    transport: TransportConfigInput,
+    #[allow(dead_code)]
+    transport: Value,
     #[serde(default)]
     knowledge: KnowledgeConfigInput,
     #[serde(default)]
@@ -360,15 +333,6 @@ impl From<RoleProfileInput> for RoleProfileConfig {
 
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct TransportConfigInput {
-    #[serde(default)]
-    livekit: Option<LiveKitConfig>,
-    #[serde(default)]
-    livekit_url: Option<String>,
-}
-
-#[derive(Default, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct KnowledgeConfigInput {
     #[serde(default)]
     embedding_configs: Option<Vec<EmbeddingConfig>>,
@@ -384,11 +348,6 @@ impl<'de> Deserialize<'de> for AppConfigV1 {
         D: serde::Deserializer<'de>,
     {
         let input = AppConfigV1Input::deserialize(deserializer)?;
-        if input.transport.livekit.is_some() && input.transport.livekit_url.is_some() {
-            return Err(serde::de::Error::custom(
-                "livekit and legacy livekitUrl cannot both be present",
-            ));
-        }
         if input.knowledge.embedding_configs.is_some()
             && input.knowledge.embedding_provider_id.is_some()
         {
@@ -397,17 +356,11 @@ impl<'de> Deserialize<'de> for AppConfigV1 {
             ));
         }
 
-        let livekit = input.transport.livekit.unwrap_or_else(|| LiveKitConfig {
-            url: input.transport.livekit_url,
-            ..LiveKitConfig::default()
-        });
-
         Ok(Self {
             config_version: input.config_version,
             application: input.application,
             models: input.models,
             speech: input.speech,
-            transport: TransportConfig { livekit },
             knowledge: KnowledgeConfig {
                 embedding_configs: input.knowledge.embedding_configs.unwrap_or_default(),
                 active_embedding_config_id: input.knowledge.active_embedding_config_id,
@@ -438,7 +391,6 @@ pub struct PublicConfig {
     pub application: ApplicationConfig,
     pub models: ModelConfig,
     pub speech: SpeechConfig,
-    pub transport: TransportConfig,
     pub knowledge: KnowledgeConfig,
     pub storage: StorageConfig,
     pub role_profiles: Vec<RoleProfileConfig>,
@@ -456,7 +408,6 @@ pub fn public_view(config: &AppConfigV1) -> PublicConfig {
         application: config.application.clone(),
         models: config.models.clone(),
         speech: config.speech.clone(),
-        transport: config.transport.clone(),
         knowledge: config.knowledge.clone(),
         storage: config.storage.clone(),
         role_profiles: config.role_profiles.clone(),
@@ -483,7 +434,6 @@ pub struct DiagnosticPublicConfig {
     pub application: ApplicationConfig,
     pub models: ModelConfig,
     pub speech: SpeechConfig,
-    pub transport: TransportConfig,
     pub knowledge: KnowledgeConfig,
     pub storage: StorageConfig,
     pub role_profiles: Vec<DiagnosticRoleProfile>,
@@ -497,7 +447,6 @@ pub fn diagnostic_view(config: &AppConfigV1) -> DiagnosticPublicConfig {
         application: config.application.clone(),
         models: config.models.clone(),
         speech: config.speech.clone(),
-        transport: config.transport.clone(),
         knowledge: config.knowledge.clone(),
         storage: config.storage.clone(),
         role_profiles: config
@@ -522,7 +471,6 @@ impl Default for AppConfigV1 {
             application: ApplicationConfig::default(),
             models: ModelConfig::default(),
             speech: SpeechConfig::default(),
-            transport: TransportConfig::default(),
             knowledge: KnowledgeConfig::default(),
             storage: StorageConfig::default(),
             role_profiles: Vec::new(),
@@ -631,51 +579,6 @@ impl AppConfigV1 {
                     "Active role profile flags are inconsistent",
                 ));
             }
-        }
-        if let Some(url) = &self.transport.livekit.url {
-            validate_url(url, &["ws", "wss"])?;
-        }
-        for (slot, canonical_reference) in [
-            (
-                self.transport.livekit.api_key.as_ref(),
-                "transport/livekit/api-key",
-            ),
-            (
-                self.transport.livekit.api_secret.as_ref(),
-                "transport/livekit/api-secret",
-            ),
-        ] {
-            if let Some(slot) = slot
-                && slot.reference != canonical_reference
-            {
-                return Err(ConfigError::new(
-                    "CONFIG_SECRET_REFERENCE_INVALID",
-                    "LiveKit credential reference is not canonical",
-                ));
-            }
-        }
-        if self.transport.livekit.enabled
-            && (self.transport.livekit.url.is_none()
-                || !self
-                    .transport
-                    .livekit
-                    .api_key
-                    .as_ref()
-                    .is_some_and(|slot| slot.configured)
-                || !self
-                    .transport
-                    .livekit
-                    .api_secret
-                    .as_ref()
-                    .is_some_and(|slot| slot.configured)
-                || !self.transport.livekit.ready
-                || self.transport.livekit.status.as_deref() != Some("ready")
-                || self.transport.livekit.config_version == 0)
-        {
-            return Err(ConfigError::new(
-                "CONFIG_LIVEKIT_INVALID",
-                "Enabled LiveKit transport is not ready",
-            ));
         }
         if let Some(active) = &self.models.active_provider_id
             && !self

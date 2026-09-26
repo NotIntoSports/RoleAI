@@ -120,25 +120,6 @@ fn tracked_example_is_valid_and_contains_no_configured_secret() {
     assert!(config.active_role_profile_id.is_none());
     assert_eq!(config.knowledge.embedding_configs.len(), 1);
     assert!(config.knowledge.active_embedding_config_id.is_none());
-    assert_eq!(
-        config
-            .transport
-            .livekit
-            .api_key
-            .as_ref()
-            .map(|slot| (slot.reference.as_str(), slot.configured)),
-        Some(("transport/livekit/api-key", false))
-    );
-    assert_eq!(
-        config
-            .transport
-            .livekit
-            .api_secret
-            .as_ref()
-            .map(|slot| (slot.reference.as_str(), slot.configured)),
-        Some(("transport/livekit/api-secret", false))
-    );
-    assert!(!config.transport.livekit.enabled);
 }
 
 #[test]
@@ -214,7 +195,7 @@ fn voice_route_rejects_unknown_mode_and_missing_provider_reference() {
 }
 
 #[test]
-fn legacy_role_embedding_and_livekit_fields_upgrade_to_safe_canonical_state() {
+fn legacy_role_embedding_and_removed_transport_fields_upgrade_to_safe_canonical_state() {
     let legacy_json = r#"{
         "configVersion": 1,
         "roleProfiles": [{"id":"interviewer","instructions":"Ask one question"}],
@@ -230,23 +211,15 @@ fn legacy_role_embedding_and_livekit_fields_upgrade_to_safe_canonical_state() {
     assert!(!config.role_profiles[0].active);
     assert_eq!(config.role_profiles[0].config_version, 0);
     assert!(config.active_role_profile_id.is_none());
-    assert!(!config.transport.livekit.enabled);
-    assert_eq!(
-        config.transport.livekit.url.as_deref(),
-        Some("wss://legacy.example.com")
-    );
-    assert!(config.transport.livekit.api_key.is_none());
-    assert!(config.transport.livekit.api_secret.is_none());
-    assert!(!config.transport.livekit.ready);
     assert!(config.knowledge.embedding_configs.is_empty());
     assert!(config.knowledge.active_embedding_config_id.is_none());
 
     let canonical_json = serde_json::to_string(&config).unwrap();
     assert!(canonical_json.contains("\"systemPrompt\":\"Ask one question\""));
-    assert!(canonical_json.contains("\"livekit\":"));
     assert!(canonical_json.contains("\"embeddingConfigs\":[]"));
     assert!(!canonical_json.contains("instructions"));
     assert!(!canonical_json.contains("livekitUrl"));
+    assert!(!canonical_json.contains("livekit"));
     assert!(!canonical_json.contains("embeddingProviderId"));
 }
 
@@ -282,7 +255,7 @@ fn legacy_role_migration_preserves_noncanonical_id_and_oversized_instructions_sa
 }
 
 #[test]
-fn canonical_role_embedding_and_livekit_configuration_loads() {
+fn canonical_role_embedding_and_removed_transport_configuration_loads() {
     let config = AppConfigV1::from_json(
         r#"{
             "configVersion": 1,
@@ -319,7 +292,9 @@ fn canonical_role_embedding_and_livekit_configuration_loads() {
         config.knowledge.embedding_configs[0].distance,
         EmbeddingDistance::Cosine
     );
-    assert!(config.transport.livekit.enabled);
+    // LiveKit transport 配置已整体移除：旧键被接受但不再进入规范化配置。
+    let canonical_json = serde_json::to_string(&config).unwrap();
+    assert!(!canonical_json.contains("livekit"));
 }
 
 #[test]
@@ -451,37 +426,6 @@ fn embedding_dimensions_and_provider_reference_are_validated() {
     );
 }
 
-#[test]
-fn livekit_requires_safe_url_canonical_refs_and_ready_state_before_enablement() {
-    for livekit in [
-        r#"{"enabled":false,"url":"https://rtc.example.com","apiKey":null,"apiSecret":null,"ready":false,"status":null,"configVersion":0}"#,
-        r#"{"enabled":false,"url":"wss://user@rtc.example.com","apiKey":null,"apiSecret":null,"ready":false,"status":null,"configVersion":0}"#,
-        r#"{"enabled":false,"url":"wss://rtc.example.com?token=hidden","apiKey":null,"apiSecret":null,"ready":false,"status":null,"configVersion":0}"#,
-        r#"{"enabled":false,"url":"wss://rtc.example.com#fragment","apiKey":null,"apiSecret":null,"ready":false,"status":null,"configVersion":0}"#,
-    ] {
-        let json = format!(r#"{{"configVersion":1,"transport":{{"livekit":{livekit}}}}}"#);
-        assert_eq!(parse_error(&json).code(), "CONFIG_URL_INVALID");
-    }
-
-    for (field, reference) in [
-        ("apiKey", "transport/livekit/wrong-key"),
-        ("apiSecret", "transport/livekit/wrong-secret"),
-    ] {
-        let json = format!(
-            r#"{{"configVersion":1,"transport":{{"livekit":{{"enabled":false,"url":"wss://rtc.example.com","{field}":{{"reference":"{reference}","configured":false}},"ready":false,"status":null,"configVersion":1}}}}}}"#
-        );
-        assert_eq!(parse_error(&json).code(), "CONFIG_SECRET_REFERENCE_INVALID");
-    }
-
-    let enabled_not_ready = r#"{
-        "configVersion":1,
-        "transport":{"livekit":{"enabled":true,"url":"wss://rtc.example.com","apiKey":{"reference":"transport/livekit/api-key","configured":true},"apiSecret":{"reference":"transport/livekit/api-secret","configured":true},"ready":false,"status":null,"configVersion":1}}
-    }"#;
-    assert_eq!(
-        parse_error(enabled_not_ready).code(),
-        "CONFIG_LIVEKIT_INVALID"
-    );
-}
 
 #[test]
 fn public_view_exposes_secret_references_but_never_secret_material() {
@@ -526,8 +470,6 @@ fn public_view_exposes_secret_references_but_never_secret_material() {
     // The credential survives only as a SecretSlot reference + configured flag.
     assert!(json.contains("providers/p1/api-key"));
     assert!(json.contains("\"configured\":true"));
-    assert!(json.contains("\"apiKey\":null"));
-    assert!(json.contains("\"apiSecret\":null"));
     assert!(!json.contains("\"apiKey\":\""));
     assert!(!json.contains("\"apiSecret\":\""));
     // Voice-route projection carries the full cascaded wiring.

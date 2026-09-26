@@ -21,9 +21,6 @@ const emptyConfig: PublicConfig = {
     activeProviderId: "openai",
   },
   speech: { voiceRoutes: [], activeVoiceRouteId: null },
-  transport: {
-    livekit: { enabled: false, url: null, apiKey: null, apiSecret: null, ready: false, status: null, configVersion: 0 },
-  },
   knowledge: { embeddingConfigs: [], activeEmbeddingConfigId: null },
   storage: { exportDirectory: null },
   roleProfiles: [],

@@ -18,9 +18,6 @@ const emptyConfig: PublicConfig = {
   application: { locale: null },
   models: { providers: [], activeProviderId: null },
   speech: { voiceRoutes: [], activeVoiceRouteId: null },
-  transport: {
-    livekit: { enabled: false, url: null, apiKey: null, apiSecret: null, ready: false, status: null, configVersion: 0 },
-  },
   knowledge: { embeddingConfigs: [], activeEmbeddingConfigId: null },
   storage: { exportDirectory: null },
   roleProfiles: [],

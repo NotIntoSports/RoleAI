@@ -1,8 +1,7 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
-import { AudioLines, Boxes, Cable, Mic, Server } from "lucide-react";
+import { AudioLines, Boxes, Mic, Server } from "lucide-react";
 import * as api from "../../api/commands";
 import { EmbeddingEditor } from "../../features/services/embedding-editor";
-import { LiveKitEditor } from "../../features/services/livekit-editor";
 import { VoiceReferenceEditor } from "../../features/services/voice-reference-editor";
 import type { CommandResult, ProviderDependency, ProviderTestResult, PublicConfig, VoiceReferenceSummary, VoiceRouteMode, WebCapability } from "../../generated/bindings";
 import { PageShell } from "../page-shell";
@@ -46,7 +45,6 @@ const categories = [
   { id: "routes", label: "语音线路", icon: AudioLines },
   { id: "voices", label: "音色克隆", icon: Mic },
   { id: "embedding", label: "Embedding", icon: Boxes },
-  { id: "livekit", label: "LiveKit", icon: Cable },
 ] as const;
 
 export function ServicesPage() {
@@ -338,7 +336,6 @@ export function ServicesPage() {
       </section>
       <section id="services-panel-embedding" hidden={category !== "embedding"} aria-labelledby="services-category-embedding"><EmbeddingEditor focusId={embeddingFocusId} /></section>
       <section id="services-panel-voices" hidden={category !== "voices"} aria-labelledby="services-category-voices"><VoiceReferenceEditor /></section>
-      <section id="services-panel-livekit" hidden={category !== "livekit"} aria-labelledby="services-category-livekit"><LiveKitEditor /></section>
       </div>
     </div>
   </div>;

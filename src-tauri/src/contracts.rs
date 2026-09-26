@@ -5,14 +5,13 @@ use std::path::Path;
 #[cfg(test)]
 use crate::config::{
     ApplicationConfig, DiagnosticsConfig, EmbeddingConfig, EmbeddingDistance, KnowledgeConfig,
-    LiveKitConfig, ModelConfig, ProviderConfig, PublicConfig, RoleProfileConfig, RoleScenario,
-    SecretSlot, SpeechConfig, StorageConfig, TransportConfig, VoiceRouteConfig, VoiceRouteMode,
+    ModelConfig, ProviderConfig, PublicConfig, RoleProfileConfig, RoleScenario,
+    SecretSlot, SpeechConfig, StorageConfig, VoiceRouteConfig, VoiceRouteMode,
 };
-use crate::services::LiveKitJoinToken;
 #[cfg(test)]
 use crate::services::{
-    DiscoveredModelDto, EmbeddingConfigSaveInput, EmbeddingTestResult, LiveKitSettingsSaveInput,
-    LiveKitTestResult, MaterialIndexResult, MaterialSearchHit, MaterialSummary,
+    DiscoveredModelDto, EmbeddingConfigSaveInput, EmbeddingTestResult,
+    MaterialIndexResult, MaterialSearchHit, MaterialSummary,
     ModelDiscoveryResult, ProviderSaveInput, ProviderTestResult, RoleProfileCopyInput,
     RoleProfileSaveInput, VoiceRouteSaveInput, VoiceRouteTestResult,
 };
@@ -127,7 +126,6 @@ impl From<crate::sessions::SessionRecord> for SessionSummary {
 pub enum SessionStartResult {
     Started {
         session: SessionSummary,
-        livekit: Option<LiveKitJoinToken>,
     },
     Blocked {
         issues: Vec<PreflightIssue>,
@@ -332,8 +330,6 @@ fn generated_bindings() -> String {
         VoiceRouteMode::decl(&config),
         VoiceRouteConfig::decl(&config),
         SpeechConfig::decl(&config),
-        LiveKitConfig::decl(&config),
-        TransportConfig::decl(&config),
         EmbeddingDistance::decl(&config),
         EmbeddingConfig::decl(&config),
         KnowledgeConfig::decl(&config),
@@ -358,9 +354,6 @@ fn generated_bindings() -> String {
         RoleProfileCopyInput::decl(&config),
         EmbeddingConfigSaveInput::decl(&config),
         EmbeddingTestResult::decl(&config),
-        LiveKitSettingsSaveInput::decl(&config),
-        LiveKitTestResult::decl(&config),
-        LiveKitJoinToken::decl(&config),
         MaterialSummary::decl(&config),
         MaterialIndexResult::decl(&config),
         MaterialSearchHit::decl(&config),
@@ -458,11 +451,8 @@ mod tests {
         assert!(bindings.contains("export type RoleProfileConfig"));
         assert!(bindings.contains("export type RoleScenario"));
         assert!(bindings.contains("export type EmbeddingConfig"));
-        assert!(bindings.contains("export type LiveKitConfig"));
         assert!(bindings.contains("export type RoleProfileSaveInput"));
         assert!(bindings.contains("export type EmbeddingConfigSaveInput"));
-        assert!(bindings.contains("export type LiveKitSettingsSaveInput"));
-        assert!(bindings.contains("export type LiveKitJoinToken"));
         assert!(
             bindings.contains("export type MaterialSummary"),
             "unexpected bindings:\n{bindings}"
@@ -493,7 +483,6 @@ mod tests {
             "AudioLevelEvent",
             "AgentCommandInput",
             "AgentCommandResult",
-            "LiveKitJoinToken",
             "VoiceReferenceSummary",
             "VoiceReferenceSaveInput",
             "VoiceReferenceAudioSaveInput",

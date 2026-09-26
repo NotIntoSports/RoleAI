@@ -14,9 +14,7 @@ import {
   deleteRoleProfile,
   deleteSpeechRoute,
   discoverModelProvider,
-  enableLiveKitSettings,
   finalizeSessionUtterance,
-  issueLiveKitJoinToken,
   startSession,
   getConfigPublic,
   getLegacyMigrationStatus,
@@ -25,13 +23,11 @@ import {
   indexMaterials,
   listMaterials,
   saveEmbeddingConfig,
-  saveLiveKitSettings,
   saveModelProvider,
   saveRoleProfile,
   saveSpeechRoute,
   searchMaterials,
   testEmbeddingConfig,
-  testLiveKitSettings,
   testModelProvider,
   testSpeechRoute,
 } from "./commands";
@@ -135,7 +131,7 @@ describe("Phase 3 service adapters", () => {
     expect(invokeMock).toHaveBeenNthCalledWith(4, "speech_route_delete", { routeId: "route" });
   });
 
-  it("uses exact role embedding and LiveKit command names", async () => {
+  it("uses exact role and embedding command names", async () => {
     invokeMock.mockResolvedValue({ ok: true, data: {} });
     const role = { id: "interviewer", name: "Interviewer", systemPrompt: "Ask", openingMessage: "Hi", styleInstructions: "Short" };
     await saveRoleProfile(role);
@@ -147,11 +143,6 @@ describe("Phase 3 service adapters", () => {
     await testEmbeddingConfig("primary");
     await activateEmbeddingConfig("primary");
     await deleteEmbeddingConfig("primary");
-    const livekit = { url: "wss://livekit.example.test", apiKey: "transient-key", apiSecret: "transient-secret" };
-    await saveLiveKitSettings(livekit);
-    await testLiveKitSettings();
-    await enableLiveKitSettings(true);
-    await issueLiveKitJoinToken("interview-room", "candidate-1");
     expect(invokeMock).toHaveBeenNthCalledWith(1, "role_profile_save", { input: role });
     expect(invokeMock).toHaveBeenNthCalledWith(2, "role_profile_copy", { input: { sourceId: "interviewer", id: "copy" } });
     expect(invokeMock).toHaveBeenNthCalledWith(3, "role_profile_activate", { roleId: "interviewer" });
@@ -160,13 +151,6 @@ describe("Phase 3 service adapters", () => {
     expect(invokeMock).toHaveBeenNthCalledWith(6, "embedding_config_test", { embeddingId: "primary" });
     expect(invokeMock).toHaveBeenNthCalledWith(7, "embedding_config_activate", { embeddingId: "primary" });
     expect(invokeMock).toHaveBeenNthCalledWith(8, "embedding_config_delete", { embeddingId: "primary" });
-    expect(invokeMock).toHaveBeenNthCalledWith(9, "livekit_settings_save", { input: livekit });
-    expect(invokeMock).toHaveBeenNthCalledWith(10, "livekit_settings_test");
-    expect(invokeMock).toHaveBeenNthCalledWith(11, "livekit_settings_enable", { enabled: true });
-    expect(invokeMock).toHaveBeenNthCalledWith(12, "livekit_issue_join_token", {
-      room: "interview-room",
-      identity: "candidate-1",
-    });
   });
 });
 
@@ -177,14 +161,12 @@ describe("session adapters", () => {
     expect(invokeMock).toHaveBeenCalledWith("session_finalize_utterance", { text: "请介绍岗位" });
   });
 
-  it("starts a session with optional transportMode and defaults to direct", async () => {
+  it("starts a session without a transport selection", async () => {
     invokeMock.mockResolvedValue({ ok: true, data: {} });
     await startSession();
-    await startSession("direct");
-    await startSession("livekit");
-    expect(invokeMock).toHaveBeenNthCalledWith(1, "session_start", { transportMode: undefined });
-    expect(invokeMock).toHaveBeenNthCalledWith(2, "session_start", { transportMode: "direct" });
-    expect(invokeMock).toHaveBeenNthCalledWith(3, "session_start", { transportMode: "livekit" });
+    await startSession({ roleProfileId: "role", voiceRouteId: "route" });
+    expect(invokeMock).toHaveBeenNthCalledWith(1, "session_start", {});
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "session_start", { roleProfileId: "role", voiceRouteId: "route" });
   });
 });
 

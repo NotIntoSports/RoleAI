@@ -8,7 +8,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::{
     app_state::AppState,
     config::{
-        EmbeddingConfig, LiveKitConfig, ProviderConfig, PublicConfig, RoleProfileConfig,
+        EmbeddingConfig, ProviderConfig, PublicConfig, RoleProfileConfig,
         VoiceRouteConfig, diagnostic_view, public_view,
     },
     contracts::{
@@ -20,7 +20,7 @@ use crate::{
     },
     error::PublicError,
     providers::{
-        ChatMessage, ChatModel, OfficialLiveKitProbe, OpenAiCompatibleCascade,
+        ChatMessage, ChatModel, OpenAiCompatibleCascade,
         OpenAiCompatibleEmbeddingProbe, OpenAiCompatibleProbe, OpenAiCompatibleRealtime,
         ProviderEndpoint, StandardRouteProbe, TextToSpeech, VoiceCloneProbe,
     },
@@ -30,8 +30,7 @@ use crate::{
     },
     services::{
         EmbeddingConfigSaveInput, EmbeddingService, EmbeddingServiceError, EmbeddingTestResult,
-        LiveKitJoinToken, LiveKitSettingsError, LiveKitSettingsSaveInput, LiveKitSettingsService,
-        LiveKitTestResult, MaterialIndexResult, MaterialSearchHit, MaterialService,
+        MaterialIndexResult, MaterialSearchHit, MaterialService,
         MaterialServiceError, MaterialSummary, ModelDiscoveryResult, ProviderSaveInput,
         ProviderService, ProviderServiceError, ProviderTestResult, RoleProfileCopyInput,
         RoleProfileSaveInput, RoleProfileService, RoleProfileServiceError, SessionProbes,
@@ -1279,26 +1278,6 @@ fn embedding_service_error<T: ts_rs::TS>(error: EmbeddingServiceError) -> Comman
     CommandResult::Err { error: public }
 }
 
-fn livekit_service_error<T: ts_rs::TS>(error: LiveKitSettingsError) -> CommandResult<T> {
-    let code = error.code();
-    let mut public = PublicError::new(
-        code,
-        "LiveKit settings operation failed",
-        matches!(code, "LIVEKIT_TIMEOUT" | "LIVEKIT_REQUEST_FAILED"),
-    );
-    if let Some(field) = match code {
-        "CONFIG_URL_INVALID" | "LIVEKIT_ENDPOINT_INVALID" => Some("url"),
-        "LIVEKIT_CREDENTIALS_MISSING" => Some("apiKey"),
-        "LIVEKIT_NOT_READY" | "LIVEKIT_DISABLED" => Some("enabled"),
-        "LIVEKIT_ROOM_INVALID" => Some("room"),
-        "LIVEKIT_IDENTITY_INVALID" => Some("identity"),
-        _ => None,
-    } {
-        public = public.with_field(field);
-    }
-    CommandResult::Err { error: public }
-}
-
 fn route_service_error<T: ts_rs::TS>(error: VoiceRouteServiceError) -> CommandResult<T> {
     let code = error.code();
     let probe_message = if let VoiceRouteServiceError::Probe(probe) = &error {
@@ -1337,11 +1316,6 @@ fn route_stage_probe<T: ts_rs::TS>() -> Result<StandardRouteProbe, CommandResult
 fn embedding_probe<T: ts_rs::TS>() -> Result<OpenAiCompatibleEmbeddingProbe, CommandResult<T>> {
     OpenAiCompatibleEmbeddingProbe::new()
         .map_err(|error| service_error(error.code(), "Embedding client is unavailable"))
-}
-
-fn livekit_probe<T: ts_rs::TS>() -> Result<OfficialLiveKitProbe, CommandResult<T>> {
-    OfficialLiveKitProbe::new()
-        .map_err(|error| service_error(error.code(), "LiveKit client is unavailable"))
 }
 
 fn material_service_error<T: ts_rs::TS>(error: MaterialServiceError) -> CommandResult<T> {
@@ -1778,24 +1752,19 @@ fn session_detail(
 }
 
 #[cfg(test)]
-fn session_start_cmd(
-    state: &AppState,
-    transport_mode: Option<&str>,
-) -> CommandResult<SessionStartResult> {
-    session_start_selected_cmd(state, transport_mode, None, None, false)
+fn session_start_cmd(state: &AppState) -> CommandResult<SessionStartResult> {
+    session_start_selected_cmd(state, None, None, false)
 }
 
 #[cfg(test)]
 fn session_start_selected_cmd(
     state: &AppState,
-    transport_mode: Option<&str>,
     role_profile_id: Option<&str>,
     voice_route_id: Option<&str>,
     allow_web_search: bool,
 ) -> CommandResult<SessionStartResult> {
     session_start_capture_cmd(
         state,
-        transport_mode,
         role_profile_id,
         voice_route_id,
         allow_web_search,
@@ -1805,7 +1774,6 @@ fn session_start_selected_cmd(
 
 fn session_start_capture_cmd(
     state: &AppState,
-    transport_mode: Option<&str>,
     role_profile_id: Option<&str>,
     voice_route_id: Option<&str>,
     allow_web_search: bool,
@@ -1870,46 +1838,20 @@ fn session_start_capture_cmd(
             );
         }
     };
-    let probe = if matches!(transport_mode.map(str::trim), Some("livekit")) {
-        Some(match livekit_probe() {
-            Ok(probe) => probe,
-            Err(error) => return error,
-        })
-    } else {
-        None
-    };
-    let livekit = probe
-        .as_ref()
-        .map(|probe| LiveKitSettingsService::new(&state.config, &state.secrets, probe));
     let outcome = if let Some(capture) = capture {
-        sessions.start_with_meeting_capture(
-            database,
-            &config,
-            secrets_ready,
-            transport_mode,
-            livekit.as_ref(),
-            capture,
-        )
+        sessions.start_with_meeting_capture(database, &config, secrets_ready, capture)
     } else {
-        sessions.start(
-            database,
-            &config,
-            secrets_ready,
-            transport_mode,
-            livekit.as_ref(),
-        )
+        sessions.start(database, &config, secrets_ready)
     };
     match outcome {
-        Ok(SessionStartOutcome::Started { session, livekit }) => CommandResult::Ok {
+        Ok(SessionStartOutcome::Started { session }) => CommandResult::Ok {
             data: SessionStartResult::Started {
                 session: session.into(),
-                livekit,
             },
         },
         Ok(SessionStartOutcome::Blocked { issues }) => CommandResult::Ok {
             data: SessionStartResult::Blocked { issues },
         },
-        Err(SessionServiceError::LiveKit(error)) => livekit_service_error(error),
         Err(error) => session_service_error(error),
     }
 }
@@ -2374,7 +2316,6 @@ fn session_push_mic_pcm_cmd(
 pub fn session_start_blocking<R: tauri::Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
-    transport_mode: Option<String>,
     role_profile_id: Option<String>,
     voice_route_id: Option<String>,
     allow_web_search: Option<bool>,
@@ -2425,7 +2366,6 @@ pub fn session_start_blocking<R: tauri::Runtime>(
     });
     let result = session_start_capture_cmd(
         &state,
-        transport_mode.as_deref(),
         role_profile_id.as_deref(),
         voice_route_id.as_deref(),
         allow_web_search.unwrap_or(false),
@@ -3352,74 +3292,6 @@ pub fn embedding_config_delete_blocking(
         })
 }
 
-pub fn livekit_settings_save_blocking(
-    state: State<'_, AppState>,
-    input: LiveKitSettingsSaveInput,
-) -> CommandResult<LiveKitConfig> {
-    let _guard = match service_guard(&state) {
-        Ok(guard) => guard,
-        Err(error) => return error,
-    };
-    let probe = match livekit_probe() {
-        Ok(probe) => probe,
-        Err(error) => return error,
-    };
-    LiveKitSettingsService::new(&state.config, &state.secrets, &probe)
-        .save(input)
-        .map_or_else(livekit_service_error, |data| CommandResult::Ok { data })
-}
-
-pub fn livekit_settings_test_blocking(
-    state: State<'_, AppState>,
-) -> CommandResult<LiveKitTestResult> {
-    let _guard = match service_guard(&state) {
-        Ok(guard) => guard,
-        Err(error) => return error,
-    };
-    let probe = match livekit_probe() {
-        Ok(probe) => probe,
-        Err(error) => return error,
-    };
-    LiveKitSettingsService::new(&state.config, &state.secrets, &probe)
-        .test()
-        .map_or_else(livekit_service_error, |data| CommandResult::Ok { data })
-}
-
-pub fn livekit_settings_enable_blocking(
-    state: State<'_, AppState>,
-    enabled: bool,
-) -> CommandResult<LiveKitConfig> {
-    let _guard = match service_guard(&state) {
-        Ok(guard) => guard,
-        Err(error) => return error,
-    };
-    let probe = match livekit_probe() {
-        Ok(probe) => probe,
-        Err(error) => return error,
-    };
-    LiveKitSettingsService::new(&state.config, &state.secrets, &probe)
-        .set_enabled(enabled)
-        .map_or_else(livekit_service_error, |data| CommandResult::Ok { data })
-}
-
-pub fn livekit_issue_join_token_blocking(
-    state: State<'_, AppState>,
-    room: String,
-    identity: String,
-) -> CommandResult<LiveKitJoinToken> {
-    let _guard = match service_guard(&state) {
-        Ok(guard) => guard,
-        Err(error) => return error,
-    };
-    let probe = match livekit_probe() {
-        Ok(probe) => probe,
-        Err(error) => return error,
-    };
-    LiveKitSettingsService::new(&state.config, &state.secrets, &probe)
-        .issue_join_token(&room, &identity)
-        .map_or_else(livekit_service_error, |data| CommandResult::Ok { data })
-}
-
 pub fn config_restore_last_good_blocking(
     state: State<'_, AppState>,
 ) -> CommandResult<StartupState> {
@@ -3572,7 +3444,7 @@ blocking_command!(material_import, material_import_blocking(path: String) -> Mat
 blocking_command!(material_search, material_search_blocking(query: String, top_k: Option<u32>) -> Vec<MaterialSearchHit>);
 blocking_command!(material_delete, material_delete_blocking(id: String) -> FoundationStatus);
 blocking_command!(material_index, material_index_blocking() -> MaterialIndexResult);
-blocking_command!(with_events session_start, session_start_blocking(transport_mode: Option<String>, role_profile_id: Option<String>, voice_route_id: Option<String>, allow_web_search: Option<bool>, meeting_pid: Option<u32>, output_device_id: Option<String>) -> SessionStartResult);
+blocking_command!(with_events session_start, session_start_blocking(role_profile_id: Option<String>, voice_route_id: Option<String>, allow_web_search: Option<bool>, meeting_pid: Option<u32>, output_device_id: Option<String>) -> SessionStartResult);
 
 pub fn meeting_process_list_blocking(
     _state: State<'_, AppState>,
@@ -3944,10 +3816,6 @@ blocking_command!(embedding_config_save, embedding_config_save_blocking(input: E
 blocking_command!(embedding_config_test, embedding_config_test_blocking(embedding_id: String) -> EmbeddingTestResult);
 blocking_command!(embedding_config_activate, embedding_config_activate_blocking(embedding_id: String) -> EmbeddingConfig);
 blocking_command!(embedding_config_delete, embedding_config_delete_blocking(embedding_id: String) -> FoundationStatus);
-blocking_command!(livekit_settings_save, livekit_settings_save_blocking(input: LiveKitSettingsSaveInput) -> LiveKitConfig);
-blocking_command!(livekit_settings_test, livekit_settings_test_blocking() -> LiveKitTestResult);
-blocking_command!(livekit_settings_enable, livekit_settings_enable_blocking(enabled: bool) -> LiveKitConfig);
-blocking_command!(livekit_issue_join_token, livekit_issue_join_token_blocking(room: String, identity: String) -> LiveKitJoinToken);
 blocking_command!(config_restore_last_good, config_restore_last_good_blocking() -> StartupState);
 blocking_command!(config_restore_defaults, config_restore_defaults_blocking() -> StartupState);
 
@@ -3960,7 +3828,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        embedding_service_error, livekit_service_error, provider_service_error, public_config,
+        embedding_service_error, provider_service_error, public_config,
         role_service_error, route_service_error,
     };
     use crate::{
@@ -3968,10 +3836,9 @@ mod tests {
         providers::ProviderError,
         secrets::MemorySecretStore,
         services::{
-            EmbeddingServiceError, LiveKitSettingsError, ProviderServiceError,
+            EmbeddingServiceError, ProviderServiceError,
             RoleProfileServiceError, VoiceRouteServiceError,
         },
-        sessions::SessionStore,
     };
 
     #[test]
@@ -4131,13 +3998,6 @@ mod tests {
             credential.as_object().unwrap().keys().collect::<Vec<_>>(),
             vec!["configured", "reference"]
         );
-        let livekit = &value["data"]["transport"]["livekit"];
-        assert!(livekit.get("apiKey").is_some());
-        assert!(livekit.get("apiSecret").is_some());
-        assert!(
-            livekit.get("apiKey").unwrap().is_null()
-                || livekit["apiKey"].get("reference").is_some()
-        );
         for needle in [
             "must-never-cross",
             "password",
@@ -4208,29 +4068,6 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(embedding["error"]["field"], "dimensions");
-        let livekit =
-            serde_json::to_value(livekit_service_error::<()>(LiveKitSettingsError::NotReady))
-                .unwrap();
-        assert_eq!(livekit["error"]["code"], "LIVEKIT_NOT_READY");
-        assert_eq!(livekit["error"]["retryable"], false);
-        let disabled =
-            serde_json::to_value(livekit_service_error::<()>(LiveKitSettingsError::Disabled))
-                .unwrap();
-        assert_eq!(disabled["error"]["code"], "LIVEKIT_DISABLED");
-        assert_eq!(disabled["error"]["field"], "enabled");
-        let room = serde_json::to_value(livekit_service_error::<()>(
-            LiveKitSettingsError::RoomInvalid,
-        ))
-        .unwrap();
-        assert_eq!(room["error"]["code"], "LIVEKIT_ROOM_INVALID");
-        assert_eq!(room["error"]["field"], "room");
-        assert!(!room["error"]["message"].as_str().unwrap().contains("eyJ"));
-        let identity = serde_json::to_value(livekit_service_error::<()>(
-            LiveKitSettingsError::IdentityInvalid,
-        ))
-        .unwrap();
-        assert_eq!(identity["error"]["code"], "LIVEKIT_IDENTITY_INVALID");
-        assert_eq!(identity["error"]["field"], "identity");
     }
 
     #[test]
@@ -4252,22 +4089,6 @@ mod tests {
             .unwrap();
         assert!(last_good.contains("service_guard"));
         assert!(defaults.contains("service_guard"));
-    }
-
-    #[test]
-    fn livekit_issue_join_token_takes_the_service_guard() {
-        let source = include_str!("commands.rs");
-        let name = "livekit_issue_join_token";
-        let body = command_body(source, name);
-        let until_next = body
-            .split("\nfn ")
-            .next()
-            .and_then(|chunk| chunk.split("\npub fn ").next())
-            .unwrap_or(body);
-        assert!(
-            until_next.contains("service_guard"),
-            "{name} must take service_guard"
-        );
     }
 
     #[test]
@@ -4598,7 +4419,7 @@ mod tests {
     fn session_start_returns_blocked_or_started_without_secret_or_pcm() {
         let empty_dir = tempfile::tempdir().unwrap();
         let empty = session_state(&empty_dir, r#"{"configVersion":1}"#);
-        let blocked = serde_json::to_value(super::session_start_cmd(&empty, None)).unwrap();
+        let blocked = serde_json::to_value(super::session_start_cmd(&empty)).unwrap();
         assert_eq!(blocked["ok"], true);
         assert_eq!(blocked["data"]["kind"], "blocked");
         let issues = blocked["data"]["issues"].as_array().unwrap();
@@ -4616,12 +4437,11 @@ mod tests {
 
         let ready_dir = tempfile::tempdir().unwrap();
         let ready = session_state(&ready_dir, &ready_session_config());
-        let started = serde_json::to_value(super::session_start_cmd(&ready, None)).unwrap();
+        let started = serde_json::to_value(super::session_start_cmd(&ready)).unwrap();
         assert_eq!(started["ok"], true, "{started}");
         assert_eq!(started["data"]["kind"], "started");
         assert_eq!(started["data"]["session"]["status"], "listening");
         assert_eq!(started["data"]["session"]["transportMode"], "direct");
-        assert_eq!(started["data"]["livekit"], serde_json::Value::Null);
         let json = serde_json::to_string(&started).unwrap();
         assert!(!json.contains("PROMPT-BODY"));
         assert!(!json.contains("pcm"));
@@ -4634,7 +4454,6 @@ mod tests {
         let state = session_state(&directory, &ready_session_config());
         let started = serde_json::to_value(super::session_start_selected_cmd(
             &state,
-            None,
             Some("preset-hr"),
             Some("route-1"),
             false,
@@ -4678,7 +4497,7 @@ mod tests {
             (None, Some("missing"), "SESSION_ROUTE_REQUIRED"),
         ] {
             let result = serde_json::to_value(super::session_start_selected_cmd(
-                &state, None, role, route, false,
+                &state, role, route, false,
             ))
             .unwrap();
             assert_eq!(result["error"]["code"], code);
@@ -4723,7 +4542,6 @@ mod tests {
                 &state,
                 None,
                 None,
-                None,
                 false,
                 Some(crate::services::MeetingCapture {
                     exe: &missing,
@@ -4737,90 +4555,12 @@ mod tests {
         }
     }
 
-    fn ready_livekit_session_config() -> String {
-        let mut config: serde_json::Value = serde_json::from_str(&ready_session_config()).unwrap();
-        config["transport"] = serde_json::json!({
-            "livekit": {
-                "enabled": true,
-                "url": "wss://livekit.example.test",
-                "apiKey": {"reference": "transport/livekit/api-key", "configured": true},
-                "apiSecret": {"reference": "transport/livekit/api-secret", "configured": true},
-                "ready": true,
-                "status": "ready",
-                "configVersion": 1
-            }
-        });
-        config.to_string()
-    }
-
-    #[test]
-    fn session_start_livekit_returns_join_token_and_does_not_persist_jwt() {
-        let directory = tempfile::tempdir().unwrap();
-        let state = session_state(&directory, &ready_livekit_session_config());
-        state
-            .secrets
-            .set("transport/livekit/api-key", "livekit-key")
-            .unwrap();
-        state
-            .secrets
-            .set("transport/livekit/api-secret", "livekit-secret")
-            .unwrap();
-
-        let started =
-            serde_json::to_value(super::session_start_cmd(&state, Some("livekit"))).unwrap();
-        assert_eq!(started["ok"], true, "{started}");
-        assert_eq!(started["data"]["kind"], "started");
-        assert_eq!(started["data"]["session"]["transportMode"], "livekit");
-        assert_eq!(
-            started["data"]["livekit"]["url"],
-            "wss://livekit.example.test"
-        );
-        assert_eq!(started["data"]["livekit"]["expiresInSec"], 60);
-        let token = started["data"]["livekit"]["token"].as_str().unwrap();
-        assert!(!token.is_empty());
-        let id = started["data"]["session"]["id"].as_str().unwrap();
-        assert_eq!(started["data"]["livekit"]["room"], format!("session-{id}"));
-        assert_eq!(
-            started["data"]["livekit"]["identity"],
-            format!("tauri-{id}")
-        );
-
-        let database = state.database.lock().unwrap();
-        let database = database.as_ref().unwrap();
-        let stored = SessionStore::new(database).get(id).unwrap().unwrap();
-        assert_eq!(stored.transport_mode, "livekit");
-        let snapshots = SessionStore::new(database).list_snapshots(id).unwrap();
-        assert_eq!(snapshots[0].transport_mode, "livekit");
-        let dump = format!("{stored:?} {:?}", snapshots);
-        assert!(!dump.contains(token));
-    }
-
-    #[test]
-    fn session_start_livekit_fails_closed_when_not_ready() {
-        let directory = tempfile::tempdir().unwrap();
-        let state = session_state(&directory, &ready_session_config());
-        let result =
-            serde_json::to_value(super::session_start_cmd(&state, Some("livekit"))).unwrap();
-        assert_eq!(result["ok"], false);
-        assert_eq!(result["error"]["code"], "LIVEKIT_NOT_READY");
-    }
-
-    #[test]
-    fn session_start_rejects_unknown_transport_mode() {
-        let directory = tempfile::tempdir().unwrap();
-        let state = session_state(&directory, &ready_session_config());
-        let result =
-            serde_json::to_value(super::session_start_cmd(&state, Some("webrtc"))).unwrap();
-        assert_eq!(result["ok"], false);
-        assert_eq!(result["error"]["code"], "SESSION_TRANSPORT_INVALID");
-        assert_eq!(result["error"]["field"], "transportMode");
-    }
 
     #[test]
     fn session_commands_list_get_export_delete_and_status() {
         let directory = tempfile::tempdir().unwrap();
         let state = session_state(&directory, &ready_session_config());
-        let started = serde_json::to_value(super::session_start_cmd(&state, None)).unwrap();
+        let started = serde_json::to_value(super::session_start_cmd(&state)).unwrap();
         let id = started["data"]["session"]["id"]
             .as_str()
             .unwrap()
@@ -4878,7 +4618,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let state = session_state(&directory, &ready_session_config());
         assert_eq!(
-            serde_json::to_value(super::session_start_cmd(&state, None)).unwrap()["ok"],
+            serde_json::to_value(super::session_start_cmd(&state)).unwrap()["ok"],
             true
         );
         {
@@ -5059,7 +4799,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let state = session_state(&directory, &ready_session_config());
         assert_eq!(
-            serde_json::to_value(super::session_start_cmd(&state, None)).unwrap()["ok"],
+            serde_json::to_value(super::session_start_cmd(&state)).unwrap()["ok"],
             true
         );
         let asr = ScriptedAsr;
@@ -5137,7 +4877,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let state = session_state(&directory, &ready_session_config());
         assert_eq!(
-            serde_json::to_value(super::session_start_cmd(&state, None)).unwrap()["ok"],
+            serde_json::to_value(super::session_start_cmd(&state)).unwrap()["ok"],
             true
         );
 
@@ -5179,7 +4919,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let state = session_state(&directory, &ready_session_config());
         assert_eq!(
-            serde_json::to_value(super::session_start_cmd(&state, None)).unwrap()["ok"],
+            serde_json::to_value(super::session_start_cmd(&state)).unwrap()["ok"],
             true
         );
 
@@ -5213,7 +4953,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let state = session_state(&directory, &ready_session_config());
         assert_eq!(
-            serde_json::to_value(super::session_start_cmd(&state, None)).unwrap()["ok"],
+            serde_json::to_value(super::session_start_cmd(&state)).unwrap()["ok"],
             true
         );
         let asr = ScriptedAsr;
@@ -5262,7 +5002,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let state = session_state(&directory, &ready_session_config());
         assert_eq!(
-            serde_json::to_value(super::session_start_cmd(&state, None)).unwrap()["ok"],
+            serde_json::to_value(super::session_start_cmd(&state)).unwrap()["ok"],
             true
         );
         let entered = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -5322,7 +5062,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let state = session_state(&directory, &ready_session_config());
         assert_eq!(
-            serde_json::to_value(super::session_start_cmd(&state, None)).unwrap()["ok"],
+            serde_json::to_value(super::session_start_cmd(&state)).unwrap()["ok"],
             true
         );
         let asr = ScriptedAsr;

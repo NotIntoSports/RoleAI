@@ -46,10 +46,6 @@ export type VoiceRouteConfig = { id: string, name: string, mode: VoiceRouteMode,
 
 export type SpeechConfig = { voiceRoutes: Array<VoiceRouteConfig>, activeVoiceRouteId: string | null, };
 
-export type LiveKitConfig = { enabled: boolean, url: string | null, apiKey: SecretSlot | null, apiSecret: SecretSlot | null, ready: boolean, status: string | null, configVersion: number, };
-
-export type TransportConfig = { livekit: LiveKitConfig, };
-
 export type EmbeddingDistance = "cosine";
 
 export type EmbeddingConfig = { id: string, providerId: string, baseUrl: string | null, credential: SecretSlot | null, modelId: string, dimensions: number, distance: EmbeddingDistance, normalized: boolean, active: boolean, ready: boolean, status: string | null, configVersion: number, };
@@ -64,7 +60,7 @@ export type RoleProfileConfig = { id: string, name: string, systemPrompt: string
 
 export type DiagnosticsConfig = { logRetentionDays: number, };
 
-export type PublicConfig = { configVersion: number, application: ApplicationConfig, models: ModelConfig, speech: SpeechConfig, transport: TransportConfig, knowledge: KnowledgeConfig, storage: StorageConfig, roleProfiles: Array<RoleProfileConfig>, activeRoleProfileId: string | null, diagnostics: DiagnosticsConfig, };
+export type PublicConfig = { configVersion: number, application: ApplicationConfig, models: ModelConfig, speech: SpeechConfig, knowledge: KnowledgeConfig, storage: StorageConfig, roleProfiles: Array<RoleProfileConfig>, activeRoleProfileId: string | null, diagnostics: DiagnosticsConfig, };
 
 export type ProviderSaveInput = { webCapability?: WebCapability, id: string | null, name: string | null, baseUrl: string, apiKey: string | null, };
 
@@ -98,12 +94,6 @@ export type EmbeddingConfigSaveInput = { id: string | null, providerId: string, 
 
 export type EmbeddingTestResult = { id: string, ready: boolean, dimensions: number, };
 
-export type LiveKitSettingsSaveInput = { url: string | null, apiKey: string | null, apiSecret: string | null, };
-
-export type LiveKitTestResult = { ready: boolean, };
-
-export type LiveKitJoinToken = { url: string, token: string, room: string, identity: string, expiresInSec: number, };
-
 export type MaterialSummary = { id: string, fileName: string, contentSha256: string, mediaType: string, byteSize: number, status: string, chunkCount: number, };
 
 export type MaterialIndexResult = { indexedChunks: number, status: string, };
@@ -114,7 +104,7 @@ export type PreflightIssue = { code: string, area: string, action: string, };
 
 export type SessionSummary = { id: string, status: string, roleProfileId: string, voiceRouteId: string, transportMode: string, startedAt: string | null, finishedAt: string | null, updatedAt: string, };
 
-export type SessionStartResult = { "kind": "started", session: SessionSummary, livekit: LiveKitJoinToken | null, } | { "kind": "blocked", issues: Array<PreflightIssue>, };
+export type SessionStartResult = { "kind": "started", session: SessionSummary, } | { "kind": "blocked", issues: Array<PreflightIssue>, };
 
 export type RuntimeStatus = { phase: string, mode: string, seq: number, unusedMaterials: boolean, lastErrorCode: string | null, revision: number, };
 
