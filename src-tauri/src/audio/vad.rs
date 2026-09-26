@@ -55,6 +55,7 @@ mod tests {
 // VAD 驱动的语句分段状态机：512@16k 窗口逐窗判定，语义与 `UtteranceSegmenter` 对齐。
 use crate::audio::pcm::downsample_48k_to_16k;
 use crate::audio::segmenter::SpeechSegmenter;
+use crate::audio::smart_turn::{TurnCompletenessDetector, TURN_COMPLETE_PROB};
 use std::collections::VecDeque;
 
 const START_PROB: f32 = 0.5;
@@ -66,9 +67,12 @@ const MAX_UTTERANCE_WINDOWS: usize = 780; // 25s 强制提交
 const PRE_ROLL_WINDOWS: usize = 6; // 预卷 ~200ms
 const MAX_QUEUED_UTTERANCES: usize = 2;
 const WINDOW_BYTES_48K: usize = 3072; // 512@16k ↔ 1536 采样@48k = 3072 字节
+const HOLD_MAX_WINDOWS: usize = 78; // 保持态预算：累计停顿 78 窗（~2.5s）后强制提交
 
 pub struct VadSegmenter {
     detector: Box<dyn VoiceActivityDetector>,
+    // Smart Turn 完成度分析器：None 时保持纯 VAD 现状行为。
+    turn_detector: Option<Box<dyn TurnCompletenessDetector>>,
     pending48: Vec<u8>,
     pending16: Vec<f32>,
     pre_roll: VecDeque<Vec<u8>>,
@@ -77,6 +81,7 @@ pub struct VadSegmenter {
     voiced_run: usize,
     speech_windows: usize,
     silence_windows: usize,
+    hold_windows: usize, // 保持态已消耗的停顿窗预算（0=非保持）
     active: bool,
     dropped: u32,
 }
@@ -89,6 +94,7 @@ impl VadSegmenter {
     pub fn with_detector(detector: Box<dyn VoiceActivityDetector>) -> Self {
         Self {
             detector,
+            turn_detector: None,
             pending48: Vec::new(),
             pending16: Vec::new(),
             pre_roll: VecDeque::new(),
@@ -97,9 +103,16 @@ impl VadSegmenter {
             voiced_run: 0,
             speech_windows: 0,
             silence_windows: 0,
+            hold_windows: 0,
             active: false,
             dropped: 0,
         }
+    }
+
+    /// 挂载回合完成度分析器：停顿提交点判“未说完”则不提交、进入保持态继续收集。
+    pub fn with_turn_detector(mut self, detector: Box<dyn TurnCompletenessDetector>) -> Self {
+        self.turn_detector = Some(detector);
+        self
     }
 
     fn ingest_window(&mut self, raw48: Vec<u8>, prob: f32) {
@@ -137,6 +150,26 @@ impl VadSegmenter {
     }
 
     fn finish(&mut self) {
+        // Smart Turn 保持态：只在 VAD 判定语音结束后的语句缓冲上判分
+        // （纯静音输入会被模型判“回合已完成”，静音绝不能单独送入）。
+        if let Some(detector) = self.turn_detector.as_mut() {
+            let samples16: Vec<f32> = {
+                let b = downsample_48k_to_16k(&self.utterance);
+                b.chunks_exact(2)
+                    .map(|x| i16::from_le_bytes([x[0], x[1]]) as f32 / 32768.0)
+                    .collect()
+            };
+            if samples16.len() >= 512 // 过短不判分
+                && self.hold_windows < HOLD_MAX_WINDOWS
+                && detector.score(&samples16) < TURN_COMPLETE_PROB
+            {
+                self.hold_windows += self.silence_windows; // 保持预算按停顿窗累计
+                self.silence_windows = 0; // 继续等下一句
+                self.active = true; // 保持态继续收集
+                return;
+            }
+        }
+        // 原提交逻辑不变
         if self.speech_windows >= MIN_SPEECH_WINDOWS {
             if self.queued.len() == MAX_QUEUED_UTTERANCES {
                 self.queued.pop_front();
@@ -145,6 +178,7 @@ impl VadSegmenter {
             self.queued.push_back(std::mem::take(&mut self.utterance));
         }
         self.clear_current();
+        self.hold_windows = 0;
     }
 
     fn clear_current(&mut self) {
@@ -155,6 +189,7 @@ impl VadSegmenter {
         self.voiced_run = 0;
         self.speech_windows = 0;
         self.silence_windows = 0;
+        self.hold_windows = 0;
         self.active = false;
     }
 }
@@ -192,9 +227,11 @@ impl SpeechSegmenter for VadSegmenter {
         self.dropped
     }
     fn reset(&mut self) {
-        // 取出真检测器再重建，只清状态机、不丢模型
+        // 取出真检测器再重建，只清状态机、不丢模型（turn 分析器同样保留）
         let detector = std::mem::replace(&mut self.detector, Box::new(sink_detector()));
+        let turn_detector = self.turn_detector.take();
         *self = Self::with_detector(detector);
+        self.turn_detector = turn_detector;
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self
@@ -226,6 +263,16 @@ mod segmenter_tests {
         fn process(&mut self, _window: &[f32]) -> f32 {
             // 脚本耗尽后视为静音
             self.probs.pop_front().unwrap_or(0.0)
+        }
+    }
+
+    /// 每次判分返回固定得分的 Smart Turn 替身（得分 ≥0.5=回合已完成）。
+    struct FixedTurn {
+        score: f32,
+    }
+    impl TurnCompletenessDetector for FixedTurn {
+        fn score(&mut self, _: &[f32]) -> f32 {
+            self.score
         }
     }
 
@@ -306,6 +353,33 @@ mod segmenter_tests {
         let probs = vec![0.9f32; 2000]; // 25 秒级别连续语音
         let mut s = vad(&probs);
         s.ingest(&frames48(2000, 800 * 3), false);
+        assert!(s.ready());
+    }
+
+    #[test]
+    fn incomplete_turn_holds_then_commits_within_budget() {
+        // 脚本：语音 15 窗(0.9) → 停顿 5 窗(0.0)（触发判分，得分 0.2=未完）→
+        // 继续静默 80 窗（0.0，保持超限 78 窗）→ 强制提交
+        let mut audio = vec![0.9f32; 15];
+        audio.extend(vec![0.0f32; 5 + 78]);
+        let mut s = VadSegmenter::with_detector(Box::new(FixedVad {
+            probs: audio.iter().copied().collect(),
+        }))
+        .with_turn_detector(Box::new(FixedTurn { score: 0.2 }));
+        s.ingest(&frames48(2000, 24), false);
+        s.ingest(&frames48(0, 249), false); // 15 语音窗 + 83 停顿窗（>78 保持上限）
+        assert!(s.ready()); // 保持超限后必须提交
+    }
+
+    #[test]
+    fn complete_turn_commits_immediately_without_hold() {
+        // 得分 0.9=完整 → 停顿 22 窗后照常提交（判分不改变现状时序）
+        let mut s = VadSegmenter::with_detector(Box::new(FixedVad {
+            probs: std::iter::repeat_n(0.9f32, 30).collect(),
+        }))
+        .with_turn_detector(Box::new(FixedTurn { score: 0.9 }));
+        s.ingest(&frames48(2000, 24), false);
+        s.ingest(&frames48(0, 60), false); // 37 窗：15 窗补足 0.9 脚本 + 22 窗静音触发提交
         assert!(s.ready());
     }
 }
