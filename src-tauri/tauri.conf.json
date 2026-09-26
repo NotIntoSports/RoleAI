@@ -22,7 +22,8 @@
     "resources": {
       "../native/AudioBridge/publish/AudioBridge.exe": "audio-bridge/AudioBridge.exe",
       "../scripts/fetch-prerequisites.ps1": "prerequisite-scripts/fetch-prerequisites.ps1",
-      "../scripts/install-prerequisite.ps1": "prerequisite-scripts/install-prerequisite.ps1"
+      "../scripts/install-prerequisite.ps1": "prerequisite-scripts/install-prerequisite.ps1",
+      "resources/models/*.onnx": "resources/models/"
     }
   }
 }

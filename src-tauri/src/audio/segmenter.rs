@@ -151,10 +151,44 @@ pub fn default_segmenter() -> Box<dyn SpeechSegmenter> {
         return Box::new(UtteranceSegmenter::default());
     }
     match crate::audio::vad::VadSegmenter::new() {
-        Ok(vad) => Box::new(vad),
+        Ok(vad) => Box::new(attach_smart_turn(vad)),
         Err(error) => {
             tracing::warn!(%error, "Silero VAD 不可用（模型加载失败），已降级为能量门限分段");
             Box::new(UtteranceSegmenter::default())
+        }
+    }
+}
+
+/// Smart Turn 模型路径双解析（参照 AudioBridge 先例）：
+/// dev = 仓库 `src-tauri/resources/models/`；release = 打包资源目录
+/// （Tauri Windows 下 `resource_dir()` 即 exe 所在目录，工厂无 AppHandle 可用，
+/// 故经 `current_exe` 等价解析）。定位失败返回 None，由调用方降级为不带分析器。
+fn smart_turn_model_path() -> Option<std::path::PathBuf> {
+    const MODEL_RELATIVE: &str = "resources/models/smart-turn-v3.2-cpu.onnx";
+    if cfg!(debug_assertions) {
+        Some(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(MODEL_RELATIVE))
+    } else {
+        std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|dir| dir.join(MODEL_RELATIVE)))
+    }
+}
+
+/// 构造完成后尝试挂 Smart Turn 分析器：模型缺失/加载失败仅告警，
+/// 分段器保持纯 VAD 现状行为（语义断句是增强项，绝不阻断采集路径）。
+fn attach_smart_turn(vad: crate::audio::vad::VadSegmenter) -> crate::audio::vad::VadSegmenter {
+    let Some(path) = smart_turn_model_path() else {
+        tracing::warn!("Smart Turn 模型路径不可定位，语义断句未启用（分段保持纯 VAD 现状）");
+        return vad;
+    };
+    match crate::audio::smart_turn::SmartTurnAnalyzer::new(&path) {
+        Ok(analyzer) => {
+            tracing::info!(?path, "Smart Turn 语义断句已启用");
+            vad.with_turn_detector(Box::new(analyzer))
+        }
+        Err(error) => {
+            tracing::warn!(%error, ?path, "Smart Turn 模型加载失败，语义断句未启用（分段保持纯 VAD 现状）");
+            vad
         }
     }
 }
@@ -289,5 +323,33 @@ mod tests {
                 .is_some(),
             "默认必须优先 Silero VAD 实现"
         );
+    }
+
+    #[test]
+    fn factory_default_attaches_smart_turn_analyzer() {
+        // 装配接线：默认工厂构造 VadSegmenter 后必须挂上 Smart Turn 分析器
+        // （dev 下模型在仓库资源内，加载成功；与上一用例共用工厂环境锁串行执行）。
+        let _guard = factory_test_support::lock();
+        unsafe { std::env::remove_var("AI_VOICE_VAD") };
+        let s = super::default_segmenter();
+        let vad = s
+            .as_any()
+            .downcast_ref::<crate::audio::vad::VadSegmenter>()
+            .expect("VAD 实现");
+        assert!(
+            vad.has_turn_detector(),
+            "默认工厂必须挂载 Smart Turn 分析器"
+        );
+    }
+
+    #[test]
+    fn smart_turn_model_path_resolves_to_existing_model_in_dev() {
+        let path = super::smart_turn_model_path().expect("dev 路径必须可解析");
+        assert!(
+            path.ends_with("resources/models/smart-turn-v3.2-cpu.onnx"),
+            "路径必须指向仓库资源模型：{}",
+            path.display()
+        );
+        assert!(path.exists(), "模型文件必须存在：{}", path.display());
     }
 }

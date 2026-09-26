@@ -115,6 +115,12 @@ impl VadSegmenter {
         self
     }
 
+    /// 测试专用：工厂装配语义断言用（分析器本身对分段器外部不可见）。
+    #[cfg(test)]
+    pub(crate) fn has_turn_detector(&self) -> bool {
+        self.turn_detector.is_some()
+    }
+
     fn ingest_window(&mut self, raw48: Vec<u8>, prob: f32) {
         let voiced = prob >= START_PROB;
         if !self.active {
@@ -142,9 +148,11 @@ impl VadSegmenter {
             }
             self.silence_windows += 1;
         }
-        if self.silence_windows >= END_SILENCE_WINDOWS
-            || self.utterance.len() / WINDOW_BYTES_48K >= MAX_UTTERANCE_WINDOWS
-        {
+        if self.utterance.len() / WINDOW_BYTES_48K >= MAX_UTTERANCE_WINDOWS {
+            // 尺寸触发的强制提交不进保持态：持续不停顿的语音 silence_windows 恒为 0，
+            // 保持预算永不推进 → utterance 无界增长 + 每窗一次 ONNX 推理风暴。
+            self.commit_current();
+        } else if self.silence_windows >= END_SILENCE_WINDOWS {
             self.finish();
         }
     }
@@ -169,7 +177,11 @@ impl VadSegmenter {
                 return;
             }
         }
-        // 原提交逻辑不变
+        self.commit_current();
+    }
+
+    /// 提交语句缓冲并复位状态机（不涉及保持态判分）。
+    fn commit_current(&mut self) {
         if self.speech_windows >= MIN_SPEECH_WINDOWS {
             if self.queued.len() == MAX_QUEUED_UTTERANCES {
                 self.queued.pop_front();
@@ -381,5 +393,40 @@ mod segmenter_tests {
         s.ingest(&frames48(2000, 24), false);
         s.ingest(&frames48(0, 60), false); // 37 窗：15 窗补足 0.9 脚本 + 22 窗静音触发提交
         assert!(s.ready());
+    }
+
+    /// 统计判分次数的 Smart Turn 替身：用于锁定“尺寸触发不得反复推理”。
+    struct CountingTurn {
+        calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+    impl TurnCompletenessDetector for CountingTurn {
+        fn score(&mut self, _: &[f32]) -> f32 {
+            self.calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            0.2 // 永远判“未说完”
+        }
+    }
+
+    #[test]
+    fn continuous_speech_size_trigger_commits_without_hold() {
+        // 回归（Task 2 审查移交）：持续不停顿（无静音窗）的语音里 silence_windows 恒为 0，
+        // 若尺寸触发的 finish 也进保持态，hold_windows += 0 预算永不推进 →
+        // utterance 无界增长 + 每窗一次 ONNX 推理风暴。尺寸触发必须直接提交。
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut s = VadSegmenter::with_detector(Box::new(FixedVad {
+            probs: std::iter::repeat_n(0.9f32, 900).collect(),
+        }))
+        .with_turn_detector(Box::new(CountingTurn {
+            calls: calls.clone(),
+        }));
+        s.ingest(&frames48(2000, 900 * 8 / 5), false); // 1440 帧 = 900 窗连续语音，越过 780 窗上限
+        assert!(
+            s.ready(),
+            "超过 780 窗尺寸上限的连续语音必须被强制提交，不得滞留保持态"
+        );
+        assert!(
+            calls.load(std::sync::atomic::Ordering::Relaxed) <= 2,
+            "尺寸触发必须直接提交，不得每窗重复推理"
+        );
     }
 }
