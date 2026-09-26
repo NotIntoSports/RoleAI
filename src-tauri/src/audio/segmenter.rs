@@ -110,12 +110,14 @@ impl UtteranceSegmenter {
 }
 
 /// 语句分段器统一接口：捕获路径不感知具体实现（能量门限 / Silero VAD）。
-pub trait SpeechSegmenter: Send {
+/// `Any` 超trait 提供向下转型能力，供工厂语义测试与调用方按需区分实现。
+pub trait SpeechSegmenter: Send + std::any::Any {
     fn ingest(&mut self, pcm: &[u8], suppressed: bool);
     fn take(&mut self) -> Option<Vec<u8>>;
     fn ready(&self) -> bool;
     fn dropped(&self) -> u32;
     fn reset(&mut self);
+    fn as_any(&self) -> &dyn std::any::Any;
 }
 
 impl SpeechSegmenter for UtteranceSegmenter {
@@ -134,11 +136,73 @@ impl SpeechSegmenter for UtteranceSegmenter {
     fn reset(&mut self) {
         self.reset()
     }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
-/// 工厂：Task 4 接入 Silero 选择逻辑，本任务先固定能量实现。
+/// 工厂：`AI_VOICE_VAD=off` 强制能量门限实现；否则优先 Silero VAD，
+/// 模型加载失败（缺模型/初始化异常）降级回能量门限，保证采集路径永不断流。
+// 测试注意：任何依赖 Silero 行为（或能量行为）的测试必须持 `factory_test_support`
+// 的 AI_VOICE_VAD 测试锁；无锁读者与 set_var 并发在部分平台是数据竞争。
 pub fn default_segmenter() -> Box<dyn SpeechSegmenter> {
-    Box::new(UtteranceSegmenter::default())
+    if std::env::var("AI_VOICE_VAD").as_deref() == Ok("off") {
+        return Box::new(UtteranceSegmenter::default());
+    }
+    match crate::audio::vad::VadSegmenter::new() {
+        Ok(vad) => Box::new(vad),
+        Err(_) => Box::new(UtteranceSegmenter::default()),
+    }
+}
+
+/// 测试辅助：工厂实现选择依赖进程级环境变量，跨模块用例共用一把锁串行执行，
+/// 避免并行测试互扰。仅 `cfg(test)` 编译，不进产物。
+#[cfg(test)]
+pub(crate) mod factory_test_support {
+    use std::sync::{Mutex, MutexGuard};
+
+    static FACTORY_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    pub(crate) fn lock() -> MutexGuard<'static, ()> {
+        FACTORY_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// RAII 守卫：构造时保存 AI_VOICE_VAD 原值并置为 off，Drop 时恢复原值（无原值则删除）。
+    /// 闭包内断言失败 panic 展开时同样恢复，off 开关不会泄漏到进程内其余用例。
+    struct VadOffGuard {
+        previous: Option<String>,
+    }
+
+    impl VadOffGuard {
+        fn set() -> Self {
+            let previous = std::env::var("AI_VOICE_VAD").ok();
+            // 单测进程内一次性环境变量设置（Rust 2024 要求 unsafe）
+            unsafe { std::env::set_var("AI_VOICE_VAD", "off") };
+            Self { previous }
+        }
+    }
+
+    impl Drop for VadOffGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => {
+                    // 单测进程内一次性环境变量恢复（Rust 2024 要求 unsafe）
+                    unsafe { std::env::set_var("AI_VOICE_VAD", value) };
+                }
+                None => {
+                    // 单测进程内一次性环境变量清理（Rust 2024 要求 unsafe）
+                    unsafe { std::env::remove_var("AI_VOICE_VAD") };
+                }
+            }
+        }
+    }
+
+    /// 持锁期间以 `AI_VOICE_VAD=off` 强制能量实现运行闭包，正常返回与 panic 展开均恢复原值。
+    pub(crate) fn with_vad_off<T>(f: impl FnOnce() -> T) -> T {
+        let _guard = lock();
+        let _off = VadOffGuard::set();
+        f()
+    }
 }
 
 /// `CaptureState`/`AudioCapture` 派生 `Debug` 需要；分段器内部状态不进调试输出。
@@ -198,5 +262,28 @@ mod tests {
         assert!(vad.take().is_some());
         assert!(vad.take().is_some());
         assert!(vad.take().is_none());
+    }
+
+    // 工厂语义由进程级环境变量决定，两个工厂用例与跨模块管线用例共用
+    // `factory_test_support` 的锁串行执行，避免并行互扰。
+    #[test]
+    fn factory_off_switch_returns_energy_implementation() {
+        // 复用 with_vad_off：持锁、保存并恢复原值、panic 展开亦不泄漏 off 开关
+        let s = factory_test_support::with_vad_off(super::default_segmenter);
+        assert!(s.as_any().downcast_ref::<UtteranceSegmenter>().is_some());
+    }
+
+    #[test]
+    fn factory_default_prefers_silero_vad() {
+        let _guard = factory_test_support::lock();
+        // 单测进程内一次性环境变量清理（确保开关未残留）
+        unsafe { std::env::remove_var("AI_VOICE_VAD") };
+        let s = super::default_segmenter();
+        assert!(
+            s.as_any()
+                .downcast_ref::<crate::audio::vad::VadSegmenter>()
+                .is_some(),
+            "默认必须优先 Silero VAD 实现"
+        );
     }
 }

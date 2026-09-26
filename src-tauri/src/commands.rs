@@ -4874,69 +4874,76 @@ mod tests {
 
     #[test]
     fn session_push_mic_pcm_feeds_segmenter_and_finalizes_via_asr() {
-        let directory = tempfile::tempdir().unwrap();
-        let state = session_state(&directory, &ready_session_config());
-        assert_eq!(
-            serde_json::to_value(super::session_start_cmd(&state)).unwrap()["ok"],
-            true
-        );
+        // 管线联通性测试依赖能量分段器的确定性提交语义（合成方波不被 Silero 判为语音），
+        // 经 AI_VOICE_VAD=off 开关强制能量实现，与工厂用例共用锁串行执行。
+        crate::audio::segmenter::factory_test_support::with_vad_off(|| {
+            let directory = tempfile::tempdir().unwrap();
+            let state = session_state(&directory, &ready_session_config());
+            assert_eq!(
+                serde_json::to_value(super::session_start_cmd(&state)).unwrap()["ok"],
+                true
+            );
 
-        // 240ms 语音 + 800ms 静音：超过 START/MIN_SPEECH/END_SILENCE 阈值，应产出一条待转写语句。
-        let pcm = voiced_pcm(12);
-        let pcm = [pcm, silence_pcm(40)].concat();
-        let pushed = push_mic_pcm(&state, &pcm, 48_000);
-        assert_eq!(pushed["ok"], true, "{pushed}");
-        assert_eq!(pushed["data"]["accepted"], true);
+            // 240ms 语音 + 800ms 静音：超过 START/MIN_SPEECH/END_SILENCE 阈值，应产出一条待转写语句。
+            let pcm = voiced_pcm(12);
+            let pcm = [pcm, silence_pcm(40)].concat();
+            let pushed = push_mic_pcm(&state, &pcm, 48_000);
+            assert_eq!(pushed["ok"], true, "{pushed}");
+            assert_eq!(pushed["data"]["accepted"], true);
 
-        let ready = serde_json::to_value(super::session_audio_ready_cmd(&state)).unwrap();
-        assert_eq!(ready["data"]["ready"], true);
+            let ready = serde_json::to_value(super::session_audio_ready_cmd(&state)).unwrap();
+            assert_eq!(ready["data"]["ready"], true);
 
-        let asr = ScriptedAsr;
-        let llm = ScriptedLlm("收到");
-        let tts = ScriptedTts;
-        let embed = UnusedEmbed;
-        let probes = crate::services::SessionProbes {
-            asr: &asr,
-            llm: &llm,
-            tts: &tts,
-            embed: &embed,
-            realtime: &UnusedRealtime,
-        };
-        let finalized = serde_json::to_value(super::session_finalize_utterance_cmd(
-            &state,
-            &probes,
-            crate::runtime::CascadeCredentials::default(),
-            None,
-        ))
-        .unwrap();
-        assert_eq!(finalized["ok"], true, "{finalized}");
-        assert_eq!(finalized["data"]["userText"], "ignored");
-        assert_eq!(finalized["data"]["assistantText"], "收到");
+            let asr = ScriptedAsr;
+            let llm = ScriptedLlm("收到");
+            let tts = ScriptedTts;
+            let embed = UnusedEmbed;
+            let probes = crate::services::SessionProbes {
+                asr: &asr,
+                llm: &llm,
+                tts: &tts,
+                embed: &embed,
+                realtime: &UnusedRealtime,
+            };
+            let finalized = serde_json::to_value(super::session_finalize_utterance_cmd(
+                &state,
+                &probes,
+                crate::runtime::CascadeCredentials::default(),
+                None,
+            ))
+            .unwrap();
+            assert_eq!(finalized["ok"], true, "{finalized}");
+            assert_eq!(finalized["data"]["userText"], "ignored");
+            assert_eq!(finalized["data"]["assistantText"], "收到");
+        });
     }
 
     #[test]
     fn session_push_mic_pcm_resamples_non_48k_input() {
-        let directory = tempfile::tempdir().unwrap();
-        let state = session_state(&directory, &ready_session_config());
-        assert_eq!(
-            serde_json::to_value(super::session_start_cmd(&state)).unwrap()["ok"],
-            true
-        );
+        // 同上：重采样断言依赖能量分段器确定性阈值，强制能量实现。
+        crate::audio::segmenter::factory_test_support::with_vad_off(|| {
+            let directory = tempfile::tempdir().unwrap();
+            let state = session_state(&directory, &ready_session_config());
+            assert_eq!(
+                serde_json::to_value(super::session_start_cmd(&state)).unwrap()["ok"],
+                true
+            );
 
-        // 16kHz 采集：300ms 语音 + 900ms 静音。若命令忽略 sample_rate，
-        // 这段音频会被当成 48kHz 解析，语句永远不会达到断句阈值。
-        let mut speech_16k = Vec::new();
-        for sample in 0..4_800i16 {
-            let value = if sample % 2 == 0 { 2000i16 } else { -2000i16 };
-            speech_16k.extend_from_slice(&value.to_le_bytes());
-        }
-        let silence_16k = vec![0x00; 14_400 * 2];
-        let pcm = [speech_16k, silence_16k].concat();
-        let pushed = push_mic_pcm(&state, &pcm, 16_000);
-        assert_eq!(pushed["ok"], true, "{pushed}");
+            // 16kHz 采集：300ms 语音 + 900ms 静音。若命令忽略 sample_rate，
+            // 这段音频会被当成 48kHz 解析，语句永远不会达到断句阈值。
+            let mut speech_16k = Vec::new();
+            for sample in 0..4_800i16 {
+                let value = if sample % 2 == 0 { 2000i16 } else { -2000i16 };
+                speech_16k.extend_from_slice(&value.to_le_bytes());
+            }
+            let silence_16k = vec![0x00; 14_400 * 2];
+            let pcm = [speech_16k, silence_16k].concat();
+            let pushed = push_mic_pcm(&state, &pcm, 16_000);
+            assert_eq!(pushed["ok"], true, "{pushed}");
 
-        let ready = serde_json::to_value(super::session_audio_ready_cmd(&state)).unwrap();
-        assert_eq!(ready["data"]["ready"], true);
+            let ready = serde_json::to_value(super::session_audio_ready_cmd(&state)).unwrap();
+            assert_eq!(ready["data"]["ready"], true);
+        });
     }
 
     #[test]

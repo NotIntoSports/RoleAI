@@ -196,6 +196,9 @@ impl SpeechSegmenter for VadSegmenter {
         let detector = std::mem::replace(&mut self.detector, Box::new(sink_detector()));
         *self = Self::with_detector(detector);
     }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 /// reset 瞬间的占位实现，仅用于 mem::replace 的交换，随即被真检测器顶替。
