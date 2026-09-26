@@ -39,6 +39,11 @@ tracing-subscriber = { version = "=0.3.23", features = ["env-filter", "fmt"] }
 ts-rs = { version = "=12.0.1", features = ["chrono-impl", "serde-json-impl", "uuid-impl"] }
 uuid = { version = "=1.26.0", features = ["serde", "v4"] }
 zeroize = "=1.9.0"
+# ort 必须保持 Cargo.lock 钉住的 2.0.0-rc.10：该 crate 声明 ort = "2.0.0-rc.10"（开放范围），
+# 但 rc.11+ 移除了 CPUExecutionProvider，升级 ort 会导致编译失败。
+# default-features = false 关闭 ort-load-dynamic：改为构建期静态链接 onnxruntime 1.22，
+# 避免运行时误加载本机 System32 的旧版 onnxruntime.dll；hound(WAV) 未使用。
+silero-vad-rust = { version = "=6.2.2", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "=4.2.0", default-features = false, features = ["v1", "windows-native-keyring-store"] }
