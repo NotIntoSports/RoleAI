@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AEC Spike</title>
+  <style>
+    body { font-family: system-ui, "Microsoft YaHei", sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; line-height: 1.6; color: #1a1a1a; }
+    h1 { font-size: 1.25rem; }
+    p { font-family: ui-monospace, Consolas, monospace; background: #f4f4f4; border: 1px solid #ddd; padding: 0.25rem 0.5rem; border-radius: 4px; white-space: pre-wrap; word-break: break-all; }
+    button { font-size: 1rem; padding: 0.5rem 1rem; cursor: pointer; }
+    .hint { color: #666; font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <h1>AEC 能力实测（&lt;audio&gt; 播放回声消除）</h1>
+  <p class="hint">点击按钮后会外放 3 秒 220Hz 提示音（音量 100%），同时用麦克风测量播放期间 RMS，与静默期底噪对比。判定 PASS 表示 AEC 能消除 &lt;audio&gt; 播放，外放打断（barge-in）可默认开启。判定结果同时写入页面标题（AEC-SPIKE:PASS / AEC-SPIKE:FAIL）。</p>
+<script>
+const $ = (id) => document.getElementById(id);
+let ctx, stream;
+function makeToneWav(seconds = 3, freq = 220, amp = 0.6) {
+  const rate = 24000, n = rate * seconds;
+  const buf = new ArrayBuffer(44 + n * 2), view = new DataView(buf);
+  const ws = (o, s) => { for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i)); };
+  ws(0, "RIFF"); view.setUint32(4, 36 + n * 2, true); ws(8, "WAVEfmt ");
+  view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+  view.setUint32(24, rate, true); view.setUint32(28, rate * 2, true);
+  view.setUint16(32, 2, true); view.setUint16(34, 16, true); ws(36, "data");
+  view.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) view.setInt16(44 + i * 2, Math.sin(2 * Math.PI * freq * i / rate) * amp * 32767, true);
+  const blob = new Blob([buf], { type: "audio/wav" });
+  return URL.createObjectURL(blob);
+}
+async function rms() { // 300ms 麦克风 RMS 均值（线性域）
+  const input = ctx.createMediaStreamSource(stream);
+  const analyser = ctx.createAnalyser(); analyser.fftSize = 2048;
+  input.connect(analyser);
+  const data = new Float32Array(analyser.fftSize);
+  let sum = 0, rounds = 0;
+  const t0 = performance.now();
+  while (performance.now() - t0 < 300) {
+    analyser.getFloatTimeDomainData(data);
+    for (const v of data) sum += v * v;
+    rounds += data.length;
+    await new Promise(r => setTimeout(r, 20));
+  }
+  input.disconnect();
+  return Math.sqrt(sum / rounds);
+}
+async function run() {
+  ctx = new AudioContext();
+  stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+  await ctx.resume();
+  const quiet = await rms();                       // 静默期底噪
+  const audio = new Audio(makeToneWav());
+  audio.volume = 1.0;
+  const during = audio.play().then(async () => {   // <audio> 播放期间测 RMS
+    await new Promise(r => setTimeout(r, 800));    // 等扬声器真正出声
+    return rms();
+  }).then(v => { audio.pause(); return v; });
+  const duringRms = await during;
+  await new Promise(r => setTimeout(r, 500));
+  log(`quiet=${quiet.toExponential(2)} during=${duringRms.toExponential(2)}`);
+  const verdict = duringRms < Math.max(quiet * 3, 0.002) ? "PASS" : "FAIL";
+  document.title = `AEC-SPIKE:${verdict}`;
+  log(`判定: ${verdict}（PASS=AEC 能消除 <audio> 播放，外放打断可默认开）`);
+}
+function log(s) { const p = document.createElement("p"); p.textContent = s; document.body.appendChild(p); }
+</script>
+<button onclick="run().catch(e => log('ERR: ' + e))">开始 AEC spike（需要扬声器与麦克风开启）</button>
+</body>
+</html>
