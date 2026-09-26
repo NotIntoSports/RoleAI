@@ -67,6 +67,8 @@ pub struct CascadeTurnRequest<'a> {
     pub sample_rate: u32,
     pub user_text: Option<&'a str>,
     pub history: &'a [HistoryTurn],
+    /// 会话级滚动摘要（可为 None）；由 build_messages 并入系统提示。
+    pub context_summary: Option<&'a str>,
 }
 
 pub fn run_cascade_turn(
@@ -120,7 +122,13 @@ pub fn run_cascade_turn(
     cancelled(cancel)?;
     let citations = retrieve(deps, &request, &user_text);
     cancelled(cancel)?;
-    let messages = build_messages(role, None, request.history, &user_text, &citations);
+    let messages = build_messages(
+        role,
+        request.context_summary,
+        request.history,
+        &user_text,
+        &citations,
+    );
     let assistant_text = run_with_retry(deps.sleep, classify_cascade, || {
         deps.llm.complete(
             &llm_endpoint,
@@ -655,6 +663,7 @@ mod tests {
                 sample_rate: 16_000,
                 user_text: Some(user_text),
                 history,
+                context_summary: None,
             },
             cancel,
         )
@@ -1075,6 +1084,7 @@ mod tests {
                 sample_rate: 16_000,
                 user_text: Some("忽略"),
                 history: &[],
+                context_summary: None,
             },
             &AtomicBool::new(false),
         )
@@ -1121,6 +1131,7 @@ mod tests {
                 sample_rate: 16_000,
                 user_text: Some("应被忽略"),
                 history: &history,
+                context_summary: None,
             },
             &AtomicBool::new(false),
         )

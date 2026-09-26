@@ -750,6 +750,8 @@ mod tests {
         // 造一个会话（沿用既有 NewSession 助手/字面量，与相邻测试一致）
         let session_id = insert_test_session(&store);
         assert!(store.context_summary(&session_id).unwrap().is_none());
+        // 不存在会话的读路径：返回 None 而非错误。
+        assert!(store.context_summary("session-missing").unwrap().is_none());
         store
             .set_context_summary(&session_id, "此前讨论了时间问题", 3)
             .unwrap();

@@ -8,9 +8,9 @@ use crate::{
     config::{PublicConfig, RoleScenario, VoiceRouteMode},
     database::{Database, DatabaseError},
     providers::{
-        CascadeError, CascadeStage, ChatMessage, ChatModel, EmbeddingProbe, ProviderEndpoint,
-        RealtimeAudioRequest, RealtimeError, RealtimeModel, RealtimeTextRequest, SpeechToText,
-        TextToSpeech,
+        CascadeError, CascadeStage, ChatMessage, ChatModel, EmbeddingProbe, OpenAiCompatibleCascade,
+        ProviderEndpoint, RealtimeAudioRequest, RealtimeError, RealtimeModel, RealtimeTextRequest,
+        SpeechToText, TextToSpeech,
     },
     runtime::{
         AgentCommand, AgentCommandAction, AgentCommandError, AgentCommandOutcome, AgentMode,
@@ -235,6 +235,8 @@ pub struct SessionService<S: PlaybackSink = NoopSink> {
     playback: Option<crate::audio::playback::BridgePlayback>,
     text_only: bool,
     pending_confirmation_epoch: Option<u64>,
+    // 阶段 4：后台摘要压缩 job 的结果通道；Some 表示有一个压缩任务在途。
+    summary_job: Option<std::sync::mpsc::Receiver<Result<(String, i64), String>>>,
 }
 
 impl SessionService<NoopSink> {
@@ -265,6 +267,7 @@ impl<S: PlaybackSink> SessionService<S> {
             playback: None,
             text_only: false,
             pending_confirmation_epoch: None,
+            summary_job: None,
         }
     }
 
@@ -499,6 +502,22 @@ impl<S: PlaybackSink> SessionService<S> {
             return Err(SessionServiceError::StateInvalid);
         }
         self.poll_sidecar(database)?;
+        // 阶段 4：轮询已完成的摘要压缩 job。成功则 trim 后落库；
+        // 失败静默丢弃——上下文回退为原始截断历史，下次满足条件会重试。
+        if let Some(session_id) = self.session_id.clone()
+            && let Some(rx) = self.summary_job.take()
+        {
+            match rx.try_recv() {
+                Ok(Ok((summary, upto))) => {
+                    SessionStore::new(database)
+                        .set_context_summary(&session_id, summary.trim(), upto)?;
+                }
+                // job 未完成：继续挂起，留给下一次 finalize。
+                Err(std::sync::mpsc::TryRecvError::Empty) => self.summary_job = Some(rx),
+                // 失败或发送端已断（含压缩线程异常退出）：按无结果处理。
+                Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
+            }
+        }
         self.runtime.set_mode(self.control.mode());
         if self.control.take_stop_tts() {
             self.sink.cancel();
@@ -532,6 +551,11 @@ impl<S: PlaybackSink> SessionService<S> {
                 assistant_text: turn.assistant_text,
             })
             .collect::<Vec<_>>();
+        // 阶段 4：读取既有滚动摘要；哨兵 -1 表示从未写入，此时全程保留原始历史。
+        let (existing_summary, upto) = store
+            .context_summary(&session_id)?
+            .unwrap_or((String::new(), NO_CONTEXT_SUMMARY));
+        let history_after = &history[(upto + 1).clamp(0, history.len() as i64) as usize..];
         let user_text = text.map(str::trim).filter(|value| !value.is_empty());
         let pcm = if user_text.is_none() {
             self.capture
@@ -580,7 +604,8 @@ impl<S: PlaybackSink> SessionService<S> {
             pcm: effective_user_text.is_none().then_some(pcm.as_slice()),
             sample_rate: ASR_SAMPLE_RATE,
             user_text: effective_user_text,
-            history: &history,
+            history: history_after,
+            context_summary: Some(existing_summary.as_str()),
         };
         let turn = if transcript_only {
             CascadeTurn {
@@ -649,6 +674,65 @@ impl<S: PlaybackSink> SessionService<S> {
         self.revision += 1;
         self.unused_materials = !turn.materials_used;
         self.last_error_code = None;
+
+        // 阶段 4：未摘要轮次超过阈值时，后台把较早轮次压缩为滚动摘要。
+        // 压缩失败不影响本轮回答；落库要等下一次 finalize 开头的轮询。
+        let newest_index = history.len() as i64; // 含刚落的这一轮
+        if should_compress(newest_index, upto) && self.summary_job.is_none() {
+            let compress_from = upto + 1;
+            let compress_to = newest_index - KEEP_RECENT_TURNS as i64;
+            // endpoint/model 解析沿用既有 llm_endpoint 助手；e2e 路由无 llm 端点，
+            // 解析失败则静默跳过（e2e 上下文由 instructions 自带）。
+            if compress_to >= compress_from
+                && let Ok((llm_endpoint, llm_model_id)) = llm_endpoint(&config)
+            {
+                let old_summary = existing_summary.clone();
+                // 复用本 finalize 开头取出的 history：与 list_turns 同序，
+                // 且 compress_to < newest_index，所需轮次必然都在其中，不重复查库。
+                let turns: Vec<String> = history
+                    .iter()
+                    .skip(compress_from as usize)
+                    .take((compress_to - compress_from + 1) as usize)
+                    .map(|turn| {
+                        format!("用户：{}\n助手：{}", turn.user_text, turn.assistant_text)
+                    })
+                    .collect();
+                let credential = credentials.llm.map(str::to_string);
+                let (tx, rx) = std::sync::mpsc::channel();
+                self.summary_job = Some(rx);
+                std::thread::spawn(move || {
+                    let client = match OpenAiCompatibleCascade::new() {
+                        Ok(client) => client,
+                        Err(_) => {
+                            let _ = tx.send(Err("client".into()));
+                            return;
+                        }
+                    };
+                    let prompt = format!(
+                        "请把以下对话压缩为不超过 800 字的中文摘要，保留关键事实、决定与未决问题，直接输出摘要正文：\n\n既有摘要：{}\n\n对话：\n{}",
+                        old_summary,
+                        turns.join("\n\n")
+                    );
+                    let messages = vec![ChatMessage {
+                        role: "user".into(),
+                        content: prompt,
+                    }];
+                    let result = client
+                        .complete(
+                            &llm_endpoint,
+                            credential.as_deref(),
+                            &llm_model_id,
+                            &messages,
+                        )
+                        .map(|text| {
+                            let trimmed: String = text.chars().take(2000).collect();
+                            (trimmed, compress_to)
+                        })
+                        .map_err(|error| error.code().to_string());
+                    let _ = tx.send(result);
+                });
+            }
+        }
 
         self.runtime.transition(SessionPhase::Speaking)?;
         persist_phase(&store, &session_id, SessionPhase::Speaking)?;
@@ -991,6 +1075,8 @@ impl<S: PlaybackSink> SessionService<S> {
         self.revision = 0;
         self.unused_materials = false;
         self.last_error_code = None;
+        // 换会话后旧 job 的结果不得写进新会话，直接丢弃。
+        self.summary_job = None;
         self.control.reset();
         self.capture = AudioCapture::from_injected();
     }
@@ -1117,6 +1203,18 @@ impl<S: PlaybackSink> SessionService<S> {
         store.append_event(&session_id, "status", &status_payload(SessionPhase::Failed))?;
         Ok(())
     }
+}
+
+/// `context_summary_turn_index` 的哨兵值：从未写入过摘要。
+const NO_CONTEXT_SUMMARY: i64 = -1;
+/// 未摘要轮次超过此数触发后台压缩。
+const COMPRESS_THRESHOLD: i64 = 12;
+/// 压缩时始终保留的最近原始轮次。
+const KEEP_RECENT_TURNS: usize = 4;
+
+/// 距上次摘要累计的未压缩轮次是否已超过触发阈值。
+fn should_compress(newest_index: i64, upto: i64) -> bool {
+    newest_index - upto > COMPRESS_THRESHOLD + KEEP_RECENT_TURNS as i64
 }
 
 struct CommandGenerate<'a> {
@@ -1667,6 +1765,7 @@ mod tests {
     struct ScriptedLlm {
         reply: String,
         calls: AtomicU32,
+        messages: Mutex<Vec<Vec<ChatMessage>>>,
     }
 
     impl ScriptedLlm {
@@ -1674,7 +1773,12 @@ mod tests {
             Self {
                 reply: reply.into(),
                 calls: AtomicU32::new(0),
+                messages: Mutex::new(Vec::new()),
             }
+        }
+
+        fn seen_messages(&self) -> Vec<Vec<ChatMessage>> {
+            self.messages.lock().expect("llm messages").clone()
         }
     }
 
@@ -1684,9 +1788,13 @@ mod tests {
             _: &ProviderEndpoint,
             _: Option<&str>,
             _: &str,
-            _: &[ChatMessage],
+            messages: &[ChatMessage],
         ) -> Result<String, CascadeError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
+            self.messages
+                .lock()
+                .expect("llm messages")
+                .push(messages.to_vec());
             Ok(self.reply.clone())
         }
     }
@@ -3580,5 +3688,87 @@ mod tests {
             .barge_in_flag()
             .store(true, Ordering::SeqCst);
         assert!(!service.control().barge_in_requested());
+    }
+
+    #[test]
+    fn stale_summary_job_is_persisted_on_next_finalize() {
+        // 意义：后台摘要 job 在下一次 finalize 开头被轮询落库（trim 后写入），
+        // 摘要并入同一轮的系统提示，被摘要覆盖的轮次退出原始历史；
+        // 失败结果静默丢弃，不落库且回答照常。
+        let (_directory, database) = opened();
+        let mut service = SessionService::new();
+        let id = start_ready(&mut service, &database);
+        let asr = ScriptedAsr::ok("ignored");
+        let llm = ScriptedLlm::ok("最新回答");
+        let tts = ScriptedTts::ok(&[0x01]);
+        let embed = UnusedEmbed;
+        let probes = cascaded_probes(&asr, &llm, &tts, &embed);
+        let config = ready_public_config();
+
+        service
+            .finalize_utterance(&database, &config, &probes, credentials(), Some("第一问"))
+            .unwrap()
+            .expect("first turn");
+
+        // 预置一个已完成的摘要 job：摘要文本 + 覆盖到第 0 轮（模拟后台压缩已完成）。
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(Ok(("这是滚动摘要文本".to_string(), 0))).unwrap();
+        drop(tx);
+        service.summary_job = Some(rx);
+
+        service
+            .finalize_utterance(&database, &config, &probes, credentials(), Some("第二问"))
+            .unwrap()
+            .expect("second turn");
+
+        // 断言一：context_summary 落库。
+        assert_eq!(
+            SessionStore::new(&database).context_summary(&id).unwrap(),
+            Some(("这是滚动摘要文本".to_string(), 0))
+        );
+        // 断言二：摘要并入本轮系统提示，被摘要的轮次不再作为原始历史发送。
+        let latest = llm.seen_messages().pop().expect("second llm call");
+        assert!(
+            latest[0]
+                .content
+                .contains("此前对话摘要：这是滚动摘要文本"),
+            "system prompt: {}",
+            latest[0].content
+        );
+        assert!(latest.iter().any(|message| message.content == "第二问"));
+        assert!(!latest.iter().any(|message| message.content == "第一问"));
+        assert!(matches!(service.summary_job, None));
+
+        // 断言三：失败路径（摘要生成失败）不落库，且回答照常。
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(Err("LLM_RESPONSE_EMPTY".to_string())).unwrap();
+        drop(tx);
+        service.summary_job = Some(rx);
+        service
+            .finalize_utterance(&database, &config, &probes, credentials(), Some("第三问"))
+            .unwrap()
+            .expect("third turn");
+        assert_eq!(
+            SessionStore::new(&database).context_summary(&id).unwrap(),
+            Some(("这是滚动摘要文本".to_string(), 0))
+        );
+        assert!(matches!(service.summary_job, None));
+        let latest = llm.seen_messages().pop().expect("third llm call");
+        assert!(latest.iter().any(|message| message.content == "第三问"));
+        let stored = SessionStore::new(&database).list_turns(&id).unwrap();
+        assert_eq!(stored.len(), 3);
+        assert_eq!(stored[2].assistant_text, "最新回答");
+    }
+
+    #[test]
+    fn should_compress_uses_threshold_plus_recent_window() {
+        use super::{NO_CONTEXT_SUMMARY, should_compress};
+        // 无摘要（哨兵 -1）：未摘要轮次须超过 12 + 4 才触发。
+        assert!(!should_compress(15, NO_CONTEXT_SUMMARY));
+        assert!(should_compress(16, NO_CONTEXT_SUMMARY));
+        // 已有摘要（upto=3）：按距上次摘要的新增轮次计数。
+        assert!(!should_compress(19, 3));
+        assert!(should_compress(20, 3));
+        assert!(!should_compress(3, 3));
     }
 }
