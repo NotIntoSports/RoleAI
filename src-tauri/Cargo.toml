@@ -44,6 +44,12 @@ zeroize = "=1.9.0"
 # default-features = false 关闭 ort-load-dynamic：改为构建期静态链接 onnxruntime 1.22，
 # 避免运行时误加载本机 System32 的旧版 onnxruntime.dll；hound(WAV) 未使用。
 silero-vad-rust = { version = "=6.2.2", default-features = false }
+# Smart Turn 语义断句（阶段 3）：直接依赖与 silero 同一钉版的 ort 跑 ONNX。
+# 默认特性不含 load-dynamic，复用阶段 1 的静态链接 onnxruntime，不引入第二个 ort 版本。
+ort = "=2.0.0-rc.10"
+# Whisper 对数梅尔特征的 FFT（MIT/Apache-2.0）；梅尔滤波器组与归一化自实现，
+# 精确对齐 HF transformers WhisperFeatureExtractor（现有 mel_spec crate 是 kaldi 约定，不匹配）。
+rustfft = "=6.4.1"
 
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "=4.2.0", default-features = false, features = ["v1", "windows-native-keyring-store"] }

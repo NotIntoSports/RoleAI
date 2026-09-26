@@ -4,6 +4,7 @@ pub mod monitor;
 pub mod pcm;
 pub mod playback;
 pub mod segmenter;
+pub mod smart_turn;
 pub mod vad;
 
 pub use capture::{
