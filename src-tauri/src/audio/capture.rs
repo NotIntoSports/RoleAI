@@ -11,6 +11,7 @@ use std::{
     },
 };
 
+use super::barge_in::BargeInMonitor;
 use super::pcm::{PcmRing, downsample_48k_to_16k};
 use super::segmenter::{SpeechSegmenter, default_segmenter};
 use std::time::{Duration, Instant};
@@ -117,6 +118,9 @@ struct CaptureState {
     segmenter: Box<dyn SpeechSegmenter>,
     last_peak: f64,
     echo_until: Option<Instant>,
+    barge_in: Option<BargeInMonitor>,
+    barge_flag: Arc<AtomicBool>,
+    barge_utterance: Option<Vec<u8>>,
 }
 
 #[derive(Debug)]
@@ -170,6 +174,23 @@ impl AudioCapture {
         let mut state = self.lock();
         state.ring.push(pcm);
         let suppressed = state.echo_until.is_some_and(|until| Instant::now() < until);
+        // 经 guard 的字段投影借用不相交不成立（deref_mut 独占整个 guard），先拆出可变借用。
+        let CaptureState {
+            barge_in,
+            barge_flag,
+            barge_utterance,
+            ..
+        } = &mut *state;
+        if suppressed
+            && let Some(monitor) = barge_in.as_mut()
+            && !barge_flag.load(Ordering::SeqCst)
+        {
+            monitor.ingest(pcm);
+            if monitor.triggered() {
+                *barge_utterance = monitor.take_staged();
+                barge_flag.store(true, Ordering::SeqCst);
+            }
+        }
         state.segmenter.ingest(pcm, suppressed);
     }
 
@@ -192,14 +213,40 @@ impl AudioCapture {
     }
 
     pub fn utterance_ready(&self) -> bool {
-        self.lock().segmenter.ready()
+        let state = self.lock();
+        !state.barge_utterance.is_none() || state.segmenter.ready()
     }
 
     pub fn take_utterance_for_asr(&self) -> Option<Vec<u8>> {
-        self.lock()
+        let mut state = self.lock();
+        if let Some(pcm) = state.barge_utterance.take() {
+            return Some(downsample_48k_to_16k(&pcm));
+        }
+        state
             .segmenter
             .take()
             .map(|pcm| downsample_48k_to_16k(&pcm))
+    }
+
+    pub fn set_barge_in_enabled(&self, enabled: bool) {
+        let mut state = self.lock();
+        state.barge_in = if enabled {
+            match crate::audio::vad::SileroVad::new() {
+                Ok(vad) => Some(BargeInMonitor::with_detector(Box::new(vad))),
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
+    }
+
+    pub fn barge_in_flag(&self) -> Arc<AtomicBool> {
+        self.lock().barge_flag.clone()
+    }
+
+    pub fn take_barge_in_utterance(&self) -> Option<Vec<u8>> {
+        let mut state = self.lock();
+        state.barge_utterance.take()
     }
 
     pub fn suppress_echo_for(&self, duration: Duration) {
@@ -242,6 +289,9 @@ impl AudioCapture {
                 segmenter: default_segmenter(),
                 last_peak: 0.0,
                 echo_until: None,
+                barge_in: None,
+                barge_flag: Arc::new(AtomicBool::new(false)),
+                barge_utterance: None,
             })),
             child: Mutex::new(None),
             sidecar_dead: Arc::new(AtomicBool::new(false)),

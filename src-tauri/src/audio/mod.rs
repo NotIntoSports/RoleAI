@@ -1,3 +1,4 @@
+pub mod barge_in;
 pub mod capture;
 pub mod monitor;
 pub mod pcm;
