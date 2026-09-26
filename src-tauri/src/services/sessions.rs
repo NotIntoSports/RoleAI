@@ -118,6 +118,7 @@ pub struct SessionControl {
     mode: AtomicU8,
     session_id: Mutex<Option<String>>,
     confirmation_epoch: AtomicU64,
+    barge_in_source: Mutex<Option<Arc<AtomicBool>>>,
 }
 
 impl SessionControl {
@@ -129,6 +130,7 @@ impl SessionControl {
             mode: AtomicU8::new(mode_u8(AgentMode::AiActive)),
             session_id: Mutex::new(None),
             confirmation_epoch: AtomicU64::new(0),
+            barge_in_source: Mutex::new(None),
         })
     }
 
@@ -173,6 +175,24 @@ impl SessionControl {
 
     pub fn take_stop_tts(&self) -> bool {
         self.stop_tts.swap(false, Ordering::SeqCst)
+    }
+
+    pub fn set_barge_in_source(&self, flag: Arc<AtomicBool>) {
+        *self.barge_in_source.lock().unwrap_or_else(|p| p.into_inner()) = Some(flag);
+    }
+    pub fn barge_in_requested(&self) -> bool {
+        self.barge_in_source
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::SeqCst))
+    }
+    pub fn take_barge_in(&self) -> bool {
+        self.barge_in_source
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .is_some_and(|flag| flag.swap(false, Ordering::SeqCst))
     }
 
     fn cancel_flag(&self) -> &AtomicBool {
@@ -318,7 +338,9 @@ impl<S: PlaybackSink> SessionService<S> {
         config: &PublicConfig,
         secrets_ready: bool,
     ) -> Result<SessionStartOutcome, SessionServiceError> {
-        self.start_inner(database, config, secrets_ready, None)
+        // 会话级开关由 Task 4 经命令层透传（含安全面基线同提交重算）；
+        // 在此之前公开入口保持关闭，避免未经前端确认就改变播报行为。
+        self.start_inner(database, config, secrets_ready, None, false)
     }
 
     pub fn start_with_meeting_capture(
@@ -328,7 +350,7 @@ impl<S: PlaybackSink> SessionService<S> {
         secrets_ready: bool,
         capture: MeetingCapture<'_>,
     ) -> Result<SessionStartOutcome, SessionServiceError> {
-        self.start_inner(database, config, secrets_ready, Some(capture))
+        self.start_inner(database, config, secrets_ready, Some(capture), false)
     }
 
     fn start_inner(
@@ -337,6 +359,7 @@ impl<S: PlaybackSink> SessionService<S> {
         config: &PublicConfig,
         secrets_ready: bool,
         capture: Option<MeetingCapture<'_>>,
+        allow_barge_in: bool,
     ) -> Result<SessionStartOutcome, SessionServiceError> {
         let issues = preflight(config, secrets_ready, true);
         if !issues.is_empty() {
@@ -388,6 +411,13 @@ impl<S: PlaybackSink> SessionService<S> {
             .ok_or(SessionServiceError::NotFound)?;
         if let Some(capture) = pending_capture {
             self.capture = capture;
+        }
+        if allow_barge_in && !self.capture.is_meeting_bridge() {
+            self.capture.set_barge_in_enabled(true);
+            self.control
+                .set_barge_in_source(self.capture.barge_in_flag());
+        } else {
+            self.capture.set_barge_in_enabled(false);
         }
         Ok(SessionStartOutcome::Started { session })
     }
@@ -648,16 +678,23 @@ impl<S: PlaybackSink> SessionService<S> {
                 let seconds = turn.tts_pcm.len() as f64 / (24_000.0 * 2.0) + 0.7;
                 self.capture
                     .suppress_echo_for(std::time::Duration::from_secs_f64(seconds));
-                if let Err(code) =
-                    output.play(&turn.tts_pcm, 24_000, || self.control.is_cancelled())
-                {
-                    self.last_error_code = Some(code.into());
-                    playback_status = "failed";
-                } else {
-                    playback_status = "played";
+                let result = output.play(&turn.tts_pcm, 24_000, || {
+                    self.control.is_cancelled() || self.control.barge_in_requested()
+                });
+                match result {
+                    Ok(()) => {
+                        self.capture
+                            .suppress_echo_for(std::time::Duration::from_millis(700));
+                        playback_status = "played";
+                    }
+                    Err("PLAYBACK_CANCELLED") if self.control.take_barge_in() => {
+                        playback_status = "interrupted";
+                    }
+                    Err(code) => {
+                        self.last_error_code = Some(code.into());
+                        playback_status = "failed";
+                    }
                 }
-                self.capture
-                    .suppress_echo_for(std::time::Duration::from_millis(700));
             } else if !self.text_only {
                 self.sink.play_pcm(&turn.tts_pcm, 24_000);
                 playback_status = "played";
@@ -3442,5 +3479,77 @@ mod tests {
         assert_eq!(llm.calls.load(Ordering::SeqCst), 0);
         assert_eq!(tts.calls.load(Ordering::SeqCst), 0);
         assert_eq!(service.sink().recorded(), [0x55, 0x66]);
+    }
+
+    #[test]
+    fn barge_in_flag_cancels_playback_and_marks_interrupted() {
+        // 意义：play 的取消闭包消费控制旗标；被截断播报不记 last_error_code。
+        let (_directory, database) = opened();
+        let mut service = SessionService::new();
+        let id = start_ready(&mut service, &database);
+        // 直接驱动 finalize 的播报分支：预置 BridgePlayback（play 首行取消检查，
+        // 不会触碰不存在的 sidecar 可执行文件），TTS 产物由 ScriptedTts 提供。
+        service.configure_playback(Some(crate::audio::playback::BridgePlayback {
+            executable: std::path::PathBuf::from("missing-barge-in-playback.exe"),
+            endpoint_id: "test-device".into(),
+        }));
+        service
+            .control()
+            .set_barge_in_source(Arc::new(AtomicBool::new(true)));
+        let asr = ScriptedAsr::ok("ignored");
+        let llm = ScriptedLlm::ok("被打断的回复");
+        let tts = ScriptedTts::ok(&[0x01, 0x02]);
+
+        service
+            .finalize_utterance(
+                &database,
+                &ready_public_config(),
+                &cascaded_probes(&asr, &llm, &tts, &UnusedEmbed),
+                credentials(),
+                Some("你好"),
+            )
+            .unwrap()
+            .expect("turn");
+
+        let meta = latest_turn_meta(&database, &id);
+        assert_eq!(meta["playbackStatus"], "interrupted");
+        assert!(service.last_error_code().is_none());
+        // 会话仍存活：阶段与库中状态都回到 listening，且旗标已复位。
+        assert_eq!(service.phase(), SessionPhase::Listening);
+        let row = SessionStore::new(&database).get(&id).unwrap().expect("row");
+        assert_eq!(row.status, "listening");
+        assert!(!service.control().barge_in_requested());
+    }
+
+    #[test]
+    fn barge_in_source_wired_only_when_allowed() {
+        // 意义：会话级开关接通 capture 旗标与控制端；未启用时旗标不得构成门控。
+        let (_directory, database) = opened();
+        let mut service = SessionService::new();
+        service
+            .start_inner(&database, &ready_public_config(), true, None, true)
+            .unwrap();
+        service
+            .capture()
+            .barge_in_flag()
+            .store(true, Ordering::SeqCst);
+        assert!(service.control().barge_in_requested());
+        assert!(service.control().take_barge_in());
+        assert!(
+            !service.control().take_barge_in(),
+            "flag must reset once taken"
+        );
+
+        // 未启用（allow=false，含会议桥走的同一条 else 分支）：旗标置位也不生效。
+        let (_directory, database) = opened();
+        let mut service = SessionService::new();
+        service
+            .start_inner(&database, &ready_public_config(), true, None, false)
+            .unwrap();
+        service
+            .capture()
+            .barge_in_flag()
+            .store(true, Ordering::SeqCst);
+        assert!(!service.control().barge_in_requested());
     }
 }
