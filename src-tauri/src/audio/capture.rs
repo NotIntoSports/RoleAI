@@ -214,7 +214,7 @@ impl AudioCapture {
 
     pub fn utterance_ready(&self) -> bool {
         let state = self.lock();
-        !state.barge_utterance.is_none() || state.segmenter.ready()
+        state.barge_utterance.is_some() || state.segmenter.ready()
     }
 
     pub fn take_utterance_for_asr(&self) -> Option<Vec<u8>> {
