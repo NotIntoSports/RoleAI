@@ -697,7 +697,8 @@ impl<S: PlaybackSink> SessionService<S> {
                         format!("用户：{}\n助手：{}", turn.user_text, turn.assistant_text)
                     })
                     .collect();
-                let credential = credentials.llm.map(str::to_string);
+                let credential =
+                    credentials.llm.map(|s| zeroize::Zeroizing::new(s.to_string()));
                 let (tx, rx) = std::sync::mpsc::channel();
                 self.summary_job = Some(rx);
                 std::thread::spawn(move || {
@@ -720,7 +721,7 @@ impl<S: PlaybackSink> SessionService<S> {
                     let result = client
                         .complete(
                             &llm_endpoint,
-                            credential.as_deref(),
+                            credential.as_deref().map(String::as_str),
                             &llm_model_id,
                             &messages,
                         )
