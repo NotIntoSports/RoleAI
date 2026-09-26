@@ -165,6 +165,7 @@ export function WorkspaceSession({
   const [roleProfileId, setRoleProfileId] = useState("");
   const [voiceRouteId, setVoiceRouteId] = useState("");
   const [allowWebSearch, setAllowWebSearch] = useState(false);
+  const [allowBargeIn, setAllowBargeIn] = useState(api.DEFAULT_BARGE_IN);
   const [webSources, setWebSources] = useState<WebSource[]>([]);
   const [webDegraded, setWebDegraded] = useState(false);
   const [pendingConfirmation, setPendingConfirmation] = useState(false);
@@ -439,7 +440,7 @@ export function WorkspaceSession({
       if (inputSource === "meeting" && !meetingPid) { setConfigurationOpen(true); setMessage("请刷新并选择会议进程。"); return; }
       if (inputSource === "meeting" && !virtualAudio?.installed) { setConfigurationOpen(true); setMessage(virtualAudio?.rebootRequired ? "请重启 Windows，使虚拟声卡生效后再开始会议。" : "请先安装并自动配置虚拟声卡。"); return; }
       const result = roleProfileId && voiceRouteId
-        ? await api.startSession({ roleProfileId, voiceRouteId, allowWebSearch: allowWebSearch && canSearch, ...(inputSource === "meeting" ? { meetingPid: Number(meetingPid) } : {}), ...(outputDeviceId ? { outputDeviceId } : {}) })
+        ? await api.startSession({ roleProfileId, voiceRouteId, allowWebSearch: allowWebSearch && canSearch, allowBargeIn, ...(inputSource === "meeting" ? { meetingPid: Number(meetingPid) } : {}), ...(outputDeviceId ? { outputDeviceId } : {}) })
         : await api.startSession();
       if (!result.ok) {
         setConfigurationOpen(true);
@@ -746,6 +747,8 @@ export function WorkspaceSession({
             </select></label>
             <label><input type="checkbox" disabled={!canSearch} checked={allowWebSearch && canSearch} onChange={(event) => setAllowWebSearch(event.target.checked)} />允许本场联网搜索（可能产生费用）</label>
             {!canSearch && <small>联网问答需要级联语音线路，并在模型供应商设置中选择支持的搜索协议。</small>}
+            <label><input type="checkbox" disabled={busy || active} checked={allowBargeIn} onChange={(event) => setAllowBargeIn(event.target.checked)} />允许语音打断（说话即可停止 AI 播报）</label>
+            <small>采集会议音频的会话会自动关闭打断；本机麦克风会话随时生效。</small>
           </fieldset>}
         </div>
         <div className="session-toolbar-controls">

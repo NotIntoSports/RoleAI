@@ -146,7 +146,12 @@ export function installVirtualAudio() {
   return invoke<CommandResult<import("../generated/bindings").VirtualAudioPreparation>>("virtual_audio_install");
 }
 
-export function startSession(selection?: { roleProfileId: string; voiceRouteId: string; allowWebSearch?: boolean; meetingPid?: number; outputDeviceId?: string }) {
+// 会话级语音打断默认开启。依据 Task 1 AEC spike 实测判定（PASS：IAB/WebView2 同源
+// Chromium 对 <audio> 播放的回声消除远低于触发门限），台账见
+// .superpowers/sdd/2026-09-26-phase2-barge-in/progress.md。
+export const DEFAULT_BARGE_IN = true;
+
+export function startSession(selection?: { roleProfileId: string; voiceRouteId: string; allowWebSearch?: boolean; allowBargeIn?: boolean; meetingPid?: number; outputDeviceId?: string }) {
   return invoke<CommandResult<SessionStartResult>>("session_start", { ...selection });
 }
 

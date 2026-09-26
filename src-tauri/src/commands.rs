@@ -1752,8 +1752,8 @@ fn session_detail(
 }
 
 #[cfg(test)]
-fn session_start_cmd(state: &AppState) -> CommandResult<SessionStartResult> {
-    session_start_selected_cmd(state, None, None, false)
+fn session_start_cmd(state: &AppState, allow_barge_in: Option<bool>) -> CommandResult<SessionStartResult> {
+    session_start_selected_cmd(state, None, None, false, allow_barge_in)
 }
 
 #[cfg(test)]
@@ -1762,6 +1762,7 @@ fn session_start_selected_cmd(
     role_profile_id: Option<&str>,
     voice_route_id: Option<&str>,
     allow_web_search: bool,
+    allow_barge_in: Option<bool>,
 ) -> CommandResult<SessionStartResult> {
     session_start_capture_cmd(
         state,
@@ -1769,6 +1770,7 @@ fn session_start_selected_cmd(
         voice_route_id,
         allow_web_search,
         None,
+        allow_barge_in,
     )
 }
 
@@ -1778,6 +1780,7 @@ fn session_start_capture_cmd(
     voice_route_id: Option<&str>,
     allow_web_search: bool,
     capture: Option<crate::services::MeetingCapture<'_>>,
+    allow_barge_in: Option<bool>,
 ) -> CommandResult<SessionStartResult> {
     let mut config = match load_public_config(state) {
         Ok(config) => config,
@@ -1839,9 +1842,20 @@ fn session_start_capture_cmd(
         }
     };
     let outcome = if let Some(capture) = capture {
-        sessions.start_with_meeting_capture(database, &config, secrets_ready, capture)
+        sessions.start_with_meeting_capture(
+            database,
+            &config,
+            secrets_ready,
+            capture,
+            allow_barge_in.unwrap_or(false),
+        )
     } else {
-        sessions.start(database, &config, secrets_ready)
+        sessions.start(
+            database,
+            &config,
+            secrets_ready,
+            allow_barge_in.unwrap_or(false),
+        )
     };
     match outcome {
         Ok(SessionStartOutcome::Started { session }) => CommandResult::Ok {
@@ -2321,6 +2335,7 @@ pub fn session_start_blocking<R: tauri::Runtime>(
     allow_web_search: Option<bool>,
     meeting_pid: Option<u32>,
     output_device_id: Option<String>,
+    allow_barge_in: Option<bool>,
 ) -> CommandResult<SessionStartResult> {
     let _guard = match service_guard(&state) {
         Ok(guard) => guard,
@@ -2370,6 +2385,7 @@ pub fn session_start_blocking<R: tauri::Runtime>(
         voice_route_id.as_deref(),
         allow_web_search.unwrap_or(false),
         capture,
+        allow_barge_in,
     );
     if matches!(
         &result,
@@ -3444,7 +3460,7 @@ blocking_command!(material_import, material_import_blocking(path: String) -> Mat
 blocking_command!(material_search, material_search_blocking(query: String, top_k: Option<u32>) -> Vec<MaterialSearchHit>);
 blocking_command!(material_delete, material_delete_blocking(id: String) -> FoundationStatus);
 blocking_command!(material_index, material_index_blocking() -> MaterialIndexResult);
-blocking_command!(with_events session_start, session_start_blocking(role_profile_id: Option<String>, voice_route_id: Option<String>, allow_web_search: Option<bool>, meeting_pid: Option<u32>, output_device_id: Option<String>) -> SessionStartResult);
+blocking_command!(with_events session_start, session_start_blocking(role_profile_id: Option<String>, voice_route_id: Option<String>, allow_web_search: Option<bool>, meeting_pid: Option<u32>, output_device_id: Option<String>, allow_barge_in: Option<bool>) -> SessionStartResult);
 
 pub fn meeting_process_list_blocking(
     _state: State<'_, AppState>,
@@ -4419,7 +4435,7 @@ mod tests {
     fn session_start_returns_blocked_or_started_without_secret_or_pcm() {
         let empty_dir = tempfile::tempdir().unwrap();
         let empty = session_state(&empty_dir, r#"{"configVersion":1}"#);
-        let blocked = serde_json::to_value(super::session_start_cmd(&empty)).unwrap();
+        let blocked = serde_json::to_value(super::session_start_cmd(&empty, None)).unwrap();
         assert_eq!(blocked["ok"], true);
         assert_eq!(blocked["data"]["kind"], "blocked");
         let issues = blocked["data"]["issues"].as_array().unwrap();
@@ -4437,7 +4453,7 @@ mod tests {
 
         let ready_dir = tempfile::tempdir().unwrap();
         let ready = session_state(&ready_dir, &ready_session_config());
-        let started = serde_json::to_value(super::session_start_cmd(&ready)).unwrap();
+        let started = serde_json::to_value(super::session_start_cmd(&ready, None)).unwrap();
         assert_eq!(started["ok"], true, "{started}");
         assert_eq!(started["data"]["kind"], "started");
         assert_eq!(started["data"]["session"]["status"], "listening");
@@ -4449,6 +4465,49 @@ mod tests {
     }
 
     #[test]
+    fn session_start_passes_allow_barge_in_to_the_service() {
+        // 意义：命令层的会话级语音打断开关必须透传到服务（capture 旗标接控制端）；
+        // 未传（None）时保持关闭——置位旗标也不得影响控制端。
+        let directory = tempfile::tempdir().unwrap();
+        let state = session_state(&directory, &ready_session_config());
+        let started = serde_json::to_value(super::session_start_selected_cmd(
+            &state,
+            None,
+            None,
+            false,
+            Some(true),
+        ))
+        .unwrap();
+        assert_eq!(started["ok"], true, "{started}");
+        assert_eq!(started["data"]["kind"], "started");
+        {
+            let sessions = state.sessions.lock().unwrap();
+            sessions.capture().barge_in_flag().store(true, std::sync::atomic::Ordering::SeqCst);
+            assert!(sessions.control().barge_in_requested());
+        }
+        super::session_stop_cmd(&state);
+
+        let directory = tempfile::tempdir().unwrap();
+        let state = session_state(&directory, &ready_session_config());
+        let started = serde_json::to_value(super::session_start_selected_cmd(
+            &state,
+            None,
+            None,
+            false,
+            None,
+        ))
+        .unwrap();
+        assert_eq!(started["ok"], true, "{started}");
+        assert_eq!(started["data"]["kind"], "started");
+        let sessions = state.sessions.lock().unwrap();
+        sessions
+            .capture()
+            .barge_in_flag()
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(!sessions.control().barge_in_requested());
+    }
+
+    #[test]
     fn selected_role_is_session_local_and_snapshot_survives_config_changes() {
         let directory = tempfile::tempdir().unwrap();
         let state = session_state(&directory, &ready_session_config());
@@ -4457,6 +4516,7 @@ mod tests {
             Some("preset-hr"),
             Some("route-1"),
             false,
+            None,
         ))
         .unwrap();
         assert_eq!(started["data"]["session"]["roleProfileId"], "preset-hr");
@@ -4497,7 +4557,7 @@ mod tests {
             (None, Some("missing"), "SESSION_ROUTE_REQUIRED"),
         ] {
             let result = serde_json::to_value(super::session_start_selected_cmd(
-                &state, role, route, false,
+                &state, role, route, false, None,
             ))
             .unwrap();
             assert_eq!(result["error"]["code"], code);
@@ -4548,6 +4608,7 @@ mod tests {
                     pid,
                     enumerator: &enumerator,
                 }),
+                None,
             ))
             .unwrap();
             assert_eq!(result["error"]["code"], code);
@@ -4560,7 +4621,7 @@ mod tests {
     fn session_commands_list_get_export_delete_and_status() {
         let directory = tempfile::tempdir().unwrap();
         let state = session_state(&directory, &ready_session_config());
-        let started = serde_json::to_value(super::session_start_cmd(&state)).unwrap();
+        let started = serde_json::to_value(super::session_start_cmd(&state, None)).unwrap();
         let id = started["data"]["session"]["id"]
             .as_str()
             .unwrap()
@@ -4618,7 +4679,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let state = session_state(&directory, &ready_session_config());
         assert_eq!(
-            serde_json::to_value(super::session_start_cmd(&state)).unwrap()["ok"],
+            serde_json::to_value(super::session_start_cmd(&state, None)).unwrap()["ok"],
             true
         );
         {
@@ -4799,7 +4860,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let state = session_state(&directory, &ready_session_config());
         assert_eq!(
-            serde_json::to_value(super::session_start_cmd(&state)).unwrap()["ok"],
+            serde_json::to_value(super::session_start_cmd(&state, None)).unwrap()["ok"],
             true
         );
         let asr = ScriptedAsr;
@@ -4880,7 +4941,7 @@ mod tests {
             let directory = tempfile::tempdir().unwrap();
             let state = session_state(&directory, &ready_session_config());
             assert_eq!(
-                serde_json::to_value(super::session_start_cmd(&state)).unwrap()["ok"],
+                serde_json::to_value(super::session_start_cmd(&state, None)).unwrap()["ok"],
                 true
             );
 
@@ -4925,7 +4986,7 @@ mod tests {
             let directory = tempfile::tempdir().unwrap();
             let state = session_state(&directory, &ready_session_config());
             assert_eq!(
-                serde_json::to_value(super::session_start_cmd(&state)).unwrap()["ok"],
+                serde_json::to_value(super::session_start_cmd(&state, None)).unwrap()["ok"],
                 true
             );
 
@@ -4960,7 +5021,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let state = session_state(&directory, &ready_session_config());
         assert_eq!(
-            serde_json::to_value(super::session_start_cmd(&state)).unwrap()["ok"],
+            serde_json::to_value(super::session_start_cmd(&state, None)).unwrap()["ok"],
             true
         );
         let asr = ScriptedAsr;
@@ -5009,7 +5070,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let state = session_state(&directory, &ready_session_config());
         assert_eq!(
-            serde_json::to_value(super::session_start_cmd(&state)).unwrap()["ok"],
+            serde_json::to_value(super::session_start_cmd(&state, None)).unwrap()["ok"],
             true
         );
         let entered = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -5069,7 +5130,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let state = session_state(&directory, &ready_session_config());
         assert_eq!(
-            serde_json::to_value(super::session_start_cmd(&state)).unwrap()["ok"],
+            serde_json::to_value(super::session_start_cmd(&state, None)).unwrap()["ok"],
             true
         );
         let asr = ScriptedAsr;

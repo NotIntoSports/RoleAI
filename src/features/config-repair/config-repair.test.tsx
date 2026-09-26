@@ -4,7 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../../app/app";
 import * as commands from "../../api/commands";
 
-vi.mock("../../api/commands", () => ({
+vi.mock("../../api/commands", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../api/commands")>()),
   getStartupState: vi.fn(),
   restoreLastGoodConfig: vi.fn(),
   restoreDefaultConfig: vi.fn(),

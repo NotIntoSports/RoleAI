@@ -215,6 +215,8 @@ impl SessionControl {
         self.stop_tts.store(false, Ordering::SeqCst);
         self.mode
             .store(mode_u8(AgentMode::AiActive), Ordering::SeqCst);
+        // 丢弃 barge 旗标来源：停止/重建会话后，旧 capture 的旗标不得继续作用于控制端。
+        *self.barge_in_source.lock().unwrap_or_else(|p| p.into_inner()) = None;
         self.set_session_id(None);
     }
 }
@@ -337,10 +339,10 @@ impl<S: PlaybackSink> SessionService<S> {
         database: &Database,
         config: &PublicConfig,
         secrets_ready: bool,
+        allow_barge_in: bool,
     ) -> Result<SessionStartOutcome, SessionServiceError> {
-        // 会话级开关由 Task 4 经命令层透传（含安全面基线同提交重算）；
-        // 在此之前公开入口保持关闭，避免未经前端确认就改变播报行为。
-        self.start_inner(database, config, secrets_ready, None, false)
+        // 会议桥强制关闭的判定在 start_inner 内完成；这里只透传会话级开关。
+        self.start_inner(database, config, secrets_ready, None, allow_barge_in)
     }
 
     pub fn start_with_meeting_capture(
@@ -349,8 +351,9 @@ impl<S: PlaybackSink> SessionService<S> {
         config: &PublicConfig,
         secrets_ready: bool,
         capture: MeetingCapture<'_>,
+        allow_barge_in: bool,
     ) -> Result<SessionStartOutcome, SessionServiceError> {
-        self.start_inner(database, config, secrets_ready, Some(capture), false)
+        self.start_inner(database, config, secrets_ready, Some(capture), allow_barge_in)
     }
 
     fn start_inner(
@@ -678,6 +681,9 @@ impl<S: PlaybackSink> SessionService<S> {
                 let seconds = turn.tts_pcm.len() as f64 / (24_000.0 * 2.0) + 0.7;
                 self.capture
                     .suppress_echo_for(std::time::Duration::from_secs_f64(seconds));
+                // 每轮播报从干净旗标开始：上一轮 played 尾窗（700ms）内的真实人声
+                // 会残留旗标，不显式消费会让本轮播报一开场即被取消、整段回答被吞。
+                self.control.take_barge_in();
                 let result = output.play(&turn.tts_pcm, 24_000, || {
                     self.control.is_cancelled() || self.control.barge_in_requested()
                 });
@@ -1921,7 +1927,7 @@ mod tests {
 
     fn start_ready(service: &mut SessionService, database: &Database) -> String {
         match service
-            .start(database, &ready_public_config(), true)
+            .start(database, &ready_public_config(), true, false)
             .unwrap()
         {
             SessionStartOutcome::Started { session } => session.id,
@@ -1936,7 +1942,7 @@ mod tests {
         database: &Database,
         config: &PublicConfig,
     ) -> String {
-        match service.start(database, config, true).unwrap() {
+        match service.start(database, config, true, false).unwrap() {
             SessionStartOutcome::Started { session } => session.id,
             SessionStartOutcome::Blocked { issues } => {
                 panic!("expected start, blocked {issues:?}")
@@ -1950,7 +1956,7 @@ mod tests {
         let mut service = SessionService::new();
         let empty = crate::runtime::test_support::empty_public_config();
 
-        let outcome = service.start(&database, &empty, false).unwrap();
+        let outcome = service.start(&database, &empty, false, false).unwrap();
         match outcome {
             SessionStartOutcome::Blocked { issues } => {
                 assert!(issues.len() >= 2, "{issues:?}");
@@ -2015,6 +2021,7 @@ mod tests {
                     pid: 4242,
                     enumerator: &enumerator,
                 },
+                false,
             )
             .expect_err("missing exe must fail");
         assert_eq!(error.code(), "SESSION_SIDECAR_MISSING");
@@ -2029,7 +2036,7 @@ mod tests {
         start_ready(&mut service, &database);
 
         let error = service
-            .start(&database, &ready_public_config(), true)
+            .start(&database, &ready_public_config(), true, false)
             .expect_err("second start");
         assert_eq!(error.code(), "SESSION_ALREADY_ACTIVE");
         assert!(matches!(error, SessionServiceError::AlreadyActive));
@@ -2086,7 +2093,7 @@ mod tests {
         config.role_profiles[0].scenario = Some(crate::config::RoleScenario::Candidate);
         config.active_role_profile_id = Some("personal-candidate".into());
         let mut service = SessionService::with_sink(RecordingSink::default());
-        match service.start(&database, &config, true).unwrap() {
+        match service.start(&database, &config, true, false).unwrap() {
             SessionStartOutcome::Started { .. } => {}
             SessionStartOutcome::Blocked { issues } => panic!("blocked: {issues:?}"),
         }
@@ -2150,7 +2157,7 @@ mod tests {
         config.role_profiles[0].id = "preset-candidate".into();
         config.active_role_profile_id = Some("preset-candidate".into());
         let mut service = SessionService::with_sink(RecordingSink::default());
-        match service.start(&database, &config, true).unwrap() {
+        match service.start(&database, &config, true, false).unwrap() {
             SessionStartOutcome::Started { .. } => {}
             SessionStartOutcome::Blocked { issues } => panic!("blocked: {issues:?}"),
         }
@@ -2201,7 +2208,7 @@ mod tests {
         config.role_profiles[0].id = "preset-candidate".into();
         config.active_role_profile_id = Some("preset-candidate".into());
         let mut service = SessionService::with_sink(RecordingSink::default());
-        service.start(&database, &config, true).unwrap();
+        service.start(&database, &config, true, false).unwrap();
         let asr = ScriptedAsr::ok("ignored");
         let llm = ScriptedLlm::ok("old suggestion");
         let tts = ScriptedTts::ok(&[9, 8, 7]);
@@ -2247,7 +2254,7 @@ mod tests {
         let mut config = ready_public_config();
         config.role_profiles[0].id = "preset-candidate".into();
         config.active_role_profile_id = Some("preset-candidate".into());
-        service.start(database, &config, true).unwrap();
+        service.start(database, &config, true, false).unwrap();
         config
     }
 
@@ -2406,7 +2413,7 @@ mod tests {
         config.role_profiles[0].scenario = Some(crate::config::RoleScenario::MeetingAssistant);
         config.active_role_profile_id = Some("personal-meeting-assistant".into());
         let mut service = SessionService::with_sink(RecordingSink::default());
-        match service.start(&database, &config, true).unwrap() {
+        match service.start(&database, &config, true, false).unwrap() {
             SessionStartOutcome::Started { .. } => {}
             SessionStartOutcome::Blocked { issues } => panic!("blocked: {issues:?}"),
         }
@@ -2445,7 +2452,7 @@ mod tests {
         config.role_profiles[0].scenario = Some(crate::config::RoleScenario::MeetingAssistant);
         config.active_role_profile_id = Some("personal-meeting-assistant".into());
         let mut service = SessionService::with_sink(RecordingSink::default());
-        match service.start(&database, &config, true).unwrap() {
+        match service.start(&database, &config, true, false).unwrap() {
             SessionStartOutcome::Started { .. } => {}
             SessionStartOutcome::Blocked { issues } => panic!("blocked: {issues:?}"),
         }
@@ -2653,7 +2660,7 @@ mod tests {
         let mut config = ready_public_config();
         config.speech.voice_routes[0].voice_id = Some(String::new());
         let mut service = SessionService::new();
-        match service.start(&database, &config, true).unwrap() {
+        match service.start(&database, &config, true, false).unwrap() {
             SessionStartOutcome::Started { .. } => {}
             SessionStartOutcome::Blocked { issues } => panic!("blocked {issues:?}"),
         }
@@ -2916,7 +2923,7 @@ mod tests {
 
     fn start_e2e(service: &mut SessionService, database: &Database) -> String {
         match service
-            .start(database, &ready_e2e_public_config(), true)
+            .start(database, &ready_e2e_public_config(), true, false)
             .unwrap()
         {
             SessionStartOutcome::Started { session } => session.id,
@@ -3154,7 +3161,7 @@ mod tests {
 
         let mut service = SessionService::new();
         match service
-            .start(&database, &ready_e2e_public_config(), true)
+            .start(&database, &ready_e2e_public_config(), true, false)
             .unwrap()
         {
             SessionStartOutcome::Started { .. } => {}
@@ -3211,7 +3218,7 @@ mod tests {
 
         let mut service = SessionService::new();
         match service
-            .start(&database, &ready_e2e_public_config(), true)
+            .start(&database, &ready_e2e_public_config(), true, false)
             .unwrap()
         {
             SessionStartOutcome::Started { .. } => {}
@@ -3482,8 +3489,9 @@ mod tests {
     }
 
     #[test]
-    fn barge_in_flag_cancels_playback_and_marks_interrupted() {
-        // 意义：play 的取消闭包消费控制旗标；被截断播报不记 last_error_code。
+    fn stale_barge_flag_before_playback_is_discarded_not_swallowing_the_answer() {
+        // 意义：played 后 700ms 尾窗内的真实人声会残留 barge 旗标；播报开始前必须
+        // 显式消费，否则下一轮播报闭包入口即取消、整段回答被吞（interrupted）。
         let (_directory, database) = opened();
         let mut service = SessionService::new();
         let id = start_ready(&mut service, &database);
@@ -3497,7 +3505,7 @@ mod tests {
             .control()
             .set_barge_in_source(Arc::new(AtomicBool::new(true)));
         let asr = ScriptedAsr::ok("ignored");
-        let llm = ScriptedLlm::ok("被打断的回复");
+        let llm = ScriptedLlm::ok("不应被吞掉的回复");
         let tts = ScriptedTts::ok(&[0x01, 0x02]);
 
         service
@@ -3512,13 +3520,34 @@ mod tests {
             .expect("turn");
 
         let meta = latest_turn_meta(&database, &id);
-        assert_eq!(meta["playbackStatus"], "interrupted");
-        assert!(service.last_error_code().is_none());
-        // 会话仍存活：阶段与库中状态都回到 listening，且旗标已复位。
+        // 残留旗标不得构成取消：play 被真实触达（首行取消检查通过），只因夹具
+        // 缺少可执行文件而 failed；绝不是 interrupted。
+        assert_eq!(meta["playbackStatus"], "failed");
+        assert_eq!(service.last_error_code(), Some("SESSION_SIDECAR_MISSING"));
+        // 会话仍存活：阶段与库中状态都回到 listening，且残留旗标已被消费。
         assert_eq!(service.phase(), SessionPhase::Listening);
         let row = SessionStore::new(&database).get(&id).unwrap().expect("row");
         assert_eq!(row.status, "listening");
         assert!(!service.control().barge_in_requested());
+    }
+
+    #[test]
+    fn session_control_reset_clears_barge_in_source() {
+        // 意义：停止/重建会话后，旧 capture 的旗标来源不得继续作用于控制端（stop 泄漏）。
+        let control = super::SessionControl::new();
+        let flag = Arc::new(AtomicBool::new(true));
+        control.set_barge_in_source(flag.clone());
+        assert!(control.barge_in_requested());
+
+        control.reset();
+
+        assert!(
+            !control.barge_in_requested(),
+            "reset must drop the barge-in source"
+        );
+        // 来源已被置 None：旧 Arc 再置位也不影响控制端。
+        flag.store(true, Ordering::SeqCst);
+        assert!(!control.barge_in_requested());
     }
 
     #[test]

@@ -4,7 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as commands from "../../api/commands";
 import { WorkspacePage } from "./workspace-page";
 
-vi.mock("../../api/commands", () => ({
+vi.mock("../../api/commands", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../api/commands")>()),
   startSession: vi.fn(),
   stopSession: vi.fn(),
   setSessionMode: vi.fn(),

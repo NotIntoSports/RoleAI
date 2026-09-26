@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Shell } from "./shell";
 
-vi.mock("../api/commands", () => ({
+vi.mock("../api/commands", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../api/commands")>()),
   getLegacyMigrationStatus: vi.fn().mockResolvedValue({
     ok: true,
     data: { applied: false, reenterSecrets: false, omitted: [] },

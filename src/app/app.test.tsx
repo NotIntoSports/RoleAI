@@ -2,7 +2,8 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock the commands module before importing App
-vi.mock("../api/commands", () => ({
+vi.mock("../api/commands", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../api/commands")>()),
   getStartupState: vi.fn(),
   openAppDirectory: vi.fn(),
   restoreDefaultConfig: vi.fn(),

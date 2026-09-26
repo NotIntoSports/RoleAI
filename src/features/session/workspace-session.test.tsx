@@ -14,7 +14,8 @@ import type {
 } from "../../generated/bindings";
 import { WorkspaceSession } from "./workspace-session";
 
-vi.mock("../../api/commands", () => ({
+vi.mock("../../api/commands", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../api/commands")>()),
   getConfigPublic: vi.fn(),
   listMeetingProcesses: vi.fn(),
   getVirtualAudioStatus: vi.fn(),
@@ -225,6 +226,29 @@ describe("WorkspaceSession", () => {
     expect(commands.startSession).toHaveBeenCalled();
     expect((screen.getByRole("button", { name: "开始会话" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: "停止" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("shows the barge-in switch checked by default and passes allowBargeIn true", async () => {
+    vi.mocked(commands.getConfigPublic).mockResolvedValue({ ok: true, data: configuredSession() });
+    render(<WorkspaceSession />);
+    const barge = (await screen.findByLabelText("允许语音打断（说话即可停止 AI 播报）")) as HTMLInputElement;
+    expect(barge.checked).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "开始会话" }));
+    await waitFor(() =>
+      expect(commands.startSession).toHaveBeenCalledWith(expect.objectContaining({ allowBargeIn: true })),
+    );
+  });
+
+  it("unchecking the barge-in switch sends allowBargeIn false", async () => {
+    vi.mocked(commands.getConfigPublic).mockResolvedValue({ ok: true, data: configuredSession() });
+    render(<WorkspaceSession />);
+    const barge = (await screen.findByLabelText("允许语音打断（说话即可停止 AI 播报）")) as HTMLInputElement;
+    fireEvent.click(barge);
+    expect(barge.checked).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "开始会话" }));
+    await waitFor(() =>
+      expect(commands.startSession).toHaveBeenCalledWith(expect.objectContaining({ allowBargeIn: false })),
+    );
   });
 
   it("keeps session tools collapsed and preserves input when reopened", async () => {

@@ -8,6 +8,7 @@ import {
   activateRoleProfile,
   activateSpeechRoute,
   copyRoleProfile,
+  DEFAULT_BARGE_IN,
   deleteEmbeddingConfig,
   deleteMaterial,
   deleteModelProvider,
@@ -165,8 +166,14 @@ describe("session adapters", () => {
     invokeMock.mockResolvedValue({ ok: true, data: {} });
     await startSession();
     await startSession({ roleProfileId: "role", voiceRouteId: "route" });
+    await startSession({ roleProfileId: "role", voiceRouteId: "route", allowBargeIn: DEFAULT_BARGE_IN });
     expect(invokeMock).toHaveBeenNthCalledWith(1, "session_start", {});
     expect(invokeMock).toHaveBeenNthCalledWith(2, "session_start", { roleProfileId: "role", voiceRouteId: "route" });
+    expect(invokeMock).toHaveBeenNthCalledWith(3, "session_start", { roleProfileId: "role", voiceRouteId: "route", allowBargeIn: true });
+  });
+
+  it("defaults barge-in on per the Task 1 AEC spike verdict", async () => {
+    expect(DEFAULT_BARGE_IN).toBe(true);
   });
 });
 
