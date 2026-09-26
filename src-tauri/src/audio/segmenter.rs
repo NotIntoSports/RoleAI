@@ -147,11 +147,15 @@ impl SpeechSegmenter for UtteranceSegmenter {
 // 的 AI_VOICE_VAD 测试锁；无锁读者与 set_var 并发在部分平台是数据竞争。
 pub fn default_segmenter() -> Box<dyn SpeechSegmenter> {
     if std::env::var("AI_VOICE_VAD").as_deref() == Ok("off") {
+        tracing::warn!("AI_VOICE_VAD=off：Silero VAD 被关闭，已降级为能量门限分段");
         return Box::new(UtteranceSegmenter::default());
     }
     match crate::audio::vad::VadSegmenter::new() {
         Ok(vad) => Box::new(vad),
-        Err(_) => Box::new(UtteranceSegmenter::default()),
+        Err(error) => {
+            tracing::warn!(%error, "Silero VAD 不可用（模型加载失败），已降级为能量门限分段");
+            Box::new(UtteranceSegmenter::default())
+        }
     }
 }
 
