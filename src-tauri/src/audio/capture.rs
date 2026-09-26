@@ -12,7 +12,7 @@ use std::{
 };
 
 use super::pcm::{PcmRing, downsample_48k_to_16k};
-use super::segmenter::UtteranceSegmenter;
+use super::segmenter::{SpeechSegmenter, default_segmenter};
 use std::time::{Duration, Instant};
 
 #[cfg(windows)]
@@ -114,7 +114,7 @@ pub fn parse_level_peak(line: &str) -> Option<f64> {
 #[derive(Debug)]
 struct CaptureState {
     ring: PcmRing,
-    segmenter: UtteranceSegmenter,
+    segmenter: Box<dyn SpeechSegmenter>,
     last_peak: f64,
     echo_until: Option<Instant>,
 }
@@ -239,7 +239,7 @@ impl AudioCapture {
         Self {
             state: Arc::new(Mutex::new(CaptureState {
                 ring: PcmRing::new(),
-                segmenter: UtteranceSegmenter::default(),
+                segmenter: default_segmenter(),
                 last_peak: 0.0,
                 echo_until: None,
             })),

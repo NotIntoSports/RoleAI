@@ -109,6 +109,45 @@ impl UtteranceSegmenter {
     }
 }
 
+/// 语句分段器统一接口：捕获路径不感知具体实现（能量门限 / Silero VAD）。
+pub trait SpeechSegmenter: Send {
+    fn ingest(&mut self, pcm: &[u8], suppressed: bool);
+    fn take(&mut self) -> Option<Vec<u8>>;
+    fn ready(&self) -> bool;
+    fn dropped(&self) -> u32;
+    fn reset(&mut self);
+}
+
+impl SpeechSegmenter for UtteranceSegmenter {
+    fn ingest(&mut self, pcm: &[u8], suppressed: bool) {
+        self.ingest(pcm, suppressed);
+    }
+    fn take(&mut self) -> Option<Vec<u8>> {
+        self.take()
+    }
+    fn ready(&self) -> bool {
+        self.ready()
+    }
+    fn dropped(&self) -> u32 {
+        self.dropped()
+    }
+    fn reset(&mut self) {
+        self.reset()
+    }
+}
+
+/// 工厂：Task 4 接入 Silero 选择逻辑，本任务先固定能量实现。
+pub fn default_segmenter() -> Box<dyn SpeechSegmenter> {
+    Box::new(UtteranceSegmenter::default())
+}
+
+/// `CaptureState`/`AudioCapture` 派生 `Debug` 需要；分段器内部状态不进调试输出。
+impl std::fmt::Debug for Box<dyn SpeechSegmenter> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SpeechSegmenter").finish_non_exhaustive()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
