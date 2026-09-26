@@ -257,14 +257,14 @@ describe("WorkspaceSession", () => {
     expect(commands.sessionAgentCommand).not.toHaveBeenCalled();
   });
 
-  it("exposes a named current-turn region for live transcript and reply events", async () => {
+  it("exposes a named conversation region for the full session dialogue", async () => {
     vi.mocked(commands.getRuntimeStatus).mockResolvedValue({
       ok: true,
       data: status({ phase: "listening", seq: 2 }),
     });
     render(<WorkspaceSession />);
     await screen.findByText("聆听中");
-    const conversation = screen.getByRole("region", { name: "当前轮对话" });
+    const conversation = screen.getByRole("region", { name: "会话对话" });
     expect(conversation.tabIndex).toBe(0);
   });
 
@@ -512,6 +512,47 @@ describe("WorkspaceSession", () => {
       expect(document.body.textContent).not.toContain("转写");
       expect(document.body.textContent).not.toContain("这是一个后端岗位");
     });
+  });
+
+  it("keeps previous rounds visible and shows each turn exactly once", async () => {
+    const listeners: {
+      transcript?: (payload: SessionTranscriptEvent) => void;
+      reply?: (payload: SessionReplyEvent) => void;
+    } = {};
+    const listen = vi.fn(async (event: string, handler: (payload: never) => void) => {
+      if (event === "session.transcript.v1") {
+        listeners.transcript = handler as (payload: SessionTranscriptEvent) => void;
+      }
+      if (event === "session.reply.v1") listeners.reply = handler as (payload: SessionReplyEvent) => void;
+      return () => {};
+    });
+    let storedTurns = [
+      turn({ id: "turn-1", turnIndex: 0, userText: "现在什么时间？", assistantText: "现在是下午三点。", materialsUsed: false }),
+      turn({ id: "turn-2", turnIndex: 1, userText: "我第一句话问你的是什么？", assistantText: "你问我第一句话是什么。", materialsUsed: false }),
+    ];
+    vi.mocked(commands.getSession).mockImplementation(async () => ({
+      ok: true,
+      data: detail({ turns: storedTurns }),
+    }));
+
+    render(<WorkspaceSession listen={listen} />);
+    fireEvent.click(await screen.findByRole("button", { name: "开始会话" }));
+    await waitFor(() => expect(screen.getByText("现在什么时间？")).toBeTruthy());
+    expect(screen.getByText("我第一句话问你的是什么？")).toBeTruthy();
+
+    storedTurns = [
+      ...storedTurns,
+      turn({ id: "turn-3", turnIndex: 2, userText: "第三轮问题", assistantText: "第三轮回答", materialsUsed: false }),
+    ];
+    await act(async () => {
+      listeners.transcript?.({ seq: 4, text: "第三轮问题" });
+      listeners.reply?.({ seq: 5, text: "第三轮回答" });
+    });
+    await waitFor(() => expect(screen.getByText("第三轮回答")).toBeTruthy());
+    await waitFor(() => expect(commands.getSession).toHaveBeenCalledTimes(3));
+    expect(screen.getAllByText("第三轮回答")).toHaveLength(1);
+    expect(screen.getByText("现在什么时间？")).toBeTruthy();
+    expect(screen.getByText("我第一句话问你的是什么？")).toBeTruthy();
   });
 
   it("applies live events and drops stale seq per topic", async () => {

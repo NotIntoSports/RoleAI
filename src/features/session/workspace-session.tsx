@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { Bot, ChevronDown, FileText, Hand, MessageSquare, MicOff, Play, RotateCcw, Square, Volume2, Wrench } from "lucide-react";
 
 import * as api from "../../api/commands";
@@ -14,6 +14,7 @@ import type {
   SessionTranscriptEvent,
   PreflightIssue,
   PublicConfig,
+  SessionTurnView,
   WebSource,
   MeetingProcess,
   AudioOutputDevice,
@@ -156,6 +157,7 @@ export function WorkspaceSession({
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [transcript, setTranscript] = useState("");
   const [reply, setReply] = useState("");
+  const [turns, setTurns] = useState<SessionTurnView[]>([]);
   const [unusedMaterials, setUnusedMaterials] = useState(false);
   const [message, setMessage] = useState("正在读取会话状态…");
   const [issues, setIssues] = useState<PreflightIssue[]>([]);
@@ -266,6 +268,7 @@ export function WorkspaceSession({
   const transcriptSeq = useRef(0);
   const replySeq = useRef(0);
   const sessionIdRef = useRef<string | null>(null);
+  const refreshRef = useRef<() => Promise<void>>(async () => {});
 
   const applyStatus = useCallback((next: RuntimeStatus) => {
     if (next.seq <= statusSeq.current) return;
@@ -286,12 +289,14 @@ export function WorkspaceSession({
     if (payload.seq <= transcriptSeq.current) return;
     transcriptSeq.current = payload.seq;
     setTranscript(payload.text);
+    void refreshRef.current();
   }, []);
 
   const applyReply = useCallback((payload: SessionReplyEvent) => {
     if (payload.seq <= replySeq.current) return;
     replySeq.current = payload.seq;
     setReply(payload.text);
+    void refreshRef.current();
   }, []);
 
   const refresh = useCallback(
@@ -310,6 +315,7 @@ export function WorkspaceSession({
           const detail = await api.getSession(target);
           if (epoch !== requestEpoch.current) return;
           if (detail.ok) {
+            setTurns(detail.data.turns);
             const last = detail.data.turns.at(-1);
             if (last) {
               setTranscript(last.userText);
@@ -336,6 +342,25 @@ export function WorkspaceSession({
   useEffect(() => {
     sessionIdRef.current = sessionId;
   }, [sessionId]);
+
+  useEffect(() => { refreshRef.current = refresh; }, [refresh]);
+
+  const conversationRef = useRef<HTMLDivElement | null>(null);
+  const conversationBottomRef = useRef<HTMLDivElement | null>(null);
+  // 事件文本最多 160 字符而库里是全文，因此用前缀比较识别“列表最后一轮就是当前显示轮”，
+  // 避免刷新落地前的窗口期里同一轮出现两次。
+  const lastTurn = turns.at(-1);
+  const lastTurnIsLive = !!lastTurn && (transcript !== "" || reply !== "")
+    && (transcript === "" || lastTurn.userText.startsWith(transcript))
+    && (reply === "" || lastTurn.assistantText.startsWith(reply));
+  const historyTurns = lastTurnIsLive ? turns.slice(0, -1) : turns;
+  useEffect(() => {
+    const container = conversationRef.current;
+    const bottom = conversationBottomRef.current;
+    if (!container || !bottom) return;
+    const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 400;
+    if (nearBottom && typeof bottom.scrollIntoView === "function") bottom.scrollIntoView({ block: "end" });
+  }, [turns.length, transcript, reply]);
 
   useEffect(() => {
     void (async () => {
@@ -437,6 +462,7 @@ export function WorkspaceSession({
       setPhase(result.data.session.status);
       setTranscript("");
       setReply("");
+      setTurns([]);
       setWebSources([]);
       setWebDegraded(false);
       setPendingConfirmation(false);
@@ -810,8 +836,8 @@ export function WorkspaceSession({
           {message}
         </p>
       )}
-      <div className="session-conversation" role="region" aria-label="当前轮对话" tabIndex={0}>
-        {!transcript && !reply ? (
+      <div className="session-conversation" role="region" aria-label="会话对话" tabIndex={0} ref={conversationRef}>
+        {!transcript && !reply && turns.length === 0 ? (
           <div className="session-welcome">
             <span className="session-welcome-icon"><MessageSquare size={25} strokeWidth={1.5} aria-hidden="true" /></span>
             <span className="session-welcome-eyebrow">ROLEAI · 你的对话助手</span>
@@ -825,7 +851,23 @@ export function WorkspaceSession({
           </div>
         ) : (
           <div className="session-turn">
-            <p className="session-turn-label">当前轮</p>
+            {historyTurns.map((item) => (
+              <Fragment key={item.id}>
+                {item.userText && (
+                  <article className="session-bubble session-bubble-user" aria-label={`用户转写 · 第 ${item.turnIndex + 1} 轮`}>
+                    <h3>你 <span>· 转写</span></h3>
+                    <p>{item.userText}</p>
+                  </article>
+                )}
+                {item.assistantText && (
+                  <article className="session-bubble session-bubble-assistant" aria-label={`AI 回复 · 第 ${item.turnIndex + 1} 轮`}>
+                    <h3><Bot size={16} aria-hidden="true" />RoleAI</h3>
+                    <p>{item.assistantText}</p>
+                  </article>
+                )}
+              </Fragment>
+            ))}
+            {historyTurns.length > 0 && <p className="session-turn-label">当前轮</p>}
             {transcript && (
               <article className="session-bubble session-bubble-user" aria-label="用户转写">
                 <h3>你 <span>· 转写</span></h3>
@@ -855,6 +897,7 @@ export function WorkspaceSession({
           </div>
         )}
         {unusedMaterials && <p className="session-materials-note">本轮未使用资料</p>}
+        <div ref={conversationBottomRef} aria-hidden="true" />
       </div>
       <details className="session-tools">
         <summary><Wrench size={15} aria-hidden="true" />会话工具<ChevronDown size={15} className="session-tools-chevron" aria-hidden="true" /></summary>

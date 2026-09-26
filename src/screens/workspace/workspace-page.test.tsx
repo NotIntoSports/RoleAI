@@ -40,7 +40,7 @@ describe("WorkspacePage", () => {
 
   it("renders the conversation without a manual text composer", () => {
     render(<WorkspacePage />);
-    expect(screen.getByRole("region", { name: "当前轮对话" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "会话对话" })).toBeTruthy();
     expect(screen.queryByRole("textbox", { name: "语句输入" })).toBeNull();
     expect(screen.queryByRole("button", { name: "发送" })).toBeNull();
   });
