@@ -16,7 +16,7 @@ fn empty_database_migrates_once_and_passes_integrity_check() {
     database.migrate().unwrap();
     database.migrate().unwrap();
 
-    assert_eq!(database.schema_version().unwrap(), 6);
+    assert_eq!(database.schema_version().unwrap(), 7);
     assert_eq!(database.integrity_check().unwrap(), "ok");
     assert_eq!(
         database.application_table_names().unwrap(),
@@ -112,7 +112,7 @@ fn foundation_database_migrates_to_materials_schema() {
     let database = Database::open(path).unwrap();
     database.migrate().unwrap();
 
-    assert_eq!(database.schema_version().unwrap(), 6);
+    assert_eq!(database.schema_version().unwrap(), 7);
     assert!(
         database
             .application_table_names()
@@ -149,7 +149,7 @@ fn materials_schema_migrates_to_cascade_session_schema() {
     let database = Database::open(path).unwrap();
     database.migrate().unwrap();
 
-    assert_eq!(database.schema_version().unwrap(), 6);
+    assert_eq!(database.schema_version().unwrap(), 7);
     let tables = database.application_table_names().unwrap();
     for name in [
         "sessions",
@@ -309,7 +309,7 @@ fn cascade_session_schema_migrates_to_livekit_transport() {
     let database = Database::open(path).unwrap();
     database.migrate().unwrap();
 
-    assert_eq!(database.schema_version().unwrap(), 6);
+    assert_eq!(database.schema_version().unwrap(), 7);
     assert_eq!(database.integrity_check().unwrap(), "ok");
     assert_eq!(
         database
@@ -389,5 +389,43 @@ fn materials_fts5_matches_chinese_trigrams() {
             )
             .unwrap(),
         "chunk-1"
+    );
+}
+
+#[test]
+fn session_schema_includes_context_summary_columns() {
+    let (_directory, database) = database();
+    database.migrate().unwrap();
+
+    let columns = database
+        .query_strings("SELECT name FROM pragma_table_info('sessions')")
+        .unwrap();
+    assert!(columns.contains(&"context_summary".to_owned()));
+    assert!(columns.contains(&"context_summary_turn_index".to_owned()));
+
+    database
+        .execute_batch(
+            "INSERT INTO sessions(
+                id, status, role_profile_id, voice_route_id, transport_mode, updated_at
+             ) VALUES ('session-summary', 'idle', '', '', 'direct', '2026-09-26T00:00:00Z');",
+        )
+        .unwrap();
+    assert_eq!(
+        database
+            .query_string(
+                "SELECT COALESCE(context_summary, '<null>')
+                 FROM sessions WHERE id = 'session-summary'"
+            )
+            .unwrap(),
+        "<null>"
+    );
+    assert_eq!(
+        database
+            .query_string(
+                "SELECT CAST(context_summary_turn_index AS TEXT)
+                 FROM sessions WHERE id = 'session-summary'"
+            )
+            .unwrap(),
+        "-1"
     );
 }

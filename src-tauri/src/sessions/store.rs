@@ -190,6 +190,42 @@ impl<'a> SessionStore<'a> {
         })
     }
 
+    pub fn context_summary(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<(String, i64)>, DatabaseError> {
+        self.database.with_connection(|connection| {
+            connection
+                .query_row(
+                    "SELECT context_summary, context_summary_turn_index
+                     FROM sessions WHERE id = ?1",
+                    params![session_id],
+                    |row| {
+                        let summary: Option<String> = row.get(0)?;
+                        let upto: i64 = row.get(1)?;
+                        Ok(summary.map(|s| (s, upto)))
+                    },
+                )
+                .optional()
+                .map(Option::flatten)
+        })
+    }
+
+    pub fn set_context_summary(
+        &self,
+        session_id: &str,
+        summary: &str,
+        upto: i64,
+    ) -> Result<(), DatabaseError> {
+        self.database.with_connection(|connection| {
+            connection.execute(
+                "UPDATE sessions SET context_summary = ?1, context_summary_turn_index = ?2 WHERE id = ?3",
+                params![summary, upto, session_id],
+            )?;
+            Ok(())
+        })
+    }
+
     pub fn update_assistant_text(
         &self,
         turn_id: &str,
@@ -691,5 +727,35 @@ mod tests {
         assert!(store.list_citations("turn-1").unwrap().is_empty());
         assert!(store.list_events("session-1").unwrap().is_empty());
         assert!(store.list_snapshots("session-1").unwrap().is_empty());
+    }
+
+    fn insert_test_session(store: &SessionStore<'_>) -> String {
+        let id = "session-context-summary";
+        store
+            .insert_session(NewSession {
+                id,
+                status: "completed",
+                role_profile_id: "",
+                voice_route_id: "",
+                transport_mode: "direct",
+            })
+            .unwrap();
+        id.to_string()
+    }
+
+    #[test]
+    fn context_summary_roundtrip_and_absence() {
+        let (_directory, database) = opened();
+        let store = SessionStore::new(&database);
+        // 造一个会话（沿用既有 NewSession 助手/字面量，与相邻测试一致）
+        let session_id = insert_test_session(&store);
+        assert!(store.context_summary(&session_id).unwrap().is_none());
+        store
+            .set_context_summary(&session_id, "此前讨论了时间问题", 3)
+            .unwrap();
+        assert_eq!(
+            store.context_summary(&session_id).unwrap(),
+            Some(("此前讨论了时间问题".to_string(), 3))
+        );
     }
 }
