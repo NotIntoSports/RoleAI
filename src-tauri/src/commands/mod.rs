@@ -4167,7 +4167,7 @@ blocking_command!(config_restore_last_good, config_restore_last_good_blocking() 
 blocking_command!(config_restore_defaults, config_restore_defaults_blocking() -> StartupState);
 
 #[cfg(test)]
-#[path = "commands_ipc_tests.rs"]
+#[path = "../commands_ipc_tests.rs"]
 mod ipc_tests;
 
 #[cfg(test)]
@@ -4419,7 +4419,7 @@ mod tests {
 
     #[test]
     fn restore_commands_take_the_service_guard() {
-        let source = include_str!("commands.rs");
+        let source = include_str!("mod.rs");
         let last_good = source
             .split("pub fn config_restore_last_good")
             .nth(1)
@@ -4519,7 +4519,7 @@ mod tests {
 
     #[test]
     fn material_write_commands_take_the_service_guard() {
-        let source = include_str!("commands.rs");
+        let source = include_str!("mod.rs");
         let import = source
             .split("pub fn material_import")
             .nth(1)
@@ -4540,7 +4540,7 @@ mod tests {
 
     #[test]
     fn material_read_commands_skip_the_service_guard() {
-        let source = include_str!("commands.rs");
+        let source = include_str!("mod.rs");
         let list = source
             .split("pub fn material_list")
             .nth(1)
@@ -4653,7 +4653,7 @@ mod tests {
 
     #[test]
     fn session_mutating_commands_take_the_service_guard() {
-        let source = include_str!("commands.rs");
+        let source = include_str!("mod.rs");
         for name in [
             "session_start",
             "session_stop",
@@ -4671,7 +4671,7 @@ mod tests {
 
     #[test]
     fn session_read_and_mode_commands_skip_the_service_guard() {
-        let source = include_str!("commands.rs");
+        let source = include_str!("mod.rs");
         for name in [
             "session_list",
             "session_get",
@@ -5903,7 +5903,7 @@ mod tests {
 
     #[test]
     fn livestream_manual_complete_does_not_mark_output_played() {
-        let source = include_str!("commands.rs");
+        let source = include_str!("mod.rs");
         let control = source
             .split("pub fn livestream_control")
             .nth(1)

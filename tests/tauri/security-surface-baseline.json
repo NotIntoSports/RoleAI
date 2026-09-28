@@ -6,7 +6,7 @@
     "src-tauri/capabilities/main.json": "0039f0b697b426ef725580bb1d47449aae613cb9b3c06357a017332efad26237",
     "src-tauri/src/lib.rs": "8d1d54fb7df0ca171962e0496c18029cd70d48866057f5862bbb0057085d5c68",
     "src-tauri/src/contracts.rs": "81553bb8aff1c5ff15aa3c65a0d72966a078e99036c7006cc9f9b9208a3b20a2",
-    "src-tauri/src/commands.rs": "9359c29d79a2fd95b858bc8109d1c388ba88dc5d7790a3e8d89abb5bfdf74860",
+    "src-tauri/src/commands/mod.rs": "fa11bb609838c83ecf0117236e451e453b23a2b34014ce040ec9e88b56d6c70d",
     "src-tauri/tauri.conf.json": "7cbaa279bb71a156cfb3563d2a935fbf859a21728ec11e6e886b5e0aaae6c219",
     "src/api/commands.ts": "d3a18eb541c48a81fac56dd825bffd3b60f4d43a99401ba88fe3cd17d87e9dc0",
     "src/generated/bindings.ts": "db040605c6a37ba78691935f5a6d3e83acd85109feb2b4a631d85e6cf3f874bd",
