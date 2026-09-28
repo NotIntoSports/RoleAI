@@ -19,8 +19,7 @@ use super::super::providers::realtime_session::{ActorCommand, ActorEvent, Realti
 
 use crate::audio::playback::PlaybackDiagnostics;
 
-/// 播净回执丢失时的短兜底尾窗；真实回执仍优先立即开门。
-const GATE_DRAIN_FALLBACK_TAIL: Duration = Duration::from_millis(1500);
+use super::echo_guard::{GATE_DRAIN_FALLBACK_TAIL, gate_drain_deadline_from_bytes, gate_timers_expired};
 
 /// 流式播放抽象：生产实现是常驻 AudioBridge `StreamPlayback`；测试用内存替身。
 pub trait PlaybackStream: Send + Sync {
@@ -650,7 +649,6 @@ fn run_pump(
     // 所以开门时机以 sidecar「已播净」回执为准，而非固定窗。
     let mut uplink_open = true;
     let mut gate_closed_at: Option<Instant> = None;
-    const GATE_FORCE_OPEN_AFTER: Duration = Duration::from_secs(20);
     // 播净回执丢失时的短兜底：按已写入音频时长续期，避免设备事件偶发
     // 丢失后麦克风被 20 秒安全阀闭锁，后续用户语音整句丢失。
     let mut gate_drain_deadline: Option<Instant> = None;
@@ -696,8 +694,7 @@ fn run_pump(
             if uplink_reopen_at.is_some_and(|at| Instant::now() >= at)
                 || playback.take_drained()
                 || !playback.is_alive()
-                || gate_drain_deadline.is_some_and(|at| Instant::now() >= at)
-                || gate_closed_at.is_some_and(|at| at.elapsed() > GATE_FORCE_OPEN_AFTER)
+                || gate_timers_expired(gate_drain_deadline, gate_closed_at, Instant::now())
             {
                 uplink_open = true;
                 gate_closed_at = None;
@@ -720,11 +717,8 @@ fn run_pump(
                     uplink_reopen_at = None;
                     uplink_open = false;
                     gate_closed_at.get_or_insert_with(Instant::now);
-                    gate_drain_deadline = Some(
-                        Instant::now()
-                            + Duration::from_millis((held.len() as u64 * 1000) / (24_000 * 2))
-                            + GATE_DRAIN_FALLBACK_TAIL,
-                    );
+                    gate_drain_deadline =
+                        Some(gate_drain_deadline_from_bytes(Instant::now(), held.len()));
                     // 关门即作废遗留播净回执（初始值/上轮残留），见 AssistantAudioDelta。
                     let _ = playback.take_drained();
                     let _ = playback.drain();
@@ -995,11 +989,8 @@ fn run_pump(
                     turn.played_audio = true;
                     shared.speaking.store(true, Ordering::SeqCst);
                     if playback_mode == RealtimePlaybackMode::Native {
-                        gate_drain_deadline = Some(
-                            Instant::now()
-                                + Duration::from_millis((pcm.len() as u64 * 1000) / (24_000 * 2))
-                                + GATE_DRAIN_FALLBACK_TAIL,
-                        );
+                        gate_drain_deadline =
+                            Some(gate_drain_deadline_from_bytes(Instant::now(), pcm.len()));
                     }
                 }
             }

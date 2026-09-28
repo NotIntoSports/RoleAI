@@ -9,6 +9,8 @@
 //! 标点增删。所以归一化统一转小写、全角折半角、丢弃标点空白，
 //! 并把中文数字串换算成阿拉伯数字后再比对。
 
+use std::time::{Duration, Instant};
+
 /// 短于该长度（归一化后）的转写不参与判定：哼声/单字应答不允许被误吞。
 const ECHO_MIN_CHARS: usize = 6;
 /// 包含命中的最短长度：回声常是上句的截断片段（只听到半句）。
@@ -167,6 +169,30 @@ fn char_bigrams(text: &str) -> std::collections::HashSet<(char, char)> {
     chars.windows(2).map(|pair| (pair[0], pair[1])).collect()
 }
 
+/// 音频闸门（上行门控）的纯计时计算，纯搬移自 services/realtime_pump.rs。
+/// 播放设备交互（播净回执、存活探测、缓冲清空）留在泵内，这里只做时刻运算。
+
+/// 播净回执丢失时的短兜底尾窗；真实回执仍优先立即开门。
+pub const GATE_DRAIN_FALLBACK_TAIL: Duration = Duration::from_millis(1500);
+/// 关门安全阀：兜底链路全部失效时，关门最长这么久后强制重开，
+/// 麦克风不被 20 秒安全阀无限闭锁后丢句。
+const GATE_FORCE_OPEN_AFTER: Duration = Duration::from_secs(20);
+
+/// 排水兜底与安全阀是否已到点（不含设备侧因素：播净回执/存活由泵另行判定）。
+pub fn gate_timers_expired(
+    drain_deadline: Option<Instant>,
+    closed_at: Option<Instant>,
+    now: Instant,
+) -> bool {
+    drain_deadline.is_some_and(|at| now >= at)
+        || closed_at.is_some_and(|at| now.duration_since(at) > GATE_FORCE_OPEN_AFTER)
+}
+
+/// 已写入字节数 → 排水兜底截止时刻：24kHz×16bit（48 000 B/s）折算播放时长 + 尾窗。
+pub fn gate_drain_deadline_from_bytes(now: Instant, bytes: usize) -> Instant {
+    now + Duration::from_millis((bytes as u64 * 1000) / (24_000 * 2)) + GATE_DRAIN_FALLBACK_TAIL
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -237,5 +263,46 @@ mod tests {
         assert_eq!(normalize("十"), "10");
         assert_eq!(normalize("一百零五"), "105");
         assert_eq!(normalize("三万"), "30000");
+    }
+
+    #[test]
+    fn gate_timers_expire_on_drain_deadline_or_force_open() {
+        let now = Instant::now();
+        // 排水截止未到：不开。
+        assert!(!gate_timers_expired(
+            Some(now + Duration::from_secs(1)),
+            Some(now),
+            now
+        ));
+        // 排水截止已过：开。
+        assert!(gate_timers_expired(
+            Some(now - Duration::from_millis(1)),
+            Some(now),
+            now
+        ));
+        // 无排水截止，但关门已超 20s 安全阀：开。
+        assert!(gate_timers_expired(
+            None,
+            Some(now - GATE_FORCE_OPEN_AFTER - Duration::from_millis(1)),
+            now
+        ));
+        // 刚关门且无排水截止：不开。
+        assert!(!gate_timers_expired(None, Some(now), now));
+        // 无关门记录：不开。
+        assert!(!gate_timers_expired(None, None, now));
+    }
+
+    #[test]
+    fn gate_drain_deadline_scales_with_bytes_plus_tail() {
+        let now = Instant::now();
+        // 48 000 B/s：0.5s 音频（24 000 字节）+ 1.5s 尾窗。
+        assert_eq!(
+            gate_drain_deadline_from_bytes(now, 24_000),
+            now + Duration::from_millis(500) + GATE_DRAIN_FALLBACK_TAIL
+        );
+        assert_eq!(
+            gate_drain_deadline_from_bytes(now, 0),
+            now + GATE_DRAIN_FALLBACK_TAIL
+        );
     }
 }
