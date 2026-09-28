@@ -74,7 +74,7 @@ describe("VoiceReferenceEditor", () => {
     });
     vi.mocked(commands.deleteVoiceReference).mockResolvedValue({
       ok: true,
-      data: undefined,
+      data: { ready: true },
     });
   });
   afterEach(() => {
@@ -129,12 +129,12 @@ describe("VoiceReferenceEditor", () => {
     fireEvent.click(screen.getByRole("button", { name: "保存修改" }));
 
     expect(await waitFor(() => expect(commands.updateVoiceReference).toHaveBeenCalled()));
-    expect(screen.getByRole("button", { name: "保存修改" }).disabled).toBe(true);
-    expect(screen.getByRole("button", { name: "开始录音" }).disabled).toBe(true);
-    expect(screen.getByRole("button", { name: "选择音频文件…" }).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "保存修改" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "开始录音" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "选择音频文件…" }) as HTMLButtonElement).disabled).toBe(true);
 
     pending.resolve({ ok: true, data: reference({ name: "新名字" }) });
-    await waitFor(() => expect(screen.getByRole("button", { name: "保存修改" }).disabled).toBe(false));
+    await waitFor(() => expect((screen.getByRole("button", { name: "保存修改" }) as HTMLButtonElement).disabled).toBe(false));
     expect(screen.getByRole("status").textContent).toContain("音色信息已更新，原音频与克隆状态保持不变");
     expect(commands.updateVoiceReference).toHaveBeenCalledWith(
       expect.objectContaining({ id: "ref-1", name: "新名字", providerId: "aliyun" }),
