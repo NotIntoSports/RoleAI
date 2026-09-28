@@ -347,4 +347,45 @@ mod tests {
         ));
         assert!(!should_restore_scene(APP_SCENE_NAME, "已删除场景", &scenes));
     }
+
+    #[test]
+    fn virtual_camera_commands_report_stable_code_without_password_when_obs_is_down() {
+        // 占住 4455 并立即掐断每个连接：无论本机是否装 OBS，WebSocket 握手必败，
+        // 命令必须返回稳定错误码而不是 panic 或把密码带出去。
+        let listener = std::net::TcpListener::bind("127.0.0.1:4455").unwrap();
+        let stop_janitor = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let janitor_listener = listener.try_clone().unwrap();
+        let janitor_flag = std::sync::Arc::clone(&stop_janitor);
+        let janitor = std::thread::spawn(move || {
+            let _ = janitor_listener.set_nonblocking(true);
+            while !janitor_flag.load(std::sync::atomic::Ordering::SeqCst) {
+                if let Ok((stream, _)) = janitor_listener.accept() {
+                    drop(stream);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        });
+        let password = "sk-test-obs-password-do-not-leak";
+        let start = tauri::async_runtime::block_on(super::start_virtual_camera(
+            Some(password),
+            std::path::Path::new("stage.html"),
+        ));
+        assert_eq!(start.error_code.as_deref(), Some("OBS_CONNECT_FAILED"));
+        assert!(!start.connected);
+        assert!(!start.virtual_camera_active);
+        assert!(
+            !format!("{start:?}").contains(password),
+            "断连状态不得携带密码"
+        );
+
+        let stop = tauri::async_runtime::block_on(super::stop_virtual_camera(Some(password)));
+        assert_eq!(stop.error_code.as_deref(), Some("OBS_CONNECT_FAILED"));
+        assert!(!stop.connected);
+
+        let scene = tauri::async_runtime::block_on(super::current_program_scene(Some(password)));
+        assert_eq!(scene.unwrap_err(), "OBS_CONNECT_FAILED");
+        stop_janitor.store(true, std::sync::atomic::Ordering::SeqCst);
+        drop(listener);
+        janitor.join().unwrap();
+    }
 }
