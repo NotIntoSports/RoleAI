@@ -9,6 +9,11 @@ description = "Allows exporting a bounded redacted diagnostic report to a select
 commands.allow = ["diagnostics_export"]
 
 [[permission]]
+identifier = "allow-diagnostics-latency-summary"
+description = "Allows reading a read-only per-route first-audio latency summary of recent sessions."
+commands.allow = ["diagnostics_latency_summary"]
+
+[[permission]]
 identifier = "allow-config-get-startup-state"
 description = "Allows reading the public configuration startup state."
 commands.allow = ["config_get_startup_state"]

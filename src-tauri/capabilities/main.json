@@ -7,6 +7,7 @@
     "core:default",
     "allow-foundation-get-status",
     "allow-diagnostics-export",
+    "allow-diagnostics-latency-summary",
     "allow-config-get-startup-state",
     "allow-legacy-migration-status",
     "allow-legacy-import-source",

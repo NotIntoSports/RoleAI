@@ -15,7 +15,7 @@ use crate::{
     },
     contracts::{
         AgentCommandInput, AgentCommandResult, AudioLevelEvent, CommandResult,
-        DiagnosticsExportResult, FoundationStatus, LegacyMigrationStatus, LegacySessionImport,
+        DiagnosticsExportResult, DiagnosticsLatencySummary, FoundationStatus, LegacyMigrationStatus, LegacySessionImport,
         LivestreamDraftInput, LivestreamGenerateInput, LivestreamRuntime, MicPcmAcceptance,
         RuntimeStatus, SessionAudioEvent, SessionCitationView, SessionDetail, SessionExportResult,
         SessionPlaybackControlEvent, SessionReplyEvent, SessionStartResult, SessionSummary,

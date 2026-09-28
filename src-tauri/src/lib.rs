@@ -91,6 +91,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::foundation_get_status,
             commands::diagnostics_export,
+            commands::diagnostics_latency_summary,
             commands::config_get_startup_state,
             commands::legacy_migration_status,
             commands::legacy_import_source,

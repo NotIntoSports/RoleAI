@@ -3,13 +3,13 @@
   "algorithm": "sha256",
   "normalization": "crlf-to-lf",
   "files": {
-    "src-tauri/capabilities/main.json": "0039f0b697b426ef725580bb1d47449aae613cb9b3c06357a017332efad26237",
-    "src-tauri/src/lib.rs": "8d1d54fb7df0ca171962e0496c18029cd70d48866057f5862bbb0057085d5c68",
-    "src-tauri/src/contracts.rs": "81553bb8aff1c5ff15aa3c65a0d72966a078e99036c7006cc9f9b9208a3b20a2",
-    "src-tauri/src/commands/mod.rs": "da499da1406ef8a3b340ce3ce3db8913a479040dcabd05c53bef19112d266528",
+    "src-tauri/capabilities/main.json": "d6d5c5024ed6ba3b71c3f33a2a17c1dc10e25c2e359f8a7548c8531a95e90de7",
+    "src-tauri/src/lib.rs": "0de8239d1295682a18b0590ce286f3732b872c5dce3479090abb4656b75ecd18",
+    "src-tauri/src/contracts.rs": "5fafd5a66852cd7dca78d1b7b597af1d9767044a66a9be48bd25e88703bd2a82",
+    "src-tauri/src/commands/mod.rs": "6099091e6d886e2633ff567fb9f6877d9c6777980d7c1d4a15d79b0c579562b4",
     "src-tauri/tauri.conf.json": "7cbaa279bb71a156cfb3563d2a935fbf859a21728ec11e6e886b5e0aaae6c219",
-    "src/api/commands.ts": "d3a18eb541c48a81fac56dd825bffd3b60f4d43a99401ba88fe3cd17d87e9dc0",
-    "src/generated/bindings.ts": "db040605c6a37ba78691935f5a6d3e83acd85109feb2b4a631d85e6cf3f874bd",
+    "src/api/commands.ts": "4c4122b96439ade9811f282537ca14e73bca61c31f6417b584fba6191eef7c13",
+    "src/generated/bindings.ts": "8881c84f980181fac2e6a520daa8af9092ee2b8c2be89f21eaba11470dde8edb",
     "tests/tauri/shell-contract.test.mjs": "7a9e13b97754f371ec3e95d3c01cc888394e007207ea16371768574e09ed452f",
     "src-tauri/tests/security_contract.rs": "22e42bfb76980bd585e6b012585207d39a1a8848b707336b0ebbc14f7dfb7ea3",
     "src-tauri/src/commands/config.rs": "e8e3c9cd8ed5e76d7961b927415d9cd01b17cd545adf23693f1ada015b57d203",
@@ -18,6 +18,6 @@
     "src-tauri/src/commands/livestream.rs": "083acc0c6f46231113f0eda1f532016f9d9a8c3f8278fdea1f31098c052695e4",
     "src-tauri/src/commands/obs.rs": "42cc148ed5b6d8a78506a40ea2a272400112abfb586a397488b78a4df0dbf43b",
     "src-tauri/src/commands/voice.rs": "1c5d8fc589feeea832d21621526992e3854e341285add22a8dc8b390dcf48ba0",
-    "src-tauri/src/commands/system.rs": "6f16a72bb78b2ff2064b4e9e7c8a4ba3566b1c3fa63e8376e971b5bb8976db19"
+    "src-tauri/src/commands/system.rs": "bec763cb38c5353d840c366465eca2c4642025ff6f94f914a0d83e3544fcb8be"
   }
 }

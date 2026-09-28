@@ -622,3 +622,172 @@ pub fn virtual_audio_install_blocking<R: tauri::Runtime>(
     attach_preparation_diagnostic(&state, current_phase.into_inner(), exit_code.get(), result)
 }
 blocking_command!(with_events virtual_audio_install, virtual_audio_install_blocking() -> crate::prerequisites::VirtualAudioPreparation);
+
+
+pub fn diagnostics_latency_summary_blocking(
+    state: State<'_, AppState>,
+    limit: Option<u32>,
+) -> CommandResult<DiagnosticsLatencySummary> {
+    let limit = limit.unwrap_or(20).clamp(1, 100) as usize;
+    let database = match state.database.lock() {
+        Ok(guard) => guard,
+        Err(_) => return service_error("DATABASE_OPERATION_FAILED", "Database is unavailable"),
+    };
+    let Some(database) = database.as_ref() else {
+        return service_error("DATABASE_OPERATION_FAILED", "Database is unavailable");
+    };
+    let store = crate::sessions::store::SessionStore::new(database);
+    let sessions = match store.list() {
+        Ok(sessions) => sessions,
+        Err(_) => return service_error("DIAGNOSTICS_OPERATION_FAILED", "无法读取会话列表"),
+    };
+    let route_label = |route_id: &str| -> String {
+        state
+            .config
+            .load()
+            .ok()
+            .and_then(|config| {
+                config.speech.voice_routes.iter().find(|route| route.id == route_id).map(|route| route.name.clone())
+            })
+            .unwrap_or_else(|| route_id.to_owned())
+    };
+    // 更新时间倒序（store.list 语义），只扫最近 limit 个会话。
+    let mut summaries: std::collections::BTreeMap<String, Vec<(String, serde_json::Value)>> =
+        std::collections::BTreeMap::new();
+    let mut sessions_scanned: u32 = 0;
+    for session in sessions.iter().take(limit) {
+        let events = match store.list_events(&session.id) {
+            Ok(events) => events,
+            Err(_) => return service_error("DIAGNOSTICS_OPERATION_FAILED", "无法读取会话事件"),
+        };
+        if events.iter().any(|event| event.kind == "turn_meta") {
+            sessions_scanned += 1;
+        }
+        for event in events.iter().filter(|event| event.kind == "turn_meta") {
+            if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&event.payload) {
+                summaries.entry(session.voice_route_id.clone()).or_default().push((session.id.clone(), meta));
+            }
+        }
+    }
+    let routes = summaries
+        .into_iter()
+        .map(|(route_id, metas)| {
+            summarize_route(&route_id, &route_label(&route_id), &metas)
+        })
+        .collect();
+    CommandResult::Ok {
+        data: DiagnosticsLatencySummary {
+            sessions_scanned: sessions_scanned as u32,
+            routes,
+        },
+    }
+}
+
+/// 单线路汇总：样本数、首响最近秩百分位、每会话最大入口丢帧之和。
+/// `ingressDropped` 在写入侧是会话内累计值，逐轮求和会重复计数，
+/// 因此按会话取最大值后再按线路求和。
+fn summarize_route(
+    route_id: &str,
+    route_label: &str,
+    metas: &[(String, serde_json::Value)],
+) -> crate::contracts::RouteLatencySummary {
+    let mut latencies: Vec<f64> = metas
+        .iter()
+        .filter_map(|(_, meta)| meta.get("latencyMsFirstAudio").and_then(|value| value.as_f64()))
+        .collect();
+    latencies.sort_by(|a, b| a.total_cmp(b));
+    let mut dropped_by_session: std::collections::HashMap<&str, u64> =
+        std::collections::HashMap::new();
+    for (session_id, meta) in metas {
+        let dropped = meta
+            .get("ingressDropped")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(0);
+        let slot = dropped_by_session.entry(session_id.as_str()).or_insert(0);
+        if dropped > *slot {
+            *slot = dropped;
+        }
+    }
+    crate::contracts::RouteLatencySummary {
+        route_id: route_id.to_owned(),
+        route_label: route_label.to_owned(),
+        samples: metas.len() as u32,
+        p50_ms: nearest_rank_percentile(&latencies, 50.0),
+        p95_ms: nearest_rank_percentile(&latencies, 95.0),
+        ingress_dropped_total: dropped_by_session.values().sum::<u64>() as u32,
+    }
+}
+
+/// 最近秩百分位：升序样本取 ceil(p/100·n)-1 下标；空样本返回 None。
+fn nearest_rank_percentile(sorted: &[f64], percentile: f64) -> Option<f64> {
+    if sorted.is_empty() {
+        return None;
+    }
+    let rank = ((percentile / 100.0) * sorted.len() as f64).ceil() as usize;
+    let rank = rank.clamp(1, sorted.len());
+    Some(sorted[rank - 1])
+}
+
+blocking_command!(diagnostics_latency_summary, diagnostics_latency_summary_blocking(limit: Option<u32>) -> DiagnosticsLatencySummary);
+
+#[cfg(test)]
+mod latency_summary_tests {
+    use super::*;
+
+    #[test]
+    fn percentile_is_none_for_empty_samples() {
+        assert_eq!(nearest_rank_percentile(&[], 50.0), None);
+    }
+
+    #[test]
+    fn percentile_of_single_sample_is_that_sample() {
+        assert_eq!(nearest_rank_percentile(&[42.0], 50.0), Some(42.0));
+        assert_eq!(nearest_rank_percentile(&[42.0], 95.0), Some(42.0));
+    }
+
+    #[test]
+    fn percentile_uses_nearest_rank_for_even_counts() {
+        // n=4：p50 → ceil(0.5·4)=2 → 第 2 个；p95 → ceil(0.95·4)=4 → 第 4 个。
+        let sorted = [10.0, 20.0, 30.0, 40.0];
+        assert_eq!(nearest_rank_percentile(&sorted, 50.0), Some(20.0));
+        assert_eq!(nearest_rank_percentile(&sorted, 95.0), Some(40.0));
+    }
+
+    #[test]
+    fn summary_skips_null_latencies_for_percentiles_but_counts_samples() {
+        let metas = vec![
+            ("s1".to_owned(), serde_json::json!({"latencyMsFirstAudio":100,"ingressDropped":5})),
+            ("s2".to_owned(), serde_json::json!({"latencyMsFirstAudio":200,"ingressDropped":9})),
+            ("s3".to_owned(), serde_json::json!({"latencyMsFirstAudio":null,"ingressDropped":2})),
+        ];
+        let summary = summarize_route("route-1", "线路一", &metas);
+        assert_eq!(summary.samples, 3);
+        // n=2 非空样本 [100,200]：p50 → 第 1 个? ceil(0.5·2)=1 → 100；p95 → ceil(0.95·2)=2 → 200。
+        assert_eq!(summary.p50_ms, Some(100.0));
+        assert_eq!(summary.p95_ms, Some(200.0));
+        // 会话 t1..t3 互不相同，各取最大后求和。
+        assert_eq!(summary.ingress_dropped_total, 16);
+    }
+
+    #[test]
+    fn summary_all_null_latencies_yield_null_percentiles() {
+        let metas = vec![
+            ("s1".to_owned(), serde_json::json!({"latencyMsFirstAudio":null})),
+            ("s1".to_owned(), serde_json::json!({"latencyMsFirstAudio":null,"ingressDropped":7})),
+        ];
+        let summary = summarize_route("route-1", "线路一", &metas);
+        assert_eq!(summary.samples, 2);
+        assert_eq!(summary.p50_ms, None);
+        assert_eq!(summary.p95_ms, None);
+        // 同会话累计值取最大，不重复求和。
+        assert_eq!(summary.ingress_dropped_total, 7);
+    }
+
+    #[test]
+    fn missing_route_falls_back_to_id_as_label() {
+        let metas = vec![("s1".to_owned(), serde_json::json!({"latencyMsFirstAudio":50}))];
+        let summary = summarize_route("route-x", "route-x", &metas);
+        assert_eq!(summary.route_label, "route-x");
+        assert_eq!(summary.p50_ms, Some(50.0));
+    }
+}

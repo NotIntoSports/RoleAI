@@ -59,6 +59,28 @@ pub struct DiagnosticsExportResult {
     pub exported: bool,
 }
 
+/// 单条语音线路的首响延迟与入口丢帧汇总（只读诊断）。
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct RouteLatencySummary {
+    pub route_id: String,
+    pub route_label: String,
+    pub samples: u32,
+    pub p50_ms: Option<f64>,
+    pub p95_ms: Option<f64>,
+    pub ingress_dropped_total: u32,
+}
+
+/// 按语音线路汇总的最近会话首响延迟概览（只读诊断）。
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct DiagnosticsLatencySummary {
+    pub sessions_scanned: u32,
+    pub routes: Vec<RouteLatencySummary>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 #[ts(tag = "kind", rename_all = "camelCase")]
@@ -343,6 +365,8 @@ fn generated_bindings() -> String {
         VideoFrameAcceptance::decl(&config),
         SecretStatus::decl(&config),
         DiagnosticsExportResult::decl(&config),
+        DiagnosticsLatencySummary::decl(&config),
+        RouteLatencySummary::decl(&config),
         StartupState::decl(&config),
         crate::migrate::LegacyMigrationStatus::decl(&config),
         crate::migrate::LegacySessionImport::decl(&config),

@@ -12,6 +12,10 @@ export type SecretStatus = { reference: string, configured: boolean, };
 
 export type DiagnosticsExportResult = { exported: boolean, };
 
+export type DiagnosticsLatencySummary = { sessionsScanned: number, routes: Array<RouteLatencySummary>, };
+
+export type RouteLatencySummary = { routeId: string, routeLabel: string, samples: number, p50Ms: number | null, p95Ms: number | null, ingressDroppedTotal: number, };
+
 export type StartupState = { "kind": "ready" } | { "kind": "migrated" } | { "kind": "recoverable", error: PublicError, } | { "kind": "invalid", error: PublicError, };
 
 export type LegacyMigrationStatus = { applied: boolean, reenterSecrets: boolean, omitted: Array<string>, };
