@@ -146,11 +146,20 @@ impl SpeechSegmenter for UtteranceSegmenter {
 // 测试注意：任何依赖 Silero 行为（或能量行为）的测试必须持 `factory_test_support`
 // 的 AI_VOICE_VAD 测试锁；无锁读者与 set_var 并发在部分平台是数据竞争。
 pub fn default_segmenter() -> Box<dyn SpeechSegmenter> {
+    default_segmenter_with(crate::audio::vad::VadSegmenter::new)
+}
+
+/// `loader` 仅测试注入：模拟 Silero 模型加载失败，钉住降级路径。
+/// 生产语义与 `default_segmenter` 完全一致。
+fn default_segmenter_with(
+    loader: impl FnOnce()
+        -> Result<crate::audio::vad::VadSegmenter, Box<dyn std::error::Error + Send + Sync>>,
+) -> Box<dyn SpeechSegmenter> {
     if std::env::var("AI_VOICE_VAD").as_deref() == Ok("off") {
         tracing::warn!("AI_VOICE_VAD=off：Silero VAD 被关闭，已降级为能量门限分段");
         return Box::new(UtteranceSegmenter::default());
     }
-    match crate::audio::vad::VadSegmenter::new() {
+    match loader() {
         Ok(vad) => Box::new(attach_smart_turn(vad)),
         Err(error) => {
             tracing::warn!(%error, "Silero VAD 不可用（模型加载失败），已降级为能量门限分段");
@@ -351,5 +360,49 @@ mod tests {
             path.display()
         );
         assert!(path.exists(), "模型文件必须存在：{}", path.display());
+    }
+
+    /// 日志捕获替身：MakeWriter 写入共享缓冲，验证降级告警确实被打出。
+    #[derive(Clone)]
+    struct SharedBuf(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    struct SharedBufWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedBuf {
+        type Writer = SharedBufWriter;
+        fn make_writer(&'a self) -> Self::Writer {
+            SharedBufWriter(self.0.clone())
+        }
+    }
+    impl std::io::Write for SharedBufWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn factory_downgrades_to_energy_with_warn_when_silero_load_fails() {
+        let _guard = factory_test_support::lock();
+        unsafe { std::env::remove_var("AI_VOICE_VAD") };
+        let buffer = SharedBuf(std::sync::Arc::new(std::sync::Mutex::new(Vec::new())));
+        let subscriber = tracing_subscriber::fmt::Subscriber::builder()
+            .with_max_level(tracing::Level::WARN)
+            .with_writer(buffer.clone())
+            .with_ansi(false)
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            let s = super::default_segmenter_with(|| Err("注入的模型加载失败".into()));
+            assert!(
+                s.as_any().downcast_ref::<UtteranceSegmenter>().is_some(),
+                "Silero 加载失败必须降级为能量门限实现"
+            );
+        });
+        let logs = String::from_utf8(buffer.0.lock().unwrap().clone()).unwrap();
+        assert!(
+            logs.contains("已降级为能量门限分段"),
+            "必须打降级 warn 告警，实际日志：{logs}"
+        );
     }
 }
