@@ -3,7 +3,7 @@ import { Bot, Camera, ChevronDown, Copy, FileText, Globe, Hand, MessageSquare, M
 
 import * as api from "../../api/commands";
 import "../../styles/workspace.css";
-import { MicStreamer, type MicStreamCallbacks, type MicStreamController } from "./mic-recorder";
+import type { MicStreamCallbacks, MicStreamController } from "./mic-recorder";
 import {
   WebAudioPlayer,
   audioDiagnostics,
@@ -11,7 +11,8 @@ import {
   decodePcm16Base64,
   resolveWebAudioSinkId,
 } from "./web-audio-player";
-import { VideoSharer, type VideoShareKind, type VideoSharerCallbacks, type VideoSharerController } from "./video-sharer";
+import type { VideoShareKind, VideoSharerCallbacks, VideoSharerController } from "./video-sharer";
+import { defaultCreateMicStreamer, defaultCreateVideoSharer } from "./media-factories";
 import { PreflightIssues } from "./preflight-issues";
 import {
   ACTIVE_PHASES,
@@ -88,13 +89,6 @@ export interface WorkspaceSessionProps {
   ) => VideoSharerController;
 }
 
-function defaultCreateMicStreamer(
-  callbacks: MicStreamCallbacks,
-  sharedContext?: AudioContext,
-): MicStreamController {
-  return new MicStreamer(callbacks, sharedContext);
-}
-
 interface LocalSessionAudioEvent {
   seq: number;
   pcmBase64: string;
@@ -104,13 +98,6 @@ interface LocalSessionAudioEvent {
 interface LocalSessionPlaybackControlEvent {
   seq: number;
   action: "clear";
-}
-
-function defaultCreateVideoSharer(
-  kind: VideoShareKind,
-  callbacks: VideoSharerCallbacks,
-): VideoSharerController {
-  return new VideoSharer(kind, callbacks);
 }
 
 async function defaultFinalizeUtterance(text: string) {
