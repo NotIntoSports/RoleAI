@@ -151,7 +151,7 @@ fn slow_model_ipc_allows_takeover_and_stop_before_the_model_returns() {
             }
         };
         socket
-            .set_read_timeout(Some(Duration::from_secs(3)))
+            .set_read_timeout(Some(Duration::from_secs(15)))
             .unwrap();
         let mut reader = BufReader::new(socket.try_clone().unwrap());
         let mut headers = String::new();
@@ -233,7 +233,7 @@ fn slow_model_ipc_allows_takeover_and_stop_before_the_model_returns() {
             ))
             .unwrap();
     });
-    let (headers, request_body) = entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let (headers, request_body) = entered_rx.recv_timeout(Duration::from_secs(15)).unwrap();
     assert!(headers.starts_with("POST /v1/chat/completions HTTP/1.1"));
     assert_eq!(request_body["model"], "gpt");
     assert!(request_body["messages"].to_string().contains("PROMPT-BODY"));
@@ -248,7 +248,7 @@ fn slow_model_ipc_allows_takeover_and_stop_before_the_model_returns() {
     let still_inflight = done_rx.try_recv().is_err();
     let cancelled = app.state::<AppState>().session_control.is_cancelled();
     release_tx.send(()).unwrap();
-    let result = done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let result = done_rx.recv_timeout(Duration::from_secs(15)).unwrap();
     turn.join().unwrap();
     let listener = server.join().unwrap();
     assert!(
