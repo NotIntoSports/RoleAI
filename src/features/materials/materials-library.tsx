@@ -2,11 +2,10 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 import { ChevronDown, FileText, FolderOpen, RefreshCw, Search, Trash2, Upload } from "lucide-react";
 
 import * as api from "../../api/commands";
+import { EmptyState } from "../../components/empty-state";
+import { errorNoticeText as errorText } from "../../components/error-notice";
 import type { CommandResult, MaterialSearchHit, MaterialSummary } from "../../generated/bindings";
 import "../../styles/library.css";
-
-const errorText = (error: { code: string; message: string; field?: string | null }) =>
-  `${error.field ? error.field + "：" : ""}${error.code}：${error.message}`;
 
 const materialStatus: Record<string, string> = {
   text_ready: "文本就绪",
@@ -160,7 +159,7 @@ export function MaterialsLibrary({ selectPath }: MaterialsLibraryProps) {
             <h3 id="material-results-heading">检索结果</h3>
             <span className="muted">{hits.length} 个片段</span>
           </div>
-          {hits.length === 0 && <p className="empty-state">未找到匹配内容，试试其他关键词。</p>}
+          {hits.length === 0 && <EmptyState title="未找到匹配内容，试试其他关键词。" />}
           {hits.map((item) => (
             <article className="library-search-hit" key={item.chunkId}>
               <div className="library-hit-source">
@@ -176,11 +175,12 @@ export function MaterialsLibrary({ selectPath }: MaterialsLibraryProps) {
       )}
       <div className="library-rows" aria-label="已导入资料" aria-busy={busy}>
         {loaded && items.length === 0 && (
-          <div className="empty-state library-empty">
-            <FolderOpen size={28} aria-hidden="true" />
-            <p>还没有资料。</p>
-            <span className="muted">导入本地文件，让助手参考你的资料回答。</span>
-          </div>
+          <EmptyState
+            className="library-empty"
+            icon={<FolderOpen size={28} aria-hidden="true" />}
+            title="还没有资料。"
+            hint="导入本地文件，让助手参考你的资料回答。"
+          />
         )}
         {items.map((item) => (
           <article className="library-row" key={item.id} aria-label={item.fileName}>

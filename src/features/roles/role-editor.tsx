@@ -1,10 +1,9 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 
 import * as api from "../../api/commands";
+import { EmptyState } from "../../components/empty-state";
+import { errorNoticeText as errorText } from "../../components/error-notice";
 import type { CommandResult, PublicConfig, RoleProfileConfig } from "../../generated/bindings";
-
-const errorText = (error: { code: string; message: string; field?: string | null }) =>
-  `${error.field ? error.field + "：" : ""}${error.code}：${error.message}`;
 
 const emptyRole = {
   id: "",
@@ -131,7 +130,7 @@ export function RoleEditor() {
         </form>
         <div className="service-list configuration-list">
           <h3>已有角色 <span className="configuration-count">{profiles.length}</span></h3>
-          {profiles.length === 0 && <p className="empty-state">还没有角色。</p>}
+          {profiles.length === 0 && <EmptyState title="还没有角色。" />}
           {profiles.map((item) => (
             <RoleCard
               key={item.id}
