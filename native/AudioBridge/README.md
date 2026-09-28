@@ -18,6 +18,12 @@ Tauri 将发布的 EXE 放入 `audio-bridge/AudioBridge.exe`。不得提交约 1
 - `--play-pcm <endpoint ID> <sample rate>`：从 stdin 读取 16-bit 单声道 PCM；
   最多 16 MiB，8–48 kHz，只输出到指定设备。不选择系统默认设备，不落盘。
   完成后退出 0；失败退出非零。调用方取消/超时会终止本次播放进程。
+- `--play-stream <endpoint ID> <sample rate>`：常驻流式播放（实时语音会话用）。
+  stdin 帧协议 `[u32 kind LE][u32 len LE][payload]`，kind：1=音频（16-bit 单声道 PCM）、
+  2=clear（清空缓冲立即静音，用于打断）、3=drain（缓冲播净后回执）。stdout 输出
+  `playback` 事件行：`started`（设备已打开，会话开始即发）、`cleared`、`drained`、
+  `overflow`（在途缓冲超 60s 被清）。设备在启动时即打开并持续输出静音，把 WASAPI
+  激活成本移出首响延迟；缓冲预热 120ms 后开始出声。stdin EOF 把残余播净后退出 0。
 - `--monitor-input <capture endpoint ID> <render endpoint ID>`：人工接管期间把已保存的物理麦克风送入虚拟声卡渲染端；缓冲上限两秒，停止/异常时由主程序终止并恢复原线路。
 
 工作台默认仅文字。会议语音应选择虚拟声卡渲染端（如 CABLE Input），并在会议软件中
