@@ -1,5 +1,5 @@
-import { Fragment, useCallback, useEffect, useRef, useState } from "react";
-import { Bot, Camera, ChevronDown, Copy, FileText, Globe, Hand, MessageSquare, Mic, MicOff, Pause, Play, Plus, RotateCcw, ScreenShare, Send, Square, Volume2, Wrench, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Camera, Mic, MicOff, Pause, Play, Plus, ScreenShare, Send, Square, X } from "lucide-react";
 
 import * as api from "../../api/commands";
 import "../../styles/workspace.css";
@@ -19,12 +19,14 @@ import {
   ACTIVE_PHASES,
   BAR_FACTORS,
   RATE_LIMIT_HINT,
-  clockOf,
   errorText,
   formatDuration,
   humanizeRemoteError,
   roleScenario,
 } from "./workspace-format";
+import { SessionToolbar } from "./session-toolbar";
+import { TranscriptPanel } from "./transcript-panel";
+import { AgentToolsPanel } from "./agent-tools-panel";
 import type {
   RuntimeStatus,
   PreflightIssue,
@@ -37,35 +39,9 @@ import type {
   VirtualAudioPreparation,
 } from "../../generated/bindings";
 
-const MEETING_NAMES: Record<string, string> = {
-  "teams.exe": "Microsoft Teams", "ms-teams.exe": "Microsoft Teams",
-  "wemeetapp.exe": "腾讯会议", "feishu.exe": "飞书", "lark.exe": "Lark",
-  "dingtalk.exe": "钉钉", "zoom.exe": "Zoom",
-};
-
 const PREPARATION_PHASES: Record<string, string> = {
   checking: "检测安装环境", downloading: "下载安装包", verifying: "校验安装包和签名",
   authorizing: "等待 Windows 管理员授权", installing: "安装驱动", rechecking: "重新检测音频端点",
-};
-
-const PHASE_LABELS: Record<string, string> = {
-  idle: "未开始",
-  preparing: "准备中",
-  listening: "聆听中",
-  thinking: "思考中",
-  speaking: "回复中",
-  stopping: "停止中",
-  recovering: "恢复中",
-  blocked: "需要处理",
-  completed: "已结束",
-  failed: "会话异常",
-};
-
-const MODE_LABELS: Record<string, string> = {
-  ai_active: "AI 应答",
-  operator_speaking: "人工接管",
-  paused: "已暂停",
-  muted: "已静音",
 };
 
 export type SessionListen = <T>(
@@ -310,8 +286,6 @@ export function WorkspaceSession({
     sessionIdRef.current = sessionId;
   }, [sessionId]);
 
-  const conversationRef = useRef<HTMLDivElement | null>(null);
-  const conversationBottomRef = useRef<HTMLDivElement | null>(null);
   // 事件文本是本轮的前缀快照（上限 4000 字符）而库里是全文，因此用前缀比较识别
   // “列表最后一轮就是当前显示轮”，避免刷新落地前的窗口期里同一轮出现两次。
   const lastTurn = turns.at(-1);
@@ -319,13 +293,6 @@ export function WorkspaceSession({
     && (transcript === "" || lastTurn.userText.startsWith(transcript))
     && (reply === "" || lastTurn.assistantText.startsWith(reply));
   const historyTurns = lastTurnIsLive ? turns.slice(0, -1) : turns;
-  useEffect(() => {
-    const container = conversationRef.current;
-    const bottom = conversationBottomRef.current;
-    if (!container || !bottom) return;
-    const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 400;
-    if (nearBottom && typeof bottom.scrollIntoView === "function") bottom.scrollIntoView({ block: "end" });
-  }, [turns.length, transcript, reply]);
 
   useEffect(() => {
     void (async () => {
@@ -562,70 +529,44 @@ export function WorkspaceSession({
 
   return (
     <section className="workspace-session" aria-labelledby="workspace-session-heading">
-      <header className="session-toolbar">
-        <div className="session-toolbar-meta">
-          <h2 id="workspace-session-heading">当前会话</h2>
-          {config && <label className="session-role">角色<select disabled={busy || active} value={roleProfileId} onChange={(event) => { const next = event.target.value; setRoleProfileId(next); setAllowWebSearch(roleScenario(config, next) === "meetingAssistant"); }}>
-              <option value="">请选择角色</option>
-              {config.roleProfiles.filter((role) => role.configVersion > 0).map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}
-            </select></label>}
-          <span className="status-badge" data-active={active}>
-            {PHASE_LABELS[phase] ?? phase}
-          </span>
-          {realtimeStatus === "reconnecting" && <span className="status-badge" data-active={active}>语音重连中…</span>}
-          {realtimeStatus === "failed" && <span className="status-badge" data-active={false}>语音连接失败</span>}
-          <span className="session-mode">{MODE_LABELS[mode] ?? mode}</span>
-        </div>
-        <div className="session-config-heading">
-          <span className="session-config-summary">{inputSource === "meeting" ? "会议音频" : "本机麦克风"} · {config?.speech.voiceRoutes.find((route) => route.id === voiceRouteId)?.name ?? "尚未选择语音线路"}</span>
-          <button type="button" className="button-ghost" aria-expanded={configurationOpen} aria-controls="session-configuration" onClick={() => setConfigurationOpen((open) => !open)}><Wrench size={15} aria-hidden="true" />会话配置<ChevronDown size={14} aria-hidden="true" /></button>
-        </div>
-        <div id="session-configuration" className="session-configuration" hidden={!configurationOpen}>
-          {!config && <p className="muted">尚未读取到会话配置，请到“服务”和“设置”检查线路与角色。</p>}
-          {config && <fieldset disabled={busy || active} className="session-selection">
-            <legend>本场会话配置</legend>
-            <label>输入来源<select value={inputSource} onChange={(event) => { setInputSource(event.target.value); if (event.target.value === "meeting") { void refreshMeetings(); void refreshVirtualAudio(); } }}>
-              <option value="mic">本机麦克风</option><option value="meeting">会议音频</option>
-            </select></label>
-            {inputSource === "mic" && <small>不用会议或直播：直接对麦克风说话，检测到停顿自动提交给角色；AI 播报时自动抑制回声。{micActive ? "麦克风已开启。" : ""}</small>}
-            {inputSource === "meeting" && <>
-              <label>会议进程<select value={meetingPid} onChange={(event) => setMeetingPid(event.target.value)}>
-                <option value="">请选择会议进程</option>
-                {meetingProcesses.map((process) => <option key={process.pid} value={process.pid}>{MEETING_NAMES[process.name.toLowerCase()] ?? process.name} · {process.title} · {process.pid}</option>)}
-              </select></label>
-              <button type="button" onClick={() => void refreshMeetings()}>刷新会议进程</button>
-              <small>仅采集所选会议的音频，不采集屏幕。请告知参会者 AI 参与和转写；检测停顿后自动提交完整语句。</small>
-              {selectedRoleScenario === "meetingAssistant" && <small>会议助手普通讨论只转写；被点名，或按 Ctrl+Alt+A 时才回答。</small>}
-              {virtualAudio?.state === "missing" && <div className="preflight-card" role="alert">
-                <span>检测到缺少虚拟声卡，是否安装并自动配置？</span>
-                <button type="button" disabled={installingAudio || audioRetryBlocked} onClick={() => void installVirtualAudio()}>{installingAudio ? "正在安装…" : "是，自动安装"}</button>
-              </div>}
-              {installingAudio && <p role="status">{PREPARATION_PHASES[audioPreparationPhase]}… 请勿重复启动安装。</p>}
-              {audioAttempted && !installingAudio && !virtualAudio?.installed && <small>最近安装步骤：{PREPARATION_PHASES[audioPreparationPhase]}。{audioRetryBlocked ? "请先重新检测，确认没有仍在运行的安装任务。" : "失败说明见页面提示；再次安装前会重新检查驱动状态。"}</small>}
-              {!installingAudio && virtualAudio && !virtualAudio.installed && !["missing", "reboot_required"].includes(virtualAudio.state) && <div className="preflight-card" role="alert">{virtualAudio.detail}</div>}
-              <button type="button" disabled={installingAudio} onClick={() => void refreshVirtualAudio()}>重新检测虚拟声卡</button>
-              {virtualAudio?.rebootRequired && <div className="preflight-card" role="alert">虚拟声卡驱动已安装，需要重启 Windows 后继续。软件不会自动重启电脑。</div>}
-              {virtualAudio?.installed && <small>虚拟声卡端点已就绪，将自动绑定音频线路；尚不代表会议对方已能听到声音。</small>}
-            </>}
-            {inputSource !== "meeting" && <><label>语音输出<select value={outputDeviceId} onChange={(event) => setOutputDeviceId(event.target.value)}>
-              <option value="">系统默认输出</option>
-              {audioOutputs.map((device) => <option key={device.id} value={device.id}>{device.name}</option>)}
-            </select></label>
-            <button type="button" onClick={() => void refreshAudioOutputs()}>刷新音频设备</button>
-              <small>本机麦克风使用 WebView 全双工播放和浏览器回声消除；所选输出同时作为原生兜底设备。</small>
-            </>}
-
-            <label>语音线路<select value={voiceRouteId} onChange={(event) => setVoiceRouteId(event.target.value)}>
-              <option value="">请选择语音线路</option>
-              {config.speech.voiceRoutes.filter((route) => route.configVersion > 0).map((route) => <option key={route.id} value={route.id}>{route.name} · {route.llmModelId ?? route.e2eModelId}</option>)}
-            </select></label>
-            <label><input type="checkbox" disabled={!canSearch} checked={allowWebSearch && canSearch} onChange={(event) => setAllowWebSearch(event.target.checked)} />允许本场联网搜索（可能产生费用）</label>
-            {!canSearch && <small>联网问答：端到端线路需 DashScope Qwen3.8-Omni 系模型；级联线路需在模型供应商设置中选择支持的搜索协议。</small>}
-            <label><input type="checkbox" disabled={busy || active} checked={allowBargeIn} onChange={(event) => setAllowBargeIn(event.target.checked)} />允许语音打断（说话即可停止 AI 播报）</label>
-            <small>采集会议音频的会话会自动关闭打断；本机麦克风会话随时生效。</small>
-          </fieldset>}
-        </div>
-      </header>
+      <SessionToolbar
+        config={config}
+        busy={busy}
+        active={active}
+        phase={phase}
+        mode={mode}
+        realtimeStatus={realtimeStatus}
+        roleProfileId={roleProfileId}
+        setRoleProfileId={setRoleProfileId}
+        setAllowWebSearch={setAllowWebSearch}
+        inputSource={inputSource}
+        setInputSource={setInputSource}
+        voiceRouteId={voiceRouteId}
+        setVoiceRouteId={setVoiceRouteId}
+        configurationOpen={configurationOpen}
+        setConfigurationOpen={setConfigurationOpen}
+        refreshMeetings={refreshMeetings}
+        refreshVirtualAudio={refreshVirtualAudio}
+        micActive={micActive}
+        meetingPid={meetingPid}
+        setMeetingPid={setMeetingPid}
+        meetingProcesses={meetingProcesses}
+        selectedRoleScenario={selectedRoleScenario}
+        virtualAudio={virtualAudio}
+        installingAudio={installingAudio}
+        audioRetryBlocked={audioRetryBlocked}
+        audioPreparationPhase={audioPreparationPhase}
+        installVirtualAudio={installVirtualAudio}
+        audioAttempted={audioAttempted}
+        outputDeviceId={outputDeviceId}
+        setOutputDeviceId={setOutputDeviceId}
+        audioOutputs={audioOutputs}
+        refreshAudioOutputs={refreshAudioOutputs}
+        canSearch={canSearch}
+        allowWebSearch={allowWebSearch}
+        allowBargeIn={allowBargeIn}
+        setAllowBargeIn={setAllowBargeIn}
+      />
       <PreflightIssues issues={issues} />
       {webDegraded && <p className="services-message">联网搜索未成功，本次回答未联网，请勿作为最新信息使用。</p>}
       {webSources.length > 0 && <aside className="services-message" aria-label="联网来源">
@@ -637,77 +578,26 @@ export function WorkspaceSession({
           {message}
         </p>
       )}
-      <div className="session-conversation" role="region" aria-label="会话对话" tabIndex={0} ref={conversationRef}>
-        {!transcript && !reply && turns.length === 0 ? (
-          <div className="session-welcome">
-            <span className="session-welcome-icon"><MessageSquare size={25} strokeWidth={1.5} aria-hidden="true" /></span>
-            <span className="session-welcome-eyebrow">ROLEAI · 你的对话助手</span>
-            <h3>{active ? "正在等待你的输入" : "开始一段新对话"}</h3>
-            <p>{active ? "开口说出问题，停顿后自动提交。" : "点击「开始会话」，与 RoleAI 交流。"}</p>
-            <p>{config?.roleProfiles.find((role) => role.id === roleProfileId)?.name ?? "选择一个角色，让对话从这里开始"}</p>
-            {!active && <button className="button-ghost" type="button" onClick={() => {
-              setConfigurationOpen(true);
-              requestAnimationFrame(() => document.getElementById("session-configuration")?.querySelector<HTMLElement>("select, input, button")?.focus());
-            }}>调整会话配置</button>}
-          </div>
-        ) : (
-          <div className="session-turn">
-            {historyTurns.map((item) => (
-              <Fragment key={item.id}>
-                {item.userText && (
-                  <article className="session-bubble session-bubble-user" aria-label={`用户转写 · 第 ${item.turnIndex + 1} 轮`}>
-                    <p>{item.userText}</p>
-                  </article>
-                )}
-                {item.assistantText && (
-                  <article className="session-bubble session-bubble-assistant" aria-label={`AI 回复 · 第 ${item.turnIndex + 1} 轮`}>
-                    <header className="bubble-head">
-                      <span className="bubble-avatar" aria-hidden="true"><Bot size={15} /></span>
-                      <h3>{roleName}</h3>
-                      {clockOf(item.createdAt) && <time className="bubble-time">{clockOf(item.createdAt)}</time>}
-                      <button type="button" className="bubble-copy" aria-label={`复制第 ${item.turnIndex + 1} 轮回复`} onClick={() => copyText(item.assistantText)}>
-                        <Copy size={13} aria-hidden="true" />
-                      </button>
-                    </header>
-                    <p>{item.assistantText}</p>
-                  </article>
-                )}
-              </Fragment>
-            ))}
-            {historyTurns.length > 0 && <p className="session-turn-label">当前轮</p>}
-            {transcript && (
-              <article className="session-bubble session-bubble-user session-bubble-live" aria-label="用户转写">
-                <p>{transcript}</p>
-              </article>
-            )}
-            {reply && (
-              <article className="session-bubble session-bubble-assistant session-bubble-live" aria-label="AI 回复">
-                <header className="bubble-head">
-                  <span className="bubble-avatar" aria-hidden="true"><Bot size={15} /></span>
-                  <h3>{roleName}</h3>
-                </header>
-                <p>{reply}</p>
-              </article>
-            )}
-            {pendingConfirmation && (
-              <form className="candidate-confirmation" onSubmit={confirmCandidateAnswer}>
-                <label htmlFor="candidate-confirmation-text">确认播报内容</label>
-                <textarea
-                  id="candidate-confirmation-text"
-                  value={confirmationText}
-                  onChange={(event) => setConfirmationText(event.target.value)}
-                />
-                <p>求职者模式不会自动播报。请核对或编辑后再确认。</p>
-                <button className="button-primary" disabled={busy || !active || !confirmationText.trim()} type="submit">
-                  <Volume2 size={15} aria-hidden="true" />确认并播报
-                </button>
-              </form>
-            )}
-          </div>
-        )}
-        {unusedMaterials && <p className="session-materials-note">本轮未使用资料</p>}
-        <div ref={conversationBottomRef} aria-hidden="true" />
-      </div>
+      <TranscriptPanel
+        transcript={transcript}
+        reply={reply}
+        turns={turns}
+        historyTurns={historyTurns}
+        roleName={roleName}
+        welcomeRoleName={config?.roleProfiles.find((role) => role.id === roleProfileId)?.name ?? "选择一个角色，让对话从这里开始"}
+        active={active}
+        pendingConfirmation={pendingConfirmation}
+        confirmationText={confirmationText}
+        onConfirmationTextChange={setConfirmationText}
+        onConfirmCandidate={confirmCandidateAnswer}
+        busy={busy}
+        unusedMaterials={unusedMaterials}
+        onCopy={copyText}
+        onAdjustConfiguration={() => {
+          setConfigurationOpen(true);
+          requestAnimationFrame(() => document.getElementById("session-configuration")?.querySelector<HTMLElement>("select, input, button")?.focus());
+        }}
+      />
       <div className="session-footer">
         <div className="session-footer-status">
           {showBargeHint && (
@@ -751,70 +641,23 @@ export function WorkspaceSession({
                 <summary className="composer-icon-button" aria-label="更多操作">
                   <Plus size={18} aria-hidden="true" />
                 </summary>
-                <div className="composer-more-panel" role="region" aria-label="会话工具">
-                  <p className="composer-more-title">工具调用</p>
-                  <label className="composer-switch">
-                    <span><Globe size={14} aria-hidden="true" />联网搜索</span>
-                    <input
-                      type="checkbox"
-                      role="switch"
-                      aria-label="联网搜索"
-                      disabled={active || !canSearch}
-                      checked={allowWebSearch && canSearch}
-                      onChange={(event) => setAllowWebSearch(event.target.checked)}
-                    />
-                  </label>
-                  <p className="composer-more-title">通话控制</p>
-                  <div className="composer-more-actions">
-                    {active && (
-                      <button className="button-primary" disabled type="button">
-                        <Play size={14} aria-hidden="true" />开始会话
-                      </button>
-                    )}
-                    <button disabled={!active} type="button" onClick={() => void stop()}>
-                      <Square size={14} aria-hidden="true" />停止
-                    </button>
-                    <button disabled={!active} type="button" onClick={() => void setModeName("operator_speaking")}>
-                      <Hand size={14} aria-hidden="true" />接管
-                    </button>
-                    <button
-                      disabled={!active}
-                      type="button"
-                      onPointerDown={() => void setModeName("operator_speaking")}
-                      onPointerUp={() => void setModeName("ai_active")}
-                      onPointerCancel={() => void setModeName("ai_active")}
-                      onKeyDown={(event) => { if (event.key === " " || event.key === "Enter") void setModeName("operator_speaking"); }}
-                      onKeyUp={(event) => { if (event.key === " " || event.key === "Enter") void setModeName("ai_active"); }}
-                    >
-                      <Volume2 size={14} aria-hidden="true" />按住人工发言
-                    </button>
-                    <button disabled={busy || !active} type="button" onClick={() => void setModeName("ai_active")}>
-                      <Bot size={14} aria-hidden="true" />恢复 AI
-                    </button>
-                    <button disabled={busy || !active} type="button" onClick={() => void setModeName("muted")}>
-                      <MicOff size={14} aria-hidden="true" />静音
-                    </button>
-                  </div>
-                  <p className="composer-more-title">内容工具</p>
-                  <form className="service-form session-tool-form" onSubmit={submitSay}>
-                    <label htmlFor="session-say">朗读文本</label>
-                    <div className="session-tool-row">
-                      <input id="session-say" value={sayText} onChange={(event) => setSayText(event.target.value)} placeholder="输入需要 AI 朗读的文本" />
-                      <button disabled={busy || !active} type="submit"><Volume2 size={15} aria-hidden="true" />朗读</button>
-                    </div>
-                  </form>
-                  <form className="service-form session-tool-form" onSubmit={(event) => { event.preventDefault(); void submitCorrect(); }}>
-                    <label htmlFor="session-correct">纠正内容</label>
-                    <div className="session-tool-row">
-                      <input id="session-correct" value={correctText} onChange={(event) => setCorrectText(event.target.value)} placeholder="输入修正后的回答" />
-                      <button disabled={busy || !active} type="submit">纠正</button>
-                    </div>
-                  </form>
-                  <div className="composer-more-actions">
-                    <button disabled={busy || !active} type="button" onClick={() => void submitRetry()}><RotateCcw size={15} aria-hidden="true" />重试</button>
-                    <button disabled={busy || !active} type="button" onClick={() => void submitReport()}><FileText size={15} aria-hidden="true" />报告</button>
-                  </div>
-                </div>
+                <AgentToolsPanel
+                  allowWebSearch={allowWebSearch}
+                  canSearch={canSearch}
+                  setAllowWebSearch={setAllowWebSearch}
+                  active={active}
+                  busy={busy}
+                  onStop={() => void stop()}
+                  onSetMode={(next) => void setModeName(next)}
+                  onSaySubmit={submitSay}
+                  sayText={sayText}
+                  setSayText={setSayText}
+                  onCorrectSubmit={() => void submitCorrect()}
+                  correctText={correctText}
+                  setCorrectText={setCorrectText}
+                  onRetry={() => void submitRetry()}
+                  onReport={() => void submitReport()}
+                />
               </details>
               <span className="composer-role-chip" title={`当前角色：${roleName}`}>
                 <span className="composer-role-dot" aria-hidden="true" />{roleName}
