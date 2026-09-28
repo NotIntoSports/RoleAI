@@ -1667,6 +1667,11 @@ mod pump_tests {
         // 该标志必然错过；drain 调用数才是稳定的观察点。
         drain_calls: std::sync::atomic::AtomicU32,
         ping_calls: std::sync::atomic::AtomicU32,
+        clear_calls: std::sync::atomic::AtomicU32,
+        // sidecar 死亡模拟：首写成功后即宣告死亡，用于钉住
+        // 「死亡时闸门不得永久关闭」的重开路径。
+        dead: std::sync::atomic::AtomicBool,
+        die_after_first_write: std::sync::atomic::AtomicBool,
     }
 
     impl Default for GatedSink {
@@ -1678,6 +1683,9 @@ mod pump_tests {
                 fail_writes: std::sync::atomic::AtomicBool::new(false),
                 drain_calls: std::sync::atomic::AtomicU32::new(0),
                 ping_calls: std::sync::atomic::AtomicU32::new(0),
+                clear_calls: std::sync::atomic::AtomicU32::new(0),
+                dead: std::sync::atomic::AtomicBool::new(false),
+                die_after_first_write: std::sync::atomic::AtomicBool::new(false),
             }
         }
     }
@@ -1691,9 +1699,13 @@ mod pump_tests {
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
                 .extend_from_slice(pcm);
+            if self.die_after_first_write.load(Ordering::SeqCst) {
+                self.dead.store(true, Ordering::SeqCst);
+            }
             Ok(())
         }
         fn clear(&self) -> Result<(), &'static str> {
+            self.clear_calls.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
         fn drain(&self) -> Result<(), &'static str> {
@@ -1710,6 +1722,9 @@ mod pump_tests {
         }
         fn take_drained(&self) -> bool {
             self.drained.swap(false, Ordering::SeqCst)
+        }
+        fn is_alive(&self) -> bool {
+            !self.dead.load(Ordering::SeqCst)
         }
     }
 
@@ -2787,5 +2802,220 @@ mod pump_tests {
             "echo user text must not persist at done"
         );
         drop(fixture.pump);
+    }
+
+    /// 重连边界：断连处理必须清空设备缓冲（掐断回声源）并立即恢复上行，
+    /// 不得等播净回执或 1.5s 兜底尾窗（播净回执在 stall_drain 下永不到达）。
+    #[test]
+    fn reconnecting_clears_playback_and_reopens_uplink() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let session = RealtimeSession::start_with_profile(
+            RealtimeCapabilityProfile::openai_compatible(realtime_dialect(
+                "http://127.0.0.1/api-ws/v1/realtime",
+            )),
+            RealtimeSessionConfig {
+                endpoint: ProviderEndpoint {
+                    provider_id: "test".into(),
+                    base_url: format!("http://127.0.0.1:{port}/api-ws/v1/realtime"),
+                },
+                credential: None,
+                model_id: "qwen3.8-omni-flash-realtime".into(),
+                voice: String::new(),
+                instructions: "测试".into(),
+                history: vec![],
+                auto_respond: true,
+                enable_search: false,
+            },
+        )
+        .unwrap();
+        let (tap_tx, tap_rx) = mpsc::sync_channel::<Vec<u8>>(64);
+        let sink = Arc::new(GatedSink::default());
+        sink.stall_drain.store(true, Ordering::SeqCst);
+        let pump = RealtimePump::start(
+            session,
+            tap_rx,
+            Arc::clone(&sink) as Arc<dyn PlaybackStream>,
+            PumpConfig {
+                auto_respond: true,
+                role_name: String::new(),
+                hold_playback: false,
+                playback_mode: RealtimePlaybackMode::Native,
+                suppress_echo: None,
+            },
+            None,
+        );
+        let (_, mut ws) = accept_session(&listener);
+
+        // 播报中闸门关闭：tap 帧不得上行。
+        ws.send(Message::Text(r#"{"type":"response.created"}"#.into()))
+            .unwrap();
+        ws.send(Message::Text(
+            format!(
+                r#"{{"type":"response.audio.delta","delta":"{}"}}"#,
+                STANDARD.encode([1u8, 2])
+            )
+            .into(),
+        ))
+        .unwrap();
+        wait_for(|| !sink.written.lock().unwrap().is_empty(), "turn1 audio");
+        tap_tx.send(vec![2u8; 9600]).unwrap();
+        assert_no_frame(&mut ws, Duration::from_millis(300));
+
+        // 服务端拆连 → 重连：清空播放 + 立即开门。
+        drop(ws);
+        let (_, mut ws_reconnected) = accept_session(&listener);
+        wait_for(|| pump.shared.completed_count() >= 1, "turn1 flushed");
+        assert!(
+            sink.clear_calls.load(Ordering::SeqCst) >= 1,
+            "重连必须清空设备缓冲"
+        );
+
+        // 早发的探针帧可能落在关门瞬间被丢弃（允许的竞态），重试直到上行恢复。
+        let mut reopened = false;
+        for _ in 0..6 {
+            tap_tx.send(vec![3u8; 9600]).unwrap();
+            if let Some(frame) = try_read_frame(&mut ws_reconnected, Duration::from_millis(120)) {
+                if frame["type"] == "input_audio_buffer.append" {
+                    reopened = true;
+                    break;
+                }
+            }
+        }
+        assert!(reopened, "重连后上行必须立即恢复，不得等播净回执");
+        drop(pump);
+    }
+
+    /// 候选模式扣留上限：恰好触顶的 delta 全部扣留，超限 delta 被丢弃
+    /// （不扩大扣留缓冲），冲刷时只有上限内的部分落设备。
+    #[test]
+    fn candidate_hold_drops_deltas_beyond_rolling_cap() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let fixture = spawn_pump(port, true, "", true);
+        let (_, mut ws) = accept_session(&listener);
+
+        // 与泵内 HELD_CAP_BYTES 一致：60s@24k（48_000 B/s）。
+        // 单帧不得超过会话侧 MAX_TEXT_FRAME_BYTES（1MB，base64 后），
+        // 故用 5×576_000 字节的 delta 累计到上限。
+        const HELD_CAP_BYTES: usize = 60 * 48_000;
+        const DELTA_BYTES: usize = 576_000;
+        for _ in 0..(HELD_CAP_BYTES / DELTA_BYTES) {
+            ws.send(Message::Text(
+                format!(
+                    r#"{{"type":"response.audio.delta","delta":"{}"}}"#,
+                    STANDARD.encode(vec![5u8; DELTA_BYTES])
+                )
+                .into(),
+            ))
+            .unwrap();
+        }
+        ws.send(Message::Text(
+            format!(
+                r#"{{"type":"response.audio.delta","delta":"{}"}}"#,
+                STANDARD.encode(vec![6u8; 32])
+            )
+            .into(),
+        ))
+        .unwrap();
+        // 等六个 delta 都被泵处理完，避免 FlushHeld 抢在超限 delta 之前。
+        std::thread::sleep(Duration::from_millis(400));
+        assert!(
+            fixture.sink.written().is_empty(),
+            "候选模式不得直接出声"
+        );
+
+        fixture.pump.send(PumpCommand::FlushHeld);
+        wait_for(
+            || fixture.sink.written().len() == HELD_CAP_BYTES,
+            "flushed held audio",
+        );
+        assert_eq!(
+            fixture.sink.written(),
+            vec![5u8; HELD_CAP_BYTES],
+            "超限 delta 必须被丢弃，只有上限内的部分落设备"
+        );
+        assert_eq!(
+            fixture.sink.clears(),
+            0,
+            "超限丢弃是静默的：不得清空设备缓冲"
+        );
+        drop(fixture.pump);
+    }
+
+    /// sidecar 死亡时闸门不得永久关闭：不等播净回执（stall_drain 下永不
+    /// 到达）、不等 1.5s 兜底截止，下一圈循环立即重开上行。
+    #[test]
+    fn dead_sidecar_playback_reopens_gate_without_drained_receipt() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let session = RealtimeSession::start_with_profile(
+            RealtimeCapabilityProfile::openai_compatible(realtime_dialect(
+                "http://127.0.0.1/api-ws/v1/realtime",
+            )),
+            RealtimeSessionConfig {
+                endpoint: ProviderEndpoint {
+                    provider_id: "test".into(),
+                    base_url: format!("http://127.0.0.1:{port}/api-ws/v1/realtime"),
+                },
+                credential: None,
+                model_id: "qwen3.8-omni-flash-realtime".into(),
+                voice: String::new(),
+                instructions: "测试".into(),
+                history: vec![],
+                auto_respond: true,
+                enable_search: false,
+            },
+        )
+        .unwrap();
+        let (tap_tx, tap_rx) = mpsc::sync_channel::<Vec<u8>>(64);
+        let sink = Arc::new(GatedSink::default());
+        sink.stall_drain.store(true, Ordering::SeqCst);
+        sink.die_after_first_write.store(true, Ordering::SeqCst);
+        let pump = RealtimePump::start(
+            session,
+            tap_rx,
+            Arc::clone(&sink) as Arc<dyn PlaybackStream>,
+            PumpConfig {
+                auto_respond: true,
+                role_name: String::new(),
+                hold_playback: false,
+                playback_mode: RealtimePlaybackMode::Native,
+                suppress_echo: None,
+            },
+            None,
+        );
+        let (_, mut ws) = accept_session(&listener);
+
+        // 首次写播放后 sidecar 宣告死亡，闸门随写关闭。
+        ws.send(Message::Text(r#"{"type":"response.created"}"#.into()))
+            .unwrap();
+        ws.send(Message::Text(
+            format!(
+                r#"{{"type":"response.audio.delta","delta":"{}"}}"#,
+                STANDARD.encode([1u8, 2])
+            )
+            .into(),
+        ))
+        .unwrap();
+        wait_for(|| !sink.written.lock().unwrap().is_empty(), "audio written");
+
+        // 探针预算（7×150ms ≈ 1.05s）必须短于 1.5s 兜底截止，
+        // 保证重开只能来自 is_alive 路径。
+        let mut reopened = false;
+        for _ in 0..7 {
+            tap_tx.send(vec![3u8; 9600]).unwrap();
+            if let Some(frame) = try_read_frame(&mut ws, Duration::from_millis(150)) {
+                if frame["type"] == "input_audio_buffer.append" {
+                    reopened = true;
+                    break;
+                }
+            }
+        }
+        assert!(
+            reopened,
+            "sidecar 死亡后闸门必须立即重开，不得等播净回执或兜底截止"
+        );
+        drop(pump);
     }
 }
