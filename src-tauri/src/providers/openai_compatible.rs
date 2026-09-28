@@ -7,7 +7,7 @@ use super::{DiscoveredModel, ProviderEndpoint, ProviderError, ProviderProbe, Tex
 
 pub(crate) const MAX_RESPONSE_BYTES: u64 = 1024 * 1024;
 
-fn build_client(timeout: Duration) -> Result<Client, reqwest::Error> {
+pub(super) fn build_client(timeout: Duration) -> Result<Client, reqwest::Error> {
     Client::builder()
         .timeout(timeout)
         .connect_timeout(Duration::from_secs(5))

@@ -619,6 +619,136 @@ mod cascade_http {
             "TTS_RESPONSE_TOO_LARGE"
         );
     }
+
+    /// 按序返回多个响应（每次请求一条新连接），并捕获全部请求。
+    fn serve_seq(responses: Vec<Vec<u8>>) -> (String, Receiver<CapturedRequest>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (sender, receiver) = mpsc::channel();
+        thread::spawn(move || {
+            for response in responses {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    break;
+                };
+                let request = read_request(&mut stream);
+                let _ = stream.write_all(&response);
+                let _ = sender.send(request);
+            }
+        });
+        (format!("http://{address}/v1"), receiver)
+    }
+
+    /// accept 后只读不写：用于触发客户端读超时。
+    fn serve_hang() -> (String, Receiver<CapturedRequest>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (sender, receiver) = mpsc::channel();
+        thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let request = read_request(&mut stream);
+            let _ = sender.send(request);
+            thread::sleep(Duration::from_secs(3));
+        });
+        (format!("http://{address}/v1"), receiver)
+    }
+
+    fn chat_ok(content: &str) -> Vec<u8> {
+        response(
+            "200 OK",
+            &serde_json::to_vec(&serde_json::json!({
+                "choices": [{ "message": { "content": content } }]
+            }))
+            .unwrap(),
+            "application/json",
+            "",
+        )
+    }
+
+    fn service_unavailable() -> Vec<u8> {
+        response("503 Service Unavailable", b"{}", "application/json", "")
+    }
+
+    fn captured_count(receiver: &Receiver<CapturedRequest>, expected: usize) {
+        for _ in 0..expected {
+            assert!(
+                receiver.recv_timeout(Duration::from_secs(5)).is_ok(),
+                "fewer than {expected} requests captured"
+            );
+        }
+        assert!(
+            receiver.recv_timeout(Duration::from_millis(300)).is_err(),
+            "more requests than {expected} arrived"
+        );
+    }
+
+    /// 503 两次后 200：有界重试生效，最终成功。
+    #[test]
+    fn transient_503s_are_retried_until_success() {
+        let (url, captured) = serve_seq(vec![
+            service_unavailable(),
+            service_unavailable(),
+            chat_ok("answer"),
+        ]);
+        let adapter = OpenAiCompatibleCascade::new().unwrap();
+        let answer = adapter
+            .complete(&endpoint(url), Some("synthetic"), "m", &[])
+            .unwrap();
+        assert_eq!(answer, "answer");
+        captured_count(&captured, 3);
+    }
+
+    /// 503 三次：重试预算耗尽，返回原稳定错误码。
+    #[test]
+    fn persistent_503s_exhaust_retries_and_report_request_failed() {
+        let (url, captured) = serve_seq(vec![
+            service_unavailable(),
+            service_unavailable(),
+            service_unavailable(),
+        ]);
+        let adapter = OpenAiCompatibleCascade::new().unwrap();
+        let error = adapter
+            .complete(&endpoint(url), Some("synthetic"), "m", &[])
+            .unwrap_err();
+        assert!(
+            matches!(error, super::super::CascadeError::RequestFailed(_)),
+            "error={error:?}"
+        );
+        captured_count(&captured, 3);
+    }
+
+    /// 401 属凭据问题：一次定性，不得重试。
+    #[test]
+    fn unauthorized_is_not_retried() {
+        let (url, captured) = serve_seq(vec![response(
+            "401 Unauthorized",
+            b"{}",
+            "application/json",
+            "",
+        )]);
+        let adapter = OpenAiCompatibleCascade::new().unwrap();
+        let error = adapter
+            .complete(&endpoint(url), Some("synthetic"), "m", &[])
+            .unwrap_err();
+        assert!(matches!(error, super::super::CascadeError::Unauthorized(_)));
+        captured_count(&captured, 1);
+    }
+
+    /// 读超时一次定性：重试会成倍拉长用户等待，不得重试。
+    #[test]
+    fn timeouts_are_not_retried() {
+        let (url, captured) = serve_hang();
+        let adapter = OpenAiCompatibleCascade::with_timeout_for_tests(Duration::from_secs(1));
+        let error = adapter
+            .complete(&endpoint(url), Some("synthetic"), "m", &[])
+            .unwrap_err();
+        assert!(
+            matches!(error, super::super::CascadeError::Timeout(_)),
+            "error={error:?}"
+        );
+        captured_count(&captured, 1);
+    }
 }
 
 #[test]

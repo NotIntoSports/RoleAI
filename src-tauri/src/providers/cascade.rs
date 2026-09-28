@@ -171,6 +171,18 @@ impl OpenAiCompatibleCascade {
         })
     }
 
+    /// 测试专用：短超时客户端，用于钉住「超时不重试」路径（生产固定 30s 不变）。
+    #[cfg(test)]
+    pub(crate) fn with_timeout_for_tests(timeout: std::time::Duration) -> Self {
+        let client =
+            super::openai_compatible::build_client(timeout).expect("test client must build");
+        Self {
+            client,
+            web_capability: Default::default(),
+            last_web: Default::default(),
+        }
+    }
+
     pub fn with_web_capability(mut self, capability: super::web_search::WebCapability) -> Self {
         self.web_capability = capability;
         self
@@ -183,44 +195,78 @@ impl OpenAiCompatibleCascade {
             .clone()
     }
 
-    fn send(&self, request: CascadeHttpRequest<'_>) -> Result<Vec<u8>, CascadeError> {
+    /// 单次 HTTP 尝试的内部分类；`Connect`/`RetryableStatus` 触发有界重试，
+    /// 其余臂一次定性（不进公共错误枚举）。
+    fn send_once(&self, request: &CascadeHttpRequest<'_>) -> SendOutcome {
         let mut http = self
             .client
-            .post(request.url)
+            .post(request.url.clone())
             .header("Accept", request.accept)
             .header("Content-Type", request.content_type)
-            .body(request.body);
+            .body(request.body.clone());
         if let Some(credential) = request.credential.filter(|value| !value.is_empty()) {
             http = http.bearer_auth(credential);
         }
-        let response = http.send().map_err(|error| {
-            if error.is_timeout() {
-                CascadeError::Timeout(request.stage)
-            } else {
-                CascadeError::RequestFailed(request.stage)
+        match http.send() {
+            Ok(response) => {
+                let status = response.status();
+                if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+                    SendOutcome::Unauthorized
+                } else if matches!(status.as_u16(), 429 | 502 | 503 | 504) {
+                    SendOutcome::RetryableStatus
+                } else if !status.is_success() {
+                    SendOutcome::RequestFailed
+                } else {
+                    SendOutcome::Response(response)
+                }
             }
-        })?;
-        if response.status() == StatusCode::UNAUTHORIZED
-            || response.status() == StatusCode::FORBIDDEN
-        {
-            return Err(CascadeError::Unauthorized(request.stage));
+            Err(error) if error.is_connect() => SendOutcome::Connect,
+            Err(error) if error.is_timeout() => SendOutcome::Timeout,
+            Err(_) => SendOutcome::RequestFailed,
         }
-        if !response.status().is_success() {
-            return Err(CascadeError::RequestFailed(request.stage));
+    }
+
+    /// 瞬时失败有界重试：连接失败与 HTTP 429/502/503/504 最多重试 2 次
+    /// （间隔 300ms/900ms），最终失败仍返回原稳定错误码。超时（单次已 30 秒，
+    /// 重试会成倍拉长用户等待）、401/403、其余 4xx、响应超限与解析失败一律不重试。
+    /// 取消令牌在调用方 await/锁层生效，provider 层无 cancel 通道
+    /// （调研见 docs/dependency-decisions.md F2）。
+    fn send(&self, request: CascadeHttpRequest<'_>) -> Result<Vec<u8>, CascadeError> {
+        const RETRY_DELAYS: [std::time::Duration; 2] = [
+            std::time::Duration::from_millis(300),
+            std::time::Duration::from_millis(900),
+        ];
+        let mut attempt = 0usize;
+        loop {
+            match self.send_once(&request) {
+                SendOutcome::Response(response) => {
+                    let bytes = if request.max_bytes == JSON_BODY_LIMIT {
+                        read_bounded_body(response)
+                    } else {
+                        read_bounded_body_limited(response, request.max_bytes)
+                    }
+                    .map_err(|error| match error {
+                        BoundedBodyError::TooLarge => CascadeError::ResponseTooLarge(request.stage),
+                        BoundedBodyError::Failed => CascadeError::RequestFailed(request.stage),
+                    })?;
+                    if oversized_for_stage(bytes.len() as u64, request.stage) {
+                        return Err(CascadeError::ResponseTooLarge(request.stage));
+                    }
+                    return Ok(bytes);
+                }
+                SendOutcome::Unauthorized => return Err(CascadeError::Unauthorized(request.stage)),
+                SendOutcome::Timeout => return Err(CascadeError::Timeout(request.stage)),
+                outcome => {
+                    let retryable =
+                        matches!(outcome, SendOutcome::Connect | SendOutcome::RetryableStatus);
+                    if !retryable || attempt >= RETRY_DELAYS.len() {
+                        return Err(CascadeError::RequestFailed(request.stage));
+                    }
+                    std::thread::sleep(RETRY_DELAYS[attempt]);
+                    attempt += 1;
+                }
+            }
         }
-        let bytes = if request.max_bytes == JSON_BODY_LIMIT {
-            read_bounded_body(response)
-        } else {
-            read_bounded_body_limited(response, request.max_bytes)
-        }
-        .map_err(|error| match error {
-            BoundedBodyError::TooLarge => CascadeError::ResponseTooLarge(request.stage),
-            BoundedBodyError::Failed => CascadeError::RequestFailed(request.stage),
-        })?;
-        if oversized_for_stage(bytes.len() as u64, request.stage) {
-            return Err(CascadeError::ResponseTooLarge(request.stage));
-        }
-        Ok(bytes)
     }
 }
 
@@ -545,6 +591,16 @@ struct CascadeHttpRequest<'a> {
     body: Vec<u8>,
     stage: CascadeStage,
     max_bytes: u64,
+}
+
+/// `send_once` 的内部分类结果。
+enum SendOutcome {
+    Response(reqwest::blocking::Response),
+    Connect,
+    Timeout,
+    Unauthorized,
+    RetryableStatus,
+    RequestFailed,
 }
 
 pub(crate) fn json_body_too_large(len: u64) -> bool {
