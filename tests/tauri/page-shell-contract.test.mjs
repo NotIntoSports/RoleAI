@@ -93,6 +93,7 @@ test("security surface has zero drift since Phase 0-1 acceptance", async () => {
     "src-tauri/src/commands/sessions.rs",
     "src-tauri/src/commands/livestream.rs",
     "src-tauri/src/commands/obs.rs",
+    "src-tauri/src/commands/voice.rs",
     "src-tauri/tauri.conf.json",
     "src/api/commands.ts",
     "src/generated/bindings.ts",
