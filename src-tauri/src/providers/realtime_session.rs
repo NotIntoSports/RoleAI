@@ -42,6 +42,16 @@ const RECONNECT_BASE: Duration = Duration::from_millis(500);
 const RECONNECT_CAP: Duration = Duration::from_secs(30);
 const HISTORY_REPLAY_TURNS: usize = 8;
 
+/// 重连退避步进：建过会话（网络闪断）重置为基准，连续未建会话的失败指数递增；
+/// 等待时长永不突破 RECONNECT_CAP。纯函数以便单测钉住上限语义。
+fn next_reconnect_backoff(backoff: Duration, had_session: bool) -> Duration {
+    if had_session {
+        RECONNECT_BASE
+    } else {
+        backoff.saturating_mul(2).min(RECONNECT_CAP)
+    }
+}
+
 /// 轮次检测能力：决定"谁判说完、谁触发应答"。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TurnDetection {
@@ -353,11 +363,7 @@ fn supervise(state: Arc<SharedState>) {
                     backoff.min(RECONNECT_CAP).as_millis()
                 );
                 let _ = state.events.send(ActorEvent::Reconnecting(reason));
-                backoff = if had_session {
-                    RECONNECT_BASE
-                } else {
-                    backoff * 2
-                };
+                backoff = next_reconnect_backoff(backoff, had_session);
             }
         }
         // 指数退避等待；Shutdown 立即返回。连续未建会话的失败退避递增，
@@ -1672,5 +1678,78 @@ mod tests {
                 Err(error) => println!("{id}: request failed: {error}"),
             }
         }
+    }
+
+    /// 重连退避：未建会话指数递增且永不突破 RECONNECT_CAP；建过会话重置基准。
+    #[test]
+    fn reconnect_backoff_doubles_but_never_exceeds_cap() {
+        let mut backoff = RECONNECT_BASE;
+        let mut steps = Vec::new();
+        for _ in 0..16 {
+            steps.push(backoff);
+            backoff = next_reconnect_backoff(backoff, false);
+        }
+        assert_eq!(steps[0], Duration::from_millis(500));
+        assert_eq!(steps[5], Duration::from_secs(16));
+        assert!(
+            steps.iter().all(|step| *step <= RECONNECT_CAP),
+            "退避不得突破上限: {steps:?}"
+        );
+        // 触顶后保持上限（32s→30s 钳制），不会无限翻倍。
+        assert_eq!(*steps.last().unwrap(), RECONNECT_CAP);
+    }
+
+    #[test]
+    fn reconnect_backoff_resets_after_established_session() {
+        let capped = next_reconnect_backoff(RECONNECT_CAP, false);
+        assert_eq!(next_reconnect_backoff(capped, true), RECONNECT_BASE);
+    }
+
+    /// session.update 被服务端 error 事件拒绝：实现没有逐字段回退——
+    /// 错误原因转发给编排层（Reconnecting 事件），整条连接拆掉重连并按
+    /// 原画像重放 session.update（连接仍可用）。
+    #[test]
+    fn session_update_error_rejects_connection_and_forwards_reason_to_orchestrator() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let actor = spawn_actor(port, true, vec![]);
+
+        // 首连：读走 session.update 后直接回 error 拒绝（不给 created/updated）。
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut ws = tungstenite::accept(stream).unwrap();
+        let update: Value = serde_json::from_str(ws.read().unwrap().to_text().unwrap()).unwrap();
+        assert_eq!(update["type"], "session.update");
+        ws.send(Message::Text(
+            r#"{"type":"error","error":{"code":"SESSION_FIELD_REJECTED","message":"turn_detection not supported"}}"#
+                .into(),
+        ))
+        .unwrap();
+
+        // 错误原因必须转发给编排层，并携带服务端返回的 code。
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Reconnecting reason not forwarded"
+            );
+            match actor.recv_event(Duration::from_millis(100)) {
+                Some(ActorEvent::Reconnecting(reason)) => {
+                    assert!(
+                        reason.contains("SESSION_FIELD_REJECTED"),
+                        "reason={reason}"
+                    );
+                    break;
+                }
+                Some(_) | None => continue,
+            }
+        }
+
+        // 拒绝后连接仍可用：重连成功，画像原样重放（无逐字段回退）。
+        let (update2, _ws2) = accept_session(&listener);
+        assert_eq!(update2["session"]["turn_detection"]["type"], "server_vad");
+        wait_connected(&actor);
     }
 }
