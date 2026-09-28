@@ -4,14 +4,9 @@ import { Camera, Mic, MicOff, Pause, Play, Plus, ScreenShare, Send, Square, X } 
 import * as api from "../../api/commands";
 import "../../styles/workspace.css";
 import type { MicStreamCallbacks, MicStreamController } from "./mic-recorder";
-import {
-  WebAudioPlayer,
-  audioDiagnostics,
-  createAudioContextForOutput,
-  resolveWebAudioSinkId,
-} from "./web-audio-player";
 import { useSessionEvents } from "./use-session-events";
 import { useSessionControls } from "./use-session-controls";
+import { useSessionMedia } from "./use-session-media";
 import type { VideoShareKind, VideoSharerCallbacks, VideoSharerController } from "./video-sharer";
 import { defaultCreateMicStreamer, defaultCreateVideoSharer } from "./media-factories";
 import { PreflightIssues } from "./preflight-issues";
@@ -195,7 +190,6 @@ export function WorkspaceSession({
   const [sayText, setSayText] = useState("");
   const [correctText, setCorrectText] = useState("");
   const [chatText, setChatText] = useState("");
-  const [micLevel, setMicLevel] = useState(0);
   const [callSeconds, setCallSeconds] = useState(0);
   const [videoKind, setVideoKind] = useState<"off" | VideoShareKind>("off");
   const callStartRef = useRef<number | null>(null);
@@ -204,9 +198,6 @@ export function WorkspaceSession({
   const [reportSummary, setReportSummary] = useState("");
   const [reportDetail, setReportDetail] = useState("");
   const statusSeq = useRef(0);
-  const webAudioPlayerRef = useRef<WebAudioPlayer | null>(null);
-  // 在「开始会话」点击手势内创建并 resume，避免自动播放策略让上下文一直挂起。
-  const playbackContextRef = useRef<AudioContext | null>(null);
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef<HTMLDetailsElement | null>(null);
   useEffect(() => {
@@ -326,6 +317,18 @@ export function WorkspaceSession({
     }, 1000);
     return () => window.clearInterval(timer);
   }, [active]);
+  // modeRef 同时被媒体推流（静音门控）与自动 finalize（接管门控）读取，保持单一引用。
+  const modeRef = useRef(mode);
+  useEffect(() => { modeRef.current = mode; }, [mode]);
+  const { micActive, micLevel, playbackContextRef, webAudioPlayerRef } = useSessionMedia({
+    active,
+    inputSource,
+    outputDeviceId,
+    audioOutputs,
+    modeRef,
+    createMicStreamer,
+    setMessage,
+  });
   const roleName = config?.roleProfiles.find((role) => role.id === roleProfileId)?.name ?? "RoleAI";
   const showBargeHint = active && phase === "speaking" && allowBargeIn && mode === "ai_active";
   const selectedRoleScenario = roleScenario(config, roleProfileId);
@@ -341,67 +344,6 @@ export function WorkspaceSession({
     inputSource,
     selectedRoleScenario,
   });
-  const modeRef = useRef(mode);
-  useEffect(() => { modeRef.current = mode; }, [mode]);
-  const [micActive, setMicActive] = useState(false);
-  useEffect(() => {
-    if (!active || inputSource !== "mic") return;
-    let disposed = false;
-    let context: AudioContext | null = playbackContextRef.current;
-    playbackContextRef.current = null;
-    let player: WebAudioPlayer | null = null;
-    if (!context && typeof AudioContext === "function") {
-      context = createAudioContextForOutput("").context;
-    }
-    if (context) {
-      player = new WebAudioPlayer(context);
-      webAudioPlayerRef.current = player;
-      void player.resume().catch(() => undefined);
-      const outputName = audioOutputs.find((device) => device.id === outputDeviceId)?.name;
-      const target = context as AudioContext & { setSinkId?: (id: string) => Promise<void> };
-      if (outputDeviceId && typeof target.setSinkId === "function") {
-        void resolveWebAudioSinkId(outputName).then((sinkId) => {
-          if (disposed) return;
-          if (!sinkId) {
-            setMessage("未在浏览器中找到所选输出设备，已使用系统默认输出。");
-            return;
-          }
-          return target.setSinkId!(sinkId).then(() => {
-            audioDiagnostics.sinkId = sinkId;
-          });
-        }).catch(() => {
-          if (!disposed) setMessage("切换输出设备失败，已使用系统默认输出。");
-        });
-      }
-    }
-    const streamer = createMicStreamer({
-      onChunk: (pcm, sampleRate) => {
-        // 接管/静音期间不推流，避免人工发言被当作对练内容转写。
-        if (disposed || modeRef.current !== "ai_active") return;
-        void api.pushMicPcm(pcm, sampleRate).then((result) => {
-          if (!disposed && !result.ok) setMessage(errorText(result.error));
-        }).catch(() => { if (!disposed) setMessage("IPC_UNAVAILABLE：麦克风数据发送失败"); });
-      },
-      onError: (micError) => { if (!disposed) setMessage(micError); },
-      onLevel: (level) => { if (!disposed) setMicLevel(level); },
-    }, context ?? undefined);
-    setMicActive(true);
-    streamer.start().catch(() => {
-      if (disposed) return;
-      setMicActive(false);
-      setMessage("无法访问麦克风，请检查系统麦克风权限后重试。");
-    });
-    return () => {
-      disposed = true;
-      streamer.stop();
-      player?.clear();
-      if (context) void context.close().catch(() => undefined);
-      webAudioPlayerRef.current = null;
-      setMicActive(false);
-      setMicLevel(0);
-    };
-    // audioOutputs 只用于按名称映射 sinkId，不应因列表刷新而重建麦克风与播放。
-  }, [active, inputSource, outputDeviceId, createMicStreamer]);
   const audioFinalizePending = useRef(false);
   const consecutiveAutoFailures = useRef(0);
   useEffect(() => {
