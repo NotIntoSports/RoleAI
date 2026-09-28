@@ -8,9 +8,9 @@ import {
   WebAudioPlayer,
   audioDiagnostics,
   createAudioContextForOutput,
-  decodePcm16Base64,
   resolveWebAudioSinkId,
 } from "./web-audio-player";
+import { useSessionEvents } from "./use-session-events";
 import type { VideoShareKind, VideoSharerCallbacks, VideoSharerController } from "./video-sharer";
 import { defaultCreateMicStreamer, defaultCreateVideoSharer } from "./media-factories";
 import { PreflightIssues } from "./preflight-issues";
@@ -28,8 +28,6 @@ import type {
   AgentCommandInput,
   CommandResult,
   RuntimeStatus,
-  SessionReplyEvent,
-  SessionTranscriptEvent,
   PreflightIssue,
   PublicConfig,
   RoleScenario,
@@ -87,17 +85,6 @@ export interface WorkspaceSessionProps {
     kind: VideoShareKind,
     callbacks: VideoSharerCallbacks,
   ) => VideoSharerController;
-}
-
-interface LocalSessionAudioEvent {
-  seq: number;
-  pcmBase64: string;
-  sampleRate: number;
-}
-
-interface LocalSessionPlaybackControlEvent {
-  seq: number;
-  action: "clear";
 }
 
 async function defaultFinalizeUtterance(text: string) {
@@ -242,9 +229,6 @@ export function WorkspaceSession({
   const [reportSummary, setReportSummary] = useState("");
   const [reportDetail, setReportDetail] = useState("");
   const statusSeq = useRef(0);
-  const transcriptSeq = useRef(0);
-  const replySeq = useRef(0);
-  const playbackSeq = useRef(0);
   const webAudioPlayerRef = useRef<WebAudioPlayer | null>(null);
   // 在「开始会话」点击手势内创建并 resume，避免自动播放策略让上下文一直挂起。
   const playbackContextRef = useRef<AudioContext | null>(null);
@@ -264,8 +248,6 @@ export function WorkspaceSession({
     };
   }, [moreOpen]);
   const sessionIdRef = useRef<string | null>(null);
-  const refreshRef = useRef<() => Promise<void>>(async () => {});
-  const [realtimeStatus, setRealtimeStatus] = useState("idle");
 
   const applyStatus = useCallback((next: RuntimeStatus) => {
     if (next.seq <= statusSeq.current) return;
@@ -283,39 +265,6 @@ export function WorkspaceSession({
     if (next.lastErrorCode) {
       setMessage(errorText({ code: next.lastErrorCode, message: "会话运行时错误" }));
     }
-  }, []);
-
-  const applyTranscript = useCallback((payload: SessionTranscriptEvent) => {
-    if (payload.seq > transcriptSeq.current) {
-      transcriptSeq.current = payload.seq;
-      setTranscript(payload.text);
-    }
-    // done=true 表示已落库：流式快照用 2^32 起步的大序号，落库事件用小序号，
-    // 按序号门控会被当旧事件丢掉，所以落库收尾不看序号、总是刷新，文本以库为准。
-    if (payload.done) void refreshRef.current();
-  }, []);
-
-  const applyReply = useCallback((payload: SessionReplyEvent) => {
-    if (payload.seq > replySeq.current) {
-      replySeq.current = payload.seq;
-      setReply(payload.text);
-    }
-    if (payload.done) void refreshRef.current();
-  }, []);
-  const applyPlaybackAudio = useCallback((payload: LocalSessionAudioEvent) => {
-    audioDiagnostics.eventsReceived += 1;
-    audioDiagnostics.bytesReceived += payload.pcmBase64.length;
-    if (payload.seq <= playbackSeq.current) return;
-    playbackSeq.current = payload.seq;
-    const player = webAudioPlayerRef.current;
-    if (!player) return;
-    void player.resume().catch(() => undefined);
-    player.appendPcm16(decodePcm16Base64(payload.pcmBase64));
-  }, []);
-  const applyPlaybackControl = useCallback((payload: LocalSessionPlaybackControlEvent) => {
-    if (payload.seq <= playbackSeq.current) return;
-    playbackSeq.current = payload.seq;
-    webAudioPlayerRef.current?.clear();
   }, []);
 
   const refresh = useCallback(
@@ -362,8 +311,6 @@ export function WorkspaceSession({
     sessionIdRef.current = sessionId;
   }, [sessionId]);
 
-  useEffect(() => { refreshRef.current = refresh; }, [refresh]);
-
   const conversationRef = useRef<HTMLDivElement | null>(null);
   const conversationBottomRef = useRef<HTMLDivElement | null>(null);
   // 事件文本是本轮的前缀快照（上限 4000 字符）而库里是全文，因此用前缀比较识别
@@ -396,36 +343,6 @@ export function WorkspaceSession({
       }
     })();
   }, [applyStatus]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const unlisteners: Array<() => void> = [];
-    void (async () => {
-      const topics: Array<[string, (payload: never) => void]> = [
-        ["runtime:status:v1", applyStatus as (payload: never) => void],
-        ["session:transcript:v1", applyTranscript as (payload: never) => void],
-        ["session:reply:v1", applyReply as (payload: never) => void],
-        ["session:audio:v1", applyPlaybackAudio as (payload: never) => void],
-        ["session:playback-control:v1", applyPlaybackControl as (payload: never) => void],
-      ];
-      for (const [event, handler] of topics) {
-        try {
-          const unlisten = await Promise.resolve(listen(event, handler));
-          if (cancelled) {
-            unlisten();
-            return;
-          }
-          unlisteners.push(unlisten);
-        } catch {
-          // Event bus is optional when IPC is unavailable.
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-      unlisteners.forEach((unlisten) => unlisten());
-    };
-  }, [listen, applyStatus, applyTranscript, applyReply, applyPlaybackAudio, applyPlaybackControl]);
 
   async function run(action: () => Promise<CommandResult<unknown>>, success = "") {
     setBusy(true);
@@ -487,11 +404,7 @@ export function WorkspaceSession({
       setSessionId(result.data.session.id);
       sessionIdRef.current = result.data.session.id;
       setPhase(result.data.session.status);
-      // 新会话从零计流式字幕 seq：上一会话的 partial 用过大号 seq，
-      // 不重置会把本会话开头的字幕事件整体门控丢弃。
-      transcriptSeq.current = 0;
-      replySeq.current = 0;
-      playbackSeq.current = 0;
+      resetStreamSeq();
       webAudioPlayerRef.current?.clear();
       setRealtimeStatus("connected");
       setTranscript("");
@@ -692,33 +605,18 @@ export function WorkspaceSession({
   const roleName = config?.roleProfiles.find((role) => role.id === roleProfileId)?.name ?? "RoleAI";
   const showBargeHint = active && phase === "speaking" && allowBargeIn && mode === "ai_active";
   const selectedRoleScenario = roleScenario(config, roleProfileId);
-  const hotkeyInFlight = useRef(false);
-  useEffect(() => {
-    if (!active || inputSource !== "meeting" || selectedRoleScenario !== "meetingAssistant") return;
-    let disposed = false;
-    let unlisten = () => {};
-    void (async () => {
-      try {
-        unlisten = await Promise.resolve(listen("session:assistant_hotkey:v1", () => {
-          if (disposed || hotkeyInFlight.current) return;
-          hotkeyInFlight.current = true;
-          void api.triggerMeetingAssistant()
-            .then((result) => {
-              if (!result.ok) setMessage(errorText(result.error));
-              else return refresh();
-            })
-            .catch(() => setMessage("快捷提问失败，请回到工作台重试。"))
-            .finally(() => { hotkeyInFlight.current = false; });
-        }));
-      } catch {
-        if (!disposed) setMessage("全局快捷键事件不可用；仍可在工作台点击提问。");
-      }
-    })();
-    return () => {
-      disposed = true;
-      unlisten();
-    };
-  }, [active, inputSource, selectedRoleScenario, refresh, listen]);
+  const { realtimeStatus, setRealtimeStatus, resetStreamSeq } = useSessionEvents({
+    listen,
+    refresh,
+    applyStatus,
+    setTranscript,
+    setReply,
+    setMessage,
+    webAudioPlayerRef,
+    active,
+    inputSource,
+    selectedRoleScenario,
+  });
   const modeRef = useRef(mode);
   useEffect(() => { modeRef.current = mode; }, [mode]);
   const [micActive, setMicActive] = useState(false);
