@@ -197,6 +197,16 @@ impl<'a> MaterialStore<'a> {
         })
     }
 
+    pub fn remove_cleanup_path(&self, stored_path: &str) -> Result<(), DatabaseError> {
+        self.database.with_connection(|connection| {
+            connection.execute(
+                "DELETE FROM material_file_cleanup WHERE stored_path = ?1",
+                params![stored_path],
+            )?;
+            Ok(())
+        })
+    }
+
     pub fn searchable_chunk_count(&self, query: &str) -> Result<i64, DatabaseError> {
         let query = query.trim();
         if query.is_empty() {

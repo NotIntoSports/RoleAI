@@ -198,6 +198,20 @@ impl<'a> MaterialService<'a> {
         Ok(())
     }
 
+    /// 清理队列重试：目标已不存在（此前已被他处删除）或本次删除成功的条目
+    /// 移出队列；仍删除失败的留在队列等下次。
+    pub fn retry_pending_cleanups(&self) -> Result<(), MaterialServiceError> {
+        let store = MaterialStore::new(self.database);
+        for stored_path in store.cleanup_paths()? {
+            let destination = self.data_directory.join(&stored_path);
+            if destination.exists() && std::fs::remove_file(&destination).is_err() {
+                continue;
+            }
+            store.remove_cleanup_path(&stored_path)?;
+        }
+        Ok(())
+    }
+
     pub fn list(&self) -> Result<Vec<MaterialSummary>, MaterialServiceError> {
         Ok(MaterialStore::new(self.database)
             .list()?
@@ -608,6 +622,45 @@ mod tests {
         assert_eq!(
             MaterialStore::new(&database).cleanup_paths().unwrap(),
             vec![format!("materials/{}.txt", kept.id)]
+        );
+    }
+
+    #[test]
+    fn cleanup_retry_success_removes_queue_row_and_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("note.txt");
+        std::fs::write(&source, "负责订单服务与 Kafka 链路，完整句子用于检索。").unwrap();
+        let database = opened(&directory);
+        let service = MaterialService::new(&database, directory.path());
+        let imported = service.import_file(&source).unwrap();
+        let stored_path = format!("materials/{}.txt", imported.id);
+        let stored = directory.path().join(&stored_path);
+        MaterialStore::new(&database)
+            .enqueue_cleanup(&stored_path, "MATERIAL_FILE_DELETE_FAILED")
+            .unwrap();
+
+        service.retry_pending_cleanups().unwrap();
+        assert!(!stored.exists(), "重试成功必须真的删除目标文件");
+        assert_eq!(
+            MaterialStore::new(&database).cleanup_paths().unwrap(),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn cleanup_retry_treats_missing_target_as_success() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = opened(&directory);
+        let service = MaterialService::new(&database, directory.path());
+        MaterialStore::new(&database)
+            .enqueue_cleanup("materials/already-gone.txt", "MATERIAL_FILE_DELETE_FAILED")
+            .unwrap();
+
+        service.retry_pending_cleanups().unwrap();
+        assert_eq!(
+            MaterialStore::new(&database).cleanup_paths().unwrap(),
+            Vec::<String>::new(),
+            "目标已不存在按成功处理，不得在队列里反复失败"
         );
     }
 

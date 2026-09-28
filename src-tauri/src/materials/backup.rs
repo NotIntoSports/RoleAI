@@ -514,7 +514,7 @@ mod tests {
     use crate::{
         config::{ConfigStore, ProviderConfig, SecretSlot},
         database::Database,
-        materials::hybrid::EmbeddingSpace,
+        materials::{hybrid::EmbeddingSpace, MaterialStore},
         providers::{EmbeddingError, EmbeddingProbe, ProviderEndpoint},
         services::MaterialService,
     };
@@ -954,5 +954,65 @@ mod tests {
         );
         assert!(!directory.path().join(".restore-journal.json").exists());
         assert!(!directory.path().join(".restore-rollback").exists());
+    }
+
+    #[test]
+    fn restore_restores_same_content_sha256() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = opened(&directory);
+        let config = seeded_config(&directory);
+        let materials = MaterialService::new(&database, directory.path());
+        let source = write_import(&directory, "resume.md", IMPORT_BODY);
+        let imported = materials.import_file(&source).unwrap();
+        let sha_before = MaterialStore::new(&database)
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|item| item.id == imported.id)
+            .unwrap()
+            .content_sha256;
+        let archive = directory.path().join("archive");
+        let backup = BackupService::new(&database, directory.path(), &config);
+        backup.create(&archive).unwrap();
+
+        // 备份后现场继续变化：恢复必须回到备份时的内容哈希。
+        materials
+            .import_file(write_import(
+                &directory,
+                "later.txt",
+                "备份之后才导入的资料不应在恢复后存活。",
+            ))
+            .unwrap();
+
+        backup.restore(&archive).unwrap();
+        let restored = MaterialStore::new(&database).list().unwrap();
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].id, imported.id);
+        assert_eq!(restored[0].content_sha256, sha_before);
+    }
+
+    #[test]
+    fn restore_over_existing_same_hash_keeps_single_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = opened(&directory);
+        let config = seeded_config(&directory);
+        let materials = MaterialService::new(&database, directory.path());
+        let source = write_import(&directory, "resume.md", IMPORT_BODY);
+        let imported = materials.import_file(&source).unwrap();
+        let archive = directory.path().join("archive");
+        let backup = BackupService::new(&database, directory.path(), &config);
+        backup.create(&archive).unwrap();
+
+        // 现场未变（同哈希文件仍在）时恢复：不得产生第二份文件或第二条记录。
+        backup.restore(&archive).unwrap();
+        assert_eq!(MaterialStore::new(&database).list().unwrap().len(), 1);
+        assert_eq!(material_files(directory.path()).len(), 1);
+        assert_eq!(
+            materials.import_file(&source).unwrap().id,
+            imported.id,
+            "同内容再导入必须命中去重而不是落第二份"
+        );
+        assert_eq!(MaterialStore::new(&database).list().unwrap().len(), 1);
+        assert_eq!(material_files(directory.path()).len(), 1);
     }
 }
