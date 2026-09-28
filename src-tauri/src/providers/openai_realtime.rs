@@ -9,9 +9,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use base64::{Engine, engine::general_purpose::STANDARD};
 use reqwest::Url;
-use serde_json::{Value, json};
+use serde_json::json;
 use tungstenite::{
     ClientRequestBuilder, Error as WsError, HandshakeError, Message, client::IntoClientRequest,
     protocol::WebSocketConfig, stream::MaybeTlsStream,
@@ -680,6 +679,9 @@ pub(crate) fn set_tcp_timeouts(stream: &TcpStream, timeout: Duration) -> Result<
 #[cfg(test)]
 mod connection_tests {
     use super::*;
+    // 事件解析与 base64 音频编解码已拆至 realtime_protocol；测试目标仍要用。
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use serde_json::Value;
 
     #[test]
     fn recv_poll_does_not_shrink_write_timeout() {
