@@ -2,6 +2,7 @@ mod cascade;
 mod embedding;
 mod openai_compatible;
 mod openai_realtime;
+mod realtime_protocol;
 pub(crate) mod realtime_session;
 mod voice_clone;
 mod voice_clone_dashscope;
