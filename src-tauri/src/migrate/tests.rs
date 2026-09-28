@@ -1113,3 +1113,95 @@ fn user_selected_desktop_runtime_imports_into_existing_dest_schema() {
     assert_eq!(turns[0].user_text, "合成会话轮次A");
     assert_eq!(turns[1].assistant_text, "合成助手回复B");
 }
+
+#[test]
+fn user_path_import_with_bad_payload_writes_nothing() {
+    let source = tempfile::tempdir().unwrap();
+    write_legacy_session_sqlite(
+        &source.path().join(".desktop-runtime/data/app.sqlite"),
+        "{not-json",
+        &idle_current_payload(),
+    );
+    let dest = tempfile::tempdir().unwrap();
+    let database = Database::open(dest.path().join("app.sqlite3")).unwrap();
+    database.migrate().unwrap();
+
+    assert_eq!(
+        import_legacy_sessions_from_user_path(source.path(), &database)
+            .unwrap_err()
+            .code(),
+        "MIGRATE_PAYLOAD_INVALID"
+    );
+    assert!(
+        SessionStore::new(&database).list().unwrap().is_empty(),
+        "坏档必须整体拒绝，新库不得写入任何会话"
+    );
+}
+
+#[test]
+fn reimport_same_legacy_session_keeps_single_id() {
+    let source = tempfile::tempdir().unwrap();
+    let sqlite = source.path().join(".desktop-runtime/data/app.sqlite");
+    write_legacy_session_sqlite(
+        &sqlite,
+        &synthetic_archived_payload(),
+        &idle_current_payload(),
+    );
+    let dest = tempfile::tempdir().unwrap();
+    let database = Database::open(dest.path().join("app.sqlite3")).unwrap();
+    database.migrate().unwrap();
+
+    let first = import_legacy_sessions_from_user_path(source.path(), &database).unwrap();
+    assert_eq!(first.sessions, 1);
+    assert_eq!(first.turns, 2);
+
+    let second = import_legacy_sessions_from_user_path(source.path(), &database).unwrap();
+    assert_eq!(second.sessions, 0, "重复导入必须按已有 id 幂等跳过");
+    assert_eq!(second.turns, 0);
+    let store = SessionStore::new(&database);
+    let sessions = store.list().unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].id, "legacy-session-1");
+    assert_eq!(store.list_turns("legacy-session-1").unwrap().len(), 2);
+}
+
+#[test]
+fn failed_import_rolls_back_half_imported_session() {
+    let source = tempfile::tempdir().unwrap();
+    let sqlite = source.path().join(".desktop-runtime/data/app.sqlite");
+    write_legacy_session_sqlite(
+        &sqlite,
+        &synthetic_archived_payload(),
+        &idle_current_payload(),
+    );
+    let dest = tempfile::tempdir().unwrap();
+    let database = Database::open(dest.path().join("app.sqlite3")).unwrap();
+    database.migrate().unwrap();
+    // 预置轮次 id 冲突：导入会在「会话行已插入、轮次插入时」失败，
+    // 验证事务整体回滚、不留半截会话。
+    database
+        .with_connection(|connection| {
+            connection.execute_batch(
+                "INSERT INTO sessions(id, status, role_profile_id, voice_route_id,
+                                       transport_mode, updated_at)
+                 VALUES ('guard', 'completed', '', '', 'direct', '2026-01-01T00:00:00Z');
+                 INSERT INTO session_turns(id, session_id, turn_index, user_text,
+                                            assistant_text, materials_used, created_at)
+                 VALUES ('legacy-session-1-t0', 'guard', 0, '', '', 0,
+                         '2026-01-01T00:00:00Z');",
+            )
+        })
+        .unwrap();
+
+    assert_eq!(
+        import_legacy_sessions_from_user_path(source.path(), &database)
+            .unwrap_err()
+            .code(),
+        "MIGRATE_OPERATION_FAILED"
+    );
+    let store = SessionStore::new(&database);
+    let sessions = store.list().unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].id, "guard", "导入失败不得留下半截会话");
+    assert!(store.list_turns("legacy-session-1").unwrap().is_empty());
+}
