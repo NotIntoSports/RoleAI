@@ -61,6 +61,7 @@
     "allow-virtual-audio-install",
     "allow-session-audio-ready",
     "allow-session-push-mic-pcm",
+    "allow-session-push-video-frame",
     "allow-livestream-create-draft",
     "allow-livestream-generate",
     "allow-livestream-get",

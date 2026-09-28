@@ -7,7 +7,7 @@ import { RECORD_MAX_MS, RECORD_MIN_MS, VoiceRecorder, bytesToBase64, type Record
 const errorText = (error: { code: string; message: string; field?: string | null }) =>
   `${error.field ? error.field + "：" : ""}${error.code}：${error.message}`;
 
-const emptyReference = { id: "", name: "", providerId: "" };
+const emptyReference = { id: "", name: "", providerId: "", targetModel: "" };
 
 const optional = (value: string) => value.trim() || null;
 
@@ -18,7 +18,7 @@ const statusText: Record<string, string> = {
   failed: "克隆失败",
 };
 
-export function VoiceReferenceEditor() {
+export function VoiceReferenceEditor({ visible }: { visible: boolean }) {
   const [config, setConfig] = useState<PublicConfig | null>(null);
   const [references, setReferences] = useState<VoiceReferenceSummary[]>([]);
   const [message, setMessage] = useState("正在读取音色…");
@@ -57,8 +57,10 @@ export function VoiceReferenceEditor() {
   }, []);
 
   useEffect(() => {
-    void reload();
-  }, [reload]);
+    // 面板常驻挂载（服务页切标签只切显隐），供应商可能在其他标签新增；
+    // 每次面板变为可见时重拉配置，避免供应商下拉停留在页面加载时的快照。
+    if (visible) void reload();
+  }, [visible, reload]);
 
   async function run<T>(action: () => Promise<CommandResult<T>>, success: string): Promise<CommandResult<T> | null> {
     setBusy(true);
@@ -89,6 +91,7 @@ export function VoiceReferenceEditor() {
             id: optional(reference.id),
             name: reference.name.trim(),
             providerId: optional(reference.providerId),
+            targetModel: optional(reference.targetModel),
             transcript: null,
             audioBase64: audio.base64,
           }),
@@ -109,6 +112,7 @@ export function VoiceReferenceEditor() {
             id: reference.id,
             name: reference.name.trim(),
             providerId: optional(reference.providerId),
+            targetModel: optional(reference.targetModel),
             transcript: null,
           }),
         "音色信息已更新，原音频与克隆状态保持不变",
@@ -223,6 +227,17 @@ export function VoiceReferenceEditor() {
               ))}
             </select>
           </label>
+          <label>
+            目标模型（可选）
+            <input
+              value={reference.targetModel}
+              onChange={(event) => setReference({ ...reference, targetModel: event.target.value })}
+            />
+            <small>
+              阿里云端到端 Realtime 系（如 qwen3.8-omni-flash-realtime）必填同名模型；
+              留空按 CosyVoice（cosyvoice-v2）复刻，智谱无需填写。
+            </small>
+          </label>
           <div className="voice-recorder-field">
             <span>参考音频</span>
             <span className="voice-recorder">
@@ -297,6 +312,7 @@ export function VoiceReferenceEditor() {
                         id: item.id,
                         name: item.name,
                         providerId: item.providerId ?? "",
+                        targetModel: item.targetModel ?? "",
                       });
                       setMessage(
                         `正在编辑「${item.name}」：可修改名称与供应商，保存后原音频与克隆状态保持不变。`,

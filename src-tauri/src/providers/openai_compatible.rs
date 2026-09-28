@@ -179,10 +179,7 @@ pub(crate) fn merge_builtin_catalog(url: &Url, models: &mut Vec<DiscoveredModel>
     }
     ids.sort();
     ids.dedup();
-    *models = ids
-        .into_iter()
-        .map(|id| DiscoveredModel { id })
-        .collect();
+    *models = ids.into_iter().map(|id| DiscoveredModel { id }).collect();
 }
 
 /// 线路测试的阶段探测实现：e2e 走真实 realtime 握手，级联走一次最小 TTS 合成。
@@ -191,7 +188,9 @@ pub struct StandardRouteProbe;
 impl StandardRouteProbe {
     pub fn new() -> Result<Self, ProviderError> {
         // 仅验证本机 HTTP 栈可用，真正探测时按线路供应商逐个发起请求。
-        build_bounded_client().map_err(|_| ProviderError::ClientUnavailable).map(|_| Self)
+        build_bounded_client()
+            .map_err(|_| ProviderError::ClientUnavailable)
+            .map(|_| Self)
     }
 }
 
@@ -230,10 +229,15 @@ impl super::RouteStageProbe for StandardRouteProbe {
         model_id: &str,
         voice_id: Option<&str>,
     ) -> Result<(), super::RouteProbeError> {
-        let cascade = crate::providers::OpenAiCompatibleCascade::new()
-            .map_err(tts_probe_error)?;
+        let cascade = crate::providers::OpenAiCompatibleCascade::new().map_err(tts_probe_error)?;
         cascade
-            .synthesize(endpoint, credential, model_id, voice_id.unwrap_or(""), "你好")
+            .synthesize(
+                endpoint,
+                credential,
+                model_id,
+                voice_id.unwrap_or(""),
+                "你好",
+            )
             .map(|_| ())
             .map_err(tts_probe_error)
     }

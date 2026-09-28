@@ -211,8 +211,8 @@ impl<'a> VoiceRouteService<'a> {
     fn probe_route_stages(&self, route: &VoiceRouteConfig) -> Result<(), RouteProbeError> {
         match route.mode {
             VoiceRouteMode::E2e => {
-                let provider_id = clean(route.e2e_provider_id.clone())
-                    .ok_or_else(probe_config_error)?;
+                let provider_id =
+                    clean(route.e2e_provider_id.clone()).ok_or_else(probe_config_error)?;
                 let model_id = clean(route.e2e_model_id.clone()).ok_or_else(probe_config_error)?;
                 let (endpoint, credential) = self.stage_endpoint_credential(&provider_id)?;
                 self.stage_probe
@@ -224,8 +224,12 @@ impl<'a> VoiceRouteService<'a> {
                 let model_id = clean(route.tts_model_id.clone()).ok_or_else(probe_config_error)?;
                 let voice_id = clean(route.voice_id.clone());
                 let (endpoint, credential) = self.stage_endpoint_credential(&provider_id)?;
-                self.stage_probe
-                    .probe_tts(&endpoint, credential.as_deref(), &model_id, voice_id.as_deref())
+                self.stage_probe.probe_tts(
+                    &endpoint,
+                    credential.as_deref(),
+                    &model_id,
+                    voice_id.as_deref(),
+                )
             }
         }
     }
@@ -379,7 +383,8 @@ fn clean(value: Option<String>) -> Option<String> {
     })
 }
 
-fn provider_models(route: &VoiceRouteConfig) -> BTreeMap<String, BTreeSet<String>> {    let mut providers = BTreeMap::<String, BTreeSet<String>>::new();
+fn provider_models(route: &VoiceRouteConfig) -> BTreeMap<String, BTreeSet<String>> {
+    let mut providers = BTreeMap::<String, BTreeSet<String>>::new();
     for (provider, model) in [
         (&route.asr_provider_id, &route.asr_model_id),
         (&route.llm_provider_id, &route.llm_model_id),

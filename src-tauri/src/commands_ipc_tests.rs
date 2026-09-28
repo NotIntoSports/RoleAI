@@ -289,7 +289,10 @@ fn diagnostics_export_rejects_destinations_outside_the_data_directory() {
         serde_json::json!({ "destination": escape_destination.to_string_lossy() }),
     );
     assert_eq!(result["ok"], false, "{result}");
-    assert_eq!(result["error"]["code"], "DIAGNOSTICS_DESTINATION_INVALID", "{result}");
+    assert_eq!(
+        result["error"]["code"], "DIAGNOSTICS_DESTINATION_INVALID",
+        "{result}"
+    );
     assert!(
         !escape_destination.exists(),
         "diagnostics export must not write outside the data directory"
@@ -305,5 +308,8 @@ fn diagnostics_export_rejects_destinations_outside_the_data_directory() {
         serde_json::json!({ "destination": allowed_destination.to_string_lossy() }),
     );
     assert_eq!(result["ok"], true, "{result}");
-    assert!(allowed_destination.exists(), "in-data-directory export must still work");
+    assert!(
+        allowed_destination.exists(),
+        "in-data-directory export must still work"
+    );
 }

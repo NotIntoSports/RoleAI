@@ -5,14 +5,20 @@ use std::fmt;
 
 use reqwest::{StatusCode, Url, blocking::Client};
 
-use super::openai_compatible::{
-    BoundedBodyError, build_cascade_client, read_bounded_body,
-};
+use super::openai_compatible::{BoundedBodyError, build_cascade_client, read_bounded_body};
 use super::{ProviderEndpoint, ProviderError};
 
 pub const VOICE_CLONE_MODEL: &str = "glm-tts-clone";
 pub const VOICE_CLONE_INPUT_PURPOSE: &str = "voice-clone-input";
 pub const VOICE_CLONE_TRIAL_TEXT: &str = "你好，这是一段用于确认克隆音色效果的试听文本。";
+
+/// 一次复刻的产物：音色 ID 与远端文件引用。
+/// qwen-voice-enrollment 单调用复刻没有独立上传步骤，remote_file_id 为空。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoiceCloneOutcome {
+    pub voice_id: String,
+    pub remote_file_id: Option<String>,
+}
 
 pub struct VoiceCloneProbe {
     client: Client,
@@ -25,6 +31,47 @@ impl VoiceCloneProbe {
         })
     }
 
+    /// 统一复刻入口：DashScope 内部按目标模型分发（qwen 单调用 / cosyvoice 两步），
+    /// 其余供应商走智谱 上传→克隆 两步。
+    #[allow(clippy::too_many_arguments)]
+    pub fn clone_reference(
+        &self,
+        endpoint: &ProviderEndpoint,
+        credential: Option<&str>,
+        voice_name: &str,
+        transcript: &str,
+        target_model: Option<&str>,
+        file_name: &str,
+        mime_type: &str,
+        bytes: Vec<u8>,
+    ) -> Result<VoiceCloneOutcome, VoiceCloneError> {
+        if super::voice_clone_dashscope::is_dashscope_base(&endpoint.base_url) {
+            return super::voice_clone_dashscope::clone_reference(
+                &self.client,
+                endpoint,
+                credential,
+                voice_name,
+                target_model.unwrap_or(""),
+                file_name,
+                mime_type,
+                bytes,
+            );
+        }
+        let remote_file_id =
+            self.upload_sample(endpoint, credential, file_name, mime_type, bytes)?;
+        let voice_id = self.clone_voice(
+            endpoint,
+            credential,
+            voice_name,
+            transcript,
+            &remote_file_id,
+        )?;
+        Ok(VoiceCloneOutcome {
+            voice_id,
+            remote_file_id: Some(remote_file_id),
+        })
+    }
+
     pub fn upload_sample(
         &self,
         endpoint: &ProviderEndpoint,
@@ -33,11 +80,24 @@ impl VoiceCloneProbe {
         mime_type: &str,
         bytes: Vec<u8>,
     ) -> Result<String, VoiceCloneError> {
+        if super::voice_clone_dashscope::is_dashscope_base(&endpoint.base_url) {
+            return super::voice_clone_dashscope::upload_sample(
+                &self.client,
+                endpoint,
+                credential,
+                file_name,
+                mime_type,
+                bytes,
+            );
+        }
         let url = clone_api_url(&endpoint.base_url, "files")?;
         let part = reqwest::blocking::multipart::Part::bytes(bytes)
             .file_name(file_name.to_owned())
             .mime_str(mime_type)
-            .map_err(|_| VoiceCloneError { kind: ProviderError::EndpointInvalid, provider_message: None })?;
+            .map_err(|_| VoiceCloneError {
+                kind: ProviderError::EndpointInvalid,
+                provider_message: None,
+            })?;
         let form = reqwest::blocking::multipart::Form::new()
             .text("purpose", VOICE_CLONE_INPUT_PURPOSE)
             .part("file", part);
@@ -52,8 +112,10 @@ impl VoiceCloneProbe {
         struct FileObject {
             id: String,
         }
-        let file: FileObject =
-            serde_json::from_slice(&bytes).map_err(|_| VoiceCloneError { kind: ProviderError::ResponseInvalid, provider_message: None })?;
+        let file: FileObject = serde_json::from_slice(&bytes).map_err(|_| VoiceCloneError {
+            kind: ProviderError::ResponseInvalid,
+            provider_message: None,
+        })?;
         Ok(file.id)
     }
 
@@ -87,8 +149,10 @@ impl VoiceCloneProbe {
         struct CloneResponse {
             voice: String,
         }
-        let clone: CloneResponse =
-            serde_json::from_slice(&bytes).map_err(|_| VoiceCloneError { kind: ProviderError::ResponseInvalid, provider_message: None })?;
+        let clone: CloneResponse = serde_json::from_slice(&bytes).map_err(|_| VoiceCloneError {
+            kind: ProviderError::ResponseInvalid,
+            provider_message: None,
+        })?;
         Ok(clone.voice)
     }
 }
@@ -105,7 +169,7 @@ fn clone_api_url(base_url: &str, suffix: &str) -> Result<Url, ProviderError> {
     Ok(url)
 }
 
-fn map_send_error(error: reqwest::Error) -> VoiceCloneError {
+pub(crate) fn map_send_error(error: reqwest::Error) -> VoiceCloneError {
     let kind = if error.is_timeout() {
         ProviderError::Timeout
     } else {
@@ -117,7 +181,7 @@ fn map_send_error(error: reqwest::Error) -> VoiceCloneError {
     }
 }
 
-fn map_body_error(error: BoundedBodyError) -> VoiceCloneError {
+pub(crate) fn map_body_error(error: BoundedBodyError) -> VoiceCloneError {
     let kind = match error {
         BoundedBodyError::TooLarge => ProviderError::ResponseTooLarge,
         BoundedBodyError::Failed => ProviderError::RequestFailed,
@@ -169,7 +233,7 @@ impl From<VoiceCloneError> for ProviderError {
     }
 }
 
-fn provider_error_message(bytes: &[u8]) -> Option<String> {
+pub(crate) fn provider_error_message(bytes: &[u8]) -> Option<String> {
     #[derive(Deserialize)]
     struct ErrorBody {
         error: Option<ErrorInner>,
@@ -180,11 +244,16 @@ fn provider_error_message(bytes: &[u8]) -> Option<String> {
         message: Option<String>,
     }
     let parsed: ErrorBody = serde_json::from_slice(bytes).ok()?;
-    let message = parsed.error.and_then(|inner| inner.message).or(parsed.message)?;
+    let message = parsed
+        .error
+        .and_then(|inner| inner.message)
+        .or(parsed.message)?;
     Some(message.chars().take(300).collect())
 }
 
-fn check_status(response: reqwest::blocking::Response) -> Result<reqwest::blocking::Response, VoiceCloneError> {
+pub(crate) fn check_status(
+    response: reqwest::blocking::Response,
+) -> Result<reqwest::blocking::Response, VoiceCloneError> {
     let status = response.status();
     if status.is_success() {
         return Ok(response);

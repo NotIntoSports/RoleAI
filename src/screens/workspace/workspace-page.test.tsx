@@ -26,6 +26,7 @@ describe("WorkspacePage", () => {
         unusedMaterials: false,
         lastErrorCode: null,
         revision: 0,
+        realtimeStatus: "idle",
       },
     });
   });
@@ -39,11 +40,12 @@ describe("WorkspacePage", () => {
     expect(screen.getByRole("heading", { level: 1 }).textContent).toContain("工作台");
   });
 
-  it("renders the conversation without a manual text composer", () => {
+  it("renders the conversation with a manual text composer", () => {
     render(<WorkspacePage />);
     expect(screen.getByRole("region", { name: "会话对话" })).toBeTruthy();
-    expect(screen.queryByRole("textbox", { name: "语句输入" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "发送" })).toBeNull();
+    // 对齐官方体验：底部 Composer 输入卡提供文字轮次入口（会话未开始时禁用）。
+    expect(screen.getByRole("textbox", { name: "输入内容" })).toBeTruthy();
+    expect((screen.getByRole("button", { name: "发送" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("does not call fetch", () => {

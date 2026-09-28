@@ -188,6 +188,11 @@ pub struct RealtimeTextRequest<'a> {
     pub instructions: &'a str,
     pub prompt: &'a str,
     pub include_audio: bool,
+    /// 线路配置的音色（克隆音色 ID 或官方音色名）。空串时回退方言默认；
+    /// DashScope 无方言默认可用音色，缺失会被服务端以 Voice not supported 拒绝。
+    pub voice: &'a str,
+    /// 应答文本流式快照回调；手动输入场景用户文本已知，通常只挂 assistant。
+    pub hooks: super::TurnStreamHooks<'a>,
 }
 
 pub struct RealtimeAudioRequest<'a> {
@@ -197,6 +202,9 @@ pub struct RealtimeAudioRequest<'a> {
     pub pcm16le: &'a [u8],
     pub sample_rate: u32,
     pub instructions: &'a str,
+    pub voice: &'a str,
+    /// 用户转写与应答文本的流式快照回调。
+    pub hooks: super::TurnStreamHooks<'a>,
 }
 
 pub trait RealtimeModel: Send + Sync {
@@ -251,16 +259,25 @@ impl RealtimeModel for OpenAiCompatibleRealtime {
             dialect_input_rate(&dialect),
         );
         with_realtime_socket(&url, request.credential, cancel, |socket| {
-            let voice = dialect.default_voice.unwrap_or("");
+            let voice = selected_voice(request.voice, &dialect);
             let update = session_update_event(voice, request.instructions, &dialect);
             send_text(socket, &update.to_string())?;
             wait_session_updated(socket, SESSION_UPDATED_TIMEOUT)?;
             if cancel.load(Ordering::Relaxed) {
                 return Err(RealtimeError::Cancelled);
             }
-            send_text(socket, &append_audio_event(&pcm16le))?;
+            // 整段 utterance 单帧发送会被服务端断开（DashScope 单帧上限远小于
+            // 一句话的 PCM，实测 WriteFailed）；按 ~100ms 分块流式 append。
+            // Aliyun Manual 模式：commit 提交缓冲后必须显式 response.create 触发应答；
+            // 其余方言（server_vad 自动提交并触发应答）只 append + commit。
+            for chunk in pcm16le.chunks(AUDIO_APPEND_CHUNK_BYTES) {
+                send_text(socket, &append_audio_event(chunk))?;
+            }
             send_text(socket, r#"{"type":"input_audio_buffer.commit"}"#)?;
-            collect_turn(socket, cancel)
+            if dialect.name == RealtimeDialectName::Aliyun {
+                send_text(socket, &response_create_event(true))?;
+            }
+            collect_turn(socket, cancel, &request.hooks)
         })
     }
 
@@ -286,7 +303,7 @@ impl RealtimeModel for OpenAiCompatibleRealtime {
                 "input_audio_format": dialect.audio_format,
                 "output_audio_format": dialect.audio_format,
             });
-            let voice = dialect.default_voice.unwrap_or("");
+            let voice = selected_voice(request.voice, &dialect);
             if !voice.is_empty() {
                 session["voice"] = json!(voice);
             }
@@ -300,7 +317,7 @@ impl RealtimeModel for OpenAiCompatibleRealtime {
             }
             send_text(socket, &conversation_text_event(request.prompt))?;
             send_text(socket, &response_create_event(request.include_audio))?;
-            collect_turn(socket, cancel)
+            collect_turn(socket, cancel, &request.hooks)
         })
     }
 }
@@ -435,13 +452,20 @@ pub fn session_update_event(voice: &str, instructions: &str, dialect: &RealtimeD
         "instructions": instructions,
         "input_audio_format": dialect.audio_format,
         "output_audio_format": dialect.output_audio_format,
-        "turn_detection": {
+    });
+    if dialect.name == RealtimeDialectName::Aliyun {
+        // DashScope WS 为 Manual 模式：本地 SmartTurn 已判定语句结束，
+        // 禁用服务端 VAD（保留会与客户端 commit 竞态：自动提交后手动 commit
+        // 撞空缓冲被拒 "buffer too small, or have no audio"）。
+        session["turn_detection"] = Value::Null;
+    } else {
+        session["turn_detection"] = json!({
             "type": "server_vad",
             "threshold": 0.5,
             "silence_duration_ms": 800,
             "create_response": true,
-        },
-    });
+        });
+    }
     let selected_voice = if voice.is_empty() {
         dialect.default_voice.unwrap_or("")
     } else {
@@ -499,6 +523,16 @@ pub fn probe_realtime_session(
     })
 }
 
+/// 本轮合成音色：线路配置优先，其次方言内置默认（GLM tongtong / OpenAI 系默认），
+/// 都没有则空（session.update 不带 voice 字段）。
+pub(crate) fn selected_voice<'a>(request_voice: &'a str, dialect: &RealtimeDialect) -> &'a str {
+    let request_voice = request_voice.trim();
+    if !request_voice.is_empty() {
+        return request_voice;
+    }
+    dialect.default_voice.unwrap_or("")
+}
+
 fn append_audio_event(pcm: &[u8]) -> String {
     json!({
         "type": "input_audio_buffer.append",
@@ -506,6 +540,10 @@ fn append_audio_event(pcm: &[u8]) -> String {
     })
     .to_string()
 }
+
+/// append 分块大小：16kHz×16bit×100ms。DashScope 对单帧大小有限制，
+/// 一句话整帧发送会被立即断链（真网实测 WriteFailed），按 100ms 块流式发送。
+pub(crate) const AUDIO_APPEND_CHUNK_BYTES: usize = 3_200;
 
 fn conversation_text_event(text: &str) -> String {
     json!({
@@ -532,27 +570,46 @@ fn response_create_event(include_audio: bool) -> String {
     .to_string()
 }
 
-fn sanitize_remote_code(code: &str) -> String {
-    let trimmed = code.trim();
-    let mut sanitized = trimmed.chars().take(80).collect::<String>();
+/// 透出服务端错误 code 与限长的 message，供 UI/诊断定位拒绝原因；
+/// message 中密钥样式片段（sk-…、secret=…、apikey=…）整段剔除。
+fn sanitize_remote_code(raw: &str) -> String {
+    let redacted = raw
+        .trim()
+        .split([' ', ';', ',', '，', '；'])
+        .filter(|token| {
+            let lower = token.to_ascii_lowercase();
+            !(lower.contains("sk-")
+                && (token.starts_with("sk-")
+                    || lower.contains("secret=")
+                    || lower.contains("apikey=")
+                    || lower.contains("api-key=")))
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut sanitized: String = redacted.chars().take(200).collect();
     if sanitized.is_empty() {
         sanitized = "REALTIME_REMOTE_ERROR".to_owned();
     }
     sanitized
 }
 
-enum ServerEvent {
+pub(crate) enum ServerEvent {
     SessionCreated,
     SessionUpdated,
-    ResponseDone,
+    /// response.done 携带的 response.status（completed/cancelled，缺省 None）。
+    ResponseDone(Option<String>),
     Audio(Vec<u8>),
     OutputTranscript(String),
     OutputText(String),
     InputTranscriptDelta(Value),
     InputTranscriptCompleted(Value),
+    SpeechStarted,
+    SpeechStopped,
+    InputCommitted,
+    ResponseCreated,
 }
 
-fn parse_server_event(raw: &str) -> Result<Option<ServerEvent>, RealtimeError> {
+pub(crate) fn parse_server_event(raw: &str) -> Result<Option<ServerEvent>, RealtimeError> {
     if raw.len() > MAX_TEXT_FRAME_BYTES {
         return Err(RealtimeError::ResponseTooLarge);
     }
@@ -595,23 +652,47 @@ fn parse_server_event(raw: &str) -> Result<Option<ServerEvent>, RealtimeError> {
                 "transcript": transcript,
             }))))
         }
-        "response.done" => Ok(Some(ServerEvent::ResponseDone)),
+        "response.done" => Ok(Some(ServerEvent::ResponseDone(
+            event
+                .get("response")
+                .and_then(|response| response.get("status"))
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        ))),
+        "input_audio_buffer.speech_started" => Ok(Some(ServerEvent::SpeechStarted)),
+        "input_audio_buffer.speech_stopped" => Ok(Some(ServerEvent::SpeechStopped)),
+        "input_audio_buffer.committed" => Ok(Some(ServerEvent::InputCommitted)),
+        "response.created" => Ok(Some(ServerEvent::ResponseCreated)),
         "session.updated" => Ok(Some(ServerEvent::SessionUpdated)),
         "session.created" => Ok(Some(ServerEvent::SessionCreated)),
         "error" => {
             let error = event.get("error");
+            // code 缺省时回退；同时透出限长的 message（剔除密钥样式片段）——
+            // DashScope 的拒绝原因只在 message 里，缺失时用户只能看到笼统错误。
             let code = error
-                .and_then(|value| value.get("code"))
+                .and_then(|value| value.get("code").or_else(|| value.get("msg_code")))
                 .and_then(Value::as_str)
                 .unwrap_or("REALTIME_REMOTE_ERROR");
-            Err(RealtimeError::Remote(sanitize_remote_code(code)))
+            let message = error
+                .and_then(|value| value.get("message"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim();
+            Err(RealtimeError::Remote(sanitize_remote_code(
+                if message.is_empty() {
+                    code.to_owned()
+                } else {
+                    format!("{code}: {message}")
+                }
+                .as_str(),
+            )))
         }
         _ => Ok(None),
     }
 }
 
-struct TungsteniteSocket {
-    socket: tungstenite::WebSocket<MaybeTlsStream<TcpStream>>,
+pub(crate) struct TungsteniteSocket {
+    pub(crate) socket: tungstenite::WebSocket<MaybeTlsStream<TcpStream>>,
 }
 
 impl RealtimeTransport for TungsteniteSocket {
@@ -622,7 +703,9 @@ impl RealtimeTransport for TungsteniteSocket {
             if remaining.is_zero() {
                 return Err(RealtimeError::Timeout);
             }
-            set_socket_timeouts(&mut self.socket, remaining)?;
+            // 只改读超时：实时泵以 20ms 轮询读，若写超时也被压到 20ms，
+            // 随后的音频/图片 append 在网络稍慢时就会误报 REALTIME_TIMEOUT 并重连。
+            set_socket_read_timeout(&mut self.socket, remaining)?;
             match self.socket.read() {
                 Ok(Message::Text(text)) => {
                     if text.len() > MAX_TEXT_FRAME_BYTES {
@@ -647,39 +730,63 @@ impl RealtimeTransport for TungsteniteSocket {
 
 // Only the OS resolver/connect worker is detached. It never owns credentials or
 // sends a request. A late stream is dropped when its receiver has been cancelled.
-fn connect_tcp(url: &Url, cancel: &AtomicBool) -> Result<TcpStream, RealtimeError> {
+pub(crate) fn connect_tcp(url: &Url, cancel: &AtomicBool) -> Result<TcpStream, RealtimeError> {
     let host = url.host_str().ok_or(RealtimeError::UrlInvalid)?.to_owned();
     let port = url
         .port_or_known_default()
         .ok_or(RealtimeError::UrlInvalid)?;
     let deadline = Instant::now() + CONNECT_OPEN_TIMEOUT;
-    let (tx, rx) = mpsc::sync_channel(1);
-    std::thread::spawn(move || {
-        let result = (|| {
-            let addresses = (host.as_str(), port)
-                .to_socket_addrs()
-                .map_err(|_| RealtimeError::DnsFailed)?;
-            let mut last = RealtimeError::DnsFailed;
-            for address in addresses {
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                if remaining.is_zero() {
-                    return Err(RealtimeError::Timeout);
-                }
-                match TcpStream::connect_timeout(&address, remaining) {
-                    Ok(stream) => return Ok(stream),
-                    Err(error) => {
-                        last = if error.kind() == std::io::ErrorKind::TimedOut {
-                            RealtimeError::Timeout
-                        } else {
-                            RealtimeError::TcpFailed
-                        }
+    // getaddrinfo 常把 IPv6 排在首位，而本机 IPv6 路由可能不可达——串行逐个尝试
+    // 会让首个黑洞地址耗尽整个连接预算（对称影响任何解析顺序不利的域名）。
+    // 并行竞速全部解析地址（RFC 8305 Happy Eyeballs 思路），任一成功即用。
+    let addresses: Vec<std::net::SocketAddr> = (host.as_str(), port)
+        .to_socket_addrs()
+        .map_err(|_| RealtimeError::DnsFailed)?
+        .take(8)
+        .collect();
+    race_tcp_connect(&addresses, cancel, deadline, |address, remaining| {
+        TcpStream::connect_timeout(&address, remaining)
+    })
+}
+
+/// 对全部解析地址并行发起 TCP 连接，最先成功者胜出；取消与预算语义不变。
+/// 全部快速失败返回最后一次错误，预算耗尽或被取消返回相应错误。
+fn race_tcp_connect(
+    addresses: &[std::net::SocketAddr],
+    cancel: &AtomicBool,
+    deadline: Instant,
+    connect: impl Fn(std::net::SocketAddr, Duration) -> std::io::Result<TcpStream>
+    + Send
+    + Sync
+    + Clone
+    + 'static,
+) -> Result<TcpStream, RealtimeError> {
+    if addresses.is_empty() {
+        return Err(RealtimeError::DnsFailed);
+    }
+    let (tx, rx) = mpsc::channel();
+    for address in addresses {
+        let address = *address;
+        let sender = tx.clone();
+        let connect = connect.clone();
+        std::thread::spawn(move || {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let result = if remaining.is_zero() {
+                Err(RealtimeError::Timeout)
+            } else {
+                connect(address, remaining).map_err(|error| {
+                    if error.kind() == std::io::ErrorKind::TimedOut {
+                        RealtimeError::Timeout
+                    } else {
+                        RealtimeError::TcpFailed
                     }
-                }
-            }
-            Err(last)
-        })();
-        let _ = tx.send(result);
-    });
+                })
+            };
+            let _ = sender.send(result);
+        });
+    }
+    drop(tx);
+    let mut last = RealtimeError::DnsFailed;
     loop {
         if cancel.load(Ordering::Relaxed) {
             return Err(RealtimeError::Cancelled);
@@ -689,9 +796,10 @@ fn connect_tcp(url: &Url, cancel: &AtomicBool) -> Result<TcpStream, RealtimeErro
             return Err(RealtimeError::Timeout);
         }
         match rx.recv_timeout(remaining.min(CANCEL_POLL)) {
-            Ok(result) => return result,
+            Ok(Ok(stream)) => return Ok(stream),
+            Ok(Err(error)) => last = error,
             Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(_) => return Err(RealtimeError::TcpFailed),
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Err(last),
         }
     }
 }
@@ -809,7 +917,7 @@ fn socket_error(error: WsError, fallback: RealtimeError) -> RealtimeError {
     }
 }
 
-fn complete_handshake<S: Read + Write>(
+pub(crate) fn complete_handshake<S: Read + Write>(
     result: Result<
         (
             tungstenite::WebSocket<S>,
@@ -841,7 +949,10 @@ fn complete_handshake<S: Read + Write>(
     }
 }
 
-fn send_text(socket: &mut TungsteniteSocket, payload: &str) -> Result<(), RealtimeError> {
+pub(crate) fn send_text(
+    socket: &mut TungsteniteSocket,
+    payload: &str,
+) -> Result<(), RealtimeError> {
     socket
         .socket
         .send(Message::Text(payload.into()))
@@ -855,6 +966,7 @@ fn send_text(socket: &mut TungsteniteSocket, payload: &str) -> Result<(), Realti
 fn collect_turn(
     socket: &mut TungsteniteSocket,
     cancel: &AtomicBool,
+    hooks: &super::TurnStreamHooks<'_>,
 ) -> Result<RealtimeTurn, RealtimeError> {
     let mut assembler = InputTranscriptAssembler::new();
     let mut user_text = String::new();
@@ -864,24 +976,27 @@ fn collect_turn(
         if cancel.load(Ordering::Relaxed) {
             return Err(RealtimeError::Cancelled);
         }
-        let raw = socket.recv_text(SESSION_UPDATED_TIMEOUT)?;
+        let raw = socket.recv_text(COLLECT_IDLE_TIMEOUT)?;
         match parse_server_event(&raw)? {
             Some(ServerEvent::InputTranscriptDelta(payload)) => {
                 if let Some((_, text, _)) = assembler.update("input_transcript_delta", &payload) {
                     user_text = text;
+                    hooks.notify_user(&user_text);
                 }
             }
             Some(ServerEvent::InputTranscriptCompleted(payload)) => {
                 if let Some((_, text, _)) = assembler.update("input_transcript_completed", &payload)
                 {
                     user_text = text;
+                    hooks.notify_user(&user_text);
                 }
             }
             Some(ServerEvent::OutputTranscript(delta) | ServerEvent::OutputText(delta)) => {
                 assistant_text.push_str(&delta);
+                hooks.notify_assistant(&assistant_text);
             }
             Some(ServerEvent::Audio(pcm)) => tts_pcm.extend_from_slice(&pcm),
-            Some(ServerEvent::ResponseDone) => {
+            Some(ServerEvent::ResponseDone(_)) => {
                 let assistant_text = assistant_text.trim().to_owned();
                 if assistant_text.is_empty() {
                     return Err(RealtimeError::TextEmpty);
@@ -892,23 +1007,38 @@ fn collect_turn(
                     tts_pcm,
                 });
             }
-            Some(ServerEvent::SessionCreated | ServerEvent::SessionUpdated) | None => {}
+            Some(
+                ServerEvent::SessionCreated
+                | ServerEvent::SessionUpdated
+                | ServerEvent::SpeechStarted
+                | ServerEvent::SpeechStopped
+                | ServerEvent::InputCommitted
+                | ServerEvent::ResponseCreated,
+            )
+            | None => {}
         }
     }
 }
 
-fn set_socket_timeouts(
+/// collect_turn 单帧间隔上限：长语音转写/首 token 生成间隙可能超过 10 秒，
+/// 误杀在途成功轮次；总时长仍由 with_realtime_socket 的轮预算（90 秒）兜底。
+const COLLECT_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+
+fn set_socket_read_timeout(
     socket: &mut tungstenite::WebSocket<MaybeTlsStream<TcpStream>>,
     timeout: Duration,
 ) -> Result<(), RealtimeError> {
-    match socket.get_mut() {
-        MaybeTlsStream::Plain(stream) => set_tcp_timeouts(stream, timeout),
-        MaybeTlsStream::Rustls(stream) => set_tcp_timeouts(stream.get_mut(), timeout),
-        _ => Ok(()),
-    }
+    let stream = match socket.get_mut() {
+        MaybeTlsStream::Plain(stream) => stream,
+        MaybeTlsStream::Rustls(stream) => stream.get_mut(),
+        _ => return Ok(()),
+    };
+    stream
+        .set_read_timeout(Some(timeout))
+        .map_err(|_| RealtimeError::ConnectFailed)
 }
 
-fn set_tcp_timeouts(stream: &TcpStream, timeout: Duration) -> Result<(), RealtimeError> {
+pub(crate) fn set_tcp_timeouts(stream: &TcpStream, timeout: Duration) -> Result<(), RealtimeError> {
     stream
         .set_read_timeout(Some(timeout))
         .map_err(|_| RealtimeError::ConnectFailed)?;
@@ -920,6 +1050,119 @@ fn set_tcp_timeouts(stream: &TcpStream, timeout: Duration) -> Result<(), Realtim
 #[cfg(test)]
 mod connection_tests {
     use super::*;
+
+    #[test]
+    fn recv_poll_does_not_shrink_write_timeout() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut ws = tungstenite::accept(stream).unwrap();
+            let _ = ws.read();
+        });
+        let stream = TcpStream::connect(address).unwrap();
+        set_tcp_timeouts(&stream, CONNECT_OPEN_TIMEOUT).unwrap();
+        let (socket, _) =
+            tungstenite::client(format!("ws://{address}/"), MaybeTlsStream::Plain(stream)).unwrap();
+        let mut socket = TungsteniteSocket { socket };
+
+        assert_eq!(
+            socket.recv_text(Duration::from_millis(20)),
+            Err(RealtimeError::Timeout)
+        );
+        let MaybeTlsStream::Plain(stream) = socket.socket.get_ref() else {
+            panic!("expected plain stream");
+        };
+        assert_eq!(stream.write_timeout().unwrap(), Some(CONNECT_OPEN_TIMEOUT));
+        let _ = socket.socket.close(None);
+        let _ = socket.socket.flush();
+        drop(socket);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn race_tcp_connect_wins_via_later_address_when_first_attempt_stalls() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let good = listener.local_addr().unwrap();
+        let stalled = std::net::SocketAddr::from(([127, 0, 0, 1], 1));
+        // 地址顺序模拟 getaddrinfo 的 IPv6 在前：首个地址的连接尝试挂住不返回。
+        let addresses = vec![stalled, good];
+        let connect = move |address: std::net::SocketAddr, budget: Duration| {
+            if address == stalled {
+                std::thread::sleep(budget.min(Duration::from_millis(800)));
+                Err(std::io::Error::from(std::io::ErrorKind::TimedOut))
+            } else {
+                TcpStream::connect_timeout(&address, budget)
+            }
+        };
+        let cancel = AtomicBool::new(false);
+        let start = Instant::now();
+        let stream = race_tcp_connect(
+            &addresses,
+            &cancel,
+            Instant::now() + Duration::from_secs(10),
+            connect,
+        )
+        .unwrap();
+        let elapsed = start.elapsed();
+        assert_eq!(stream.peer_addr().unwrap(), good);
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "race should not wait for the stalled first attempt, took {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn race_tcp_connect_returns_timeout_when_budget_expires_without_success() {
+        let addresses = vec![std::net::SocketAddr::from(([127, 0, 0, 1], 1))];
+        let connect = |_address: std::net::SocketAddr, budget: Duration| {
+            std::thread::sleep(budget.min(Duration::from_millis(300)));
+            Err(std::io::Error::from(std::io::ErrorKind::TimedOut))
+        };
+        let cancel = AtomicBool::new(false);
+        let result = race_tcp_connect(
+            &addresses,
+            &cancel,
+            Instant::now() + Duration::from_millis(500),
+            connect,
+        );
+        assert!(matches!(result, Err(RealtimeError::Timeout)));
+    }
+
+    #[test]
+    fn race_tcp_connect_reports_tcp_failed_when_all_attempts_fail_fast() {
+        let first = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let second = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let taken = first.local_addr().unwrap();
+        let taken2 = second.local_addr().unwrap();
+        drop(first);
+        drop(second);
+        let addresses = vec![taken, taken2];
+        let cancel = AtomicBool::new(false);
+        let result = race_tcp_connect(
+            &addresses,
+            &cancel,
+            Instant::now() + Duration::from_secs(5),
+            |address, budget| TcpStream::connect_timeout(&address, budget),
+        );
+        assert!(matches!(result, Err(RealtimeError::TcpFailed)));
+    }
+
+    #[test]
+    fn race_tcp_connect_honours_cancellation() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let cancel = AtomicBool::new(true);
+        let start = Instant::now();
+        let result = race_tcp_connect(
+            &[address],
+            &cancel,
+            Instant::now() + Duration::from_secs(5),
+            |address, budget| TcpStream::connect_timeout(&address, budget),
+        );
+        assert!(matches!(result, Err(RealtimeError::Cancelled)));
+        assert!(start.elapsed() < Duration::from_secs(2));
+    }
 
     #[test]
     fn text_turn_sends_typed_content_and_receives_text_and_audio_twice() {
@@ -974,6 +1217,8 @@ mod connection_tests {
                         instructions: "简短回答",
                         prompt: "你好啊",
                         include_audio: true,
+                        voice: "",
+                        hooks: super::super::TurnStreamHooks::none(),
                     },
                     &cancel,
                 )
@@ -1053,7 +1298,7 @@ mod connection_tests {
         let start = Instant::now();
         let result =
             with_realtime_socket_budget(&url, None, &cancel, Duration::from_millis(75), |socket| {
-                collect_turn(socket, &cancel)
+                collect_turn(socket, &cancel, &super::super::TurnStreamHooks::none())
             });
         let elapsed = start.elapsed();
         server.join().unwrap();
@@ -1118,6 +1363,430 @@ mod connection_tests {
         assert_eq!(result.unwrap_err().code(), "REALTIME_CONNECTION_CLOSED");
     }
 
+    /// 诊断探测：对 DashScope realtime 握手并原样打印服务端前若干帧（定位 COMMON_ERROR 等远端错误细节）。
+    /// 运行：REALTIME_SMOKE_CONFIG=<config> REALTIME_SMOKE_ROUTE=<route id>
+    /// cargo test --lib live_dashscope_realtime_raw_probe -- --ignored --nocapture
+    #[test]
+    #[ignore = "Uses the saved Windows credential; set REALTIME_SMOKE_CONFIG and REALTIME_SMOKE_ROUTE explicitly"]
+    #[cfg(windows)]
+    fn live_dashscope_realtime_raw_probe() {
+        use crate::secrets::{SecretService, WindowsSecretStore};
+        use std::sync::Arc;
+
+        let path = std::env::var("REALTIME_SMOKE_CONFIG").expect("explicit config path required");
+        let config: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let route_id = std::env::var("REALTIME_SMOKE_ROUTE").expect("route id required");
+        let route = config["speech"]["voiceRoutes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"].as_str() == Some(route_id.as_str()))
+            .expect("selected route must exist")
+            .clone();
+        let provider = config["models"]["providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == route["e2eProviderId"])
+            .unwrap()
+            .clone();
+        let secrets = SecretService::new("default", Arc::new(WindowsSecretStore::new())).unwrap();
+        let credential = secrets
+            .read(provider["credential"]["reference"].as_str().unwrap())
+            .unwrap()
+            .expect("saved credential must exist");
+        let endpoint = ProviderEndpoint {
+            provider_id: provider["id"].as_str().unwrap().to_owned(),
+            base_url: provider["baseUrl"].as_str().unwrap().to_owned(),
+        };
+        let model = route["e2eModelId"].as_str().unwrap_or("");
+        let url = realtime_url(&endpoint.base_url, model).unwrap();
+        eprintln!("raw probe: url={url}");
+        let dialect = realtime_dialect(&endpoint.base_url);
+        eprintln!(
+            "raw probe: dialect={:?} input_rate={}",
+            dialect.name, dialect.input_rate
+        );
+        let voice_override = std::env::var("REALTIME_SMOKE_VOICE")
+            .unwrap_or_else(|_| route["voiceId"].as_str().unwrap_or("").to_owned());
+        let update = session_update_event(
+            &voice_override,
+            "你是会议助手，请用中文简短回答。",
+            &dialect,
+        );
+        let cancel = AtomicBool::new(false);
+        let result = with_realtime_socket(&url, Some(credential.as_str()), &cancel, |socket| {
+            send_text(socket, &update.to_string())?;
+            for step in 0..6 {
+                match socket.recv_text(Duration::from_secs(8)) {
+                    Ok(text) => eprintln!("raw probe <- {text}"),
+                    Err(error) => {
+                        eprintln!("raw probe recv error: {error:?}");
+                        return Err(error);
+                    }
+                }
+                if step == 1 {
+                    send_text(socket, &conversation_text_event("你好，请打个招呼。"))?;
+                    send_text(socket, &response_create_event(true))?;
+                }
+            }
+            Ok(())
+        });
+        eprintln!("raw probe result: {result:?}");
+    }
+
+    /// 音频轮诊断：复刻 transcribe_turn 的完整流程（session.update → append → commit），
+    /// 原样打印服务端每一帧，定位音频路径快速失败的远端原因。
+    /// 运行：REALTIME_SMOKE_CONFIG=<config> REALTIME_SMOKE_ROUTE=<route id>
+    /// [REALTIME_SMOKE_WAV=<16k mono wav，默认内置 1s 静音>]
+    #[test]
+    #[ignore = "Uses the saved Windows credential and consumes provider quota; set REALTIME_SMOKE_CONFIG and REALTIME_SMOKE_ROUTE explicitly"]
+    #[cfg(windows)]
+    fn live_dashscope_realtime_audio_probe() {
+        use crate::secrets::{SecretService, WindowsSecretStore};
+        use std::sync::Arc;
+
+        let path = std::env::var("REALTIME_SMOKE_CONFIG").expect("explicit config path required");
+        let config: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let route_id = std::env::var("REALTIME_SMOKE_ROUTE").expect("route id required");
+        let route = config["speech"]["voiceRoutes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"].as_str() == Some(route_id.as_str()))
+            .expect("selected route must exist")
+            .clone();
+        let provider = config["models"]["providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == route["e2eProviderId"])
+            .unwrap()
+            .clone();
+        let secrets = SecretService::new("default", Arc::new(WindowsSecretStore::new())).unwrap();
+        let credential = secrets
+            .read(provider["credential"]["reference"].as_str().unwrap())
+            .unwrap()
+            .expect("saved credential must exist");
+        let endpoint = ProviderEndpoint {
+            provider_id: provider["id"].as_str().unwrap().to_owned(),
+            base_url: provider["baseUrl"].as_str().unwrap().to_owned(),
+        };
+        let url = realtime_url(
+            &endpoint.base_url,
+            route["e2eModelId"].as_str().unwrap_or(""),
+        )
+        .unwrap();
+        let dialect = realtime_dialect(&endpoint.base_url);
+
+        // 读取 wav 的 data 块作为 16-bit mono PCM；raw PCM 文件直接使用；未提供则用 1 秒静音。
+        let wav_path = std::env::var("REALTIME_SMOKE_WAV").ok();
+        let pcm: Vec<u8> = wav_path.as_deref().map_or_else(
+            || vec![0_u8; dialect.input_rate as usize * 2],
+            |wav_path| {
+                let bytes = std::fs::read(wav_path).unwrap();
+                if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" {
+                    let mut offset = 12usize;
+                    while offset + 8 <= bytes.len() {
+                        let id = &bytes[offset..offset + 4];
+                        let size =
+                            u32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().unwrap())
+                                as usize;
+                        if id == b"data" {
+                            let end = (offset + 8 + size).min(bytes.len());
+                            return bytes[offset + 8..end].to_vec();
+                        }
+                        offset += 8 + size + (size & 1);
+                    }
+                    panic!("no data chunk in {wav_path}");
+                }
+                bytes
+            },
+        );
+        eprintln!(
+            "audio probe: pcm_bytes={} rate={}",
+            pcm.len(),
+            dialect.input_rate
+        );
+
+        let voice_override = std::env::var("REALTIME_SMOKE_VOICE")
+            .unwrap_or_else(|_| route["voiceId"].as_str().unwrap_or("").to_owned());
+        // 默认复刻应用的 session.update 载荷（角色 instructions 来自会话配置）；
+        // 设 REALTIME_PROBE_PLAIN=1 时用短句，便于二分定位。
+        let instructions = if std::env::var("REALTIME_PROBE_PLAIN").is_ok() {
+            "你是会议助手，请用中文简短回答。".to_owned()
+        } else {
+            std::env::var("REALTIME_PROBE_INSTRUCTIONS").unwrap_or_else(|_| {
+                config["roleProfiles"]
+                    .as_array()
+                    .and_then(|profiles| {
+                        profiles
+                            .iter()
+                            .find(|p| p["active"].as_bool() == Some(true))
+                            .or_else(|| profiles.first())
+                    })
+                    .map(|p| {
+                        let mut out = p["systemPrompt"].as_str().unwrap_or("").to_owned();
+                        if let Some(style) = p["styleInstructions"].as_str()
+                            && !style.is_empty()
+                        {
+                            out.push_str("\n\n");
+                            out.push_str(style);
+                        }
+                        out
+                    })
+                    .unwrap_or_default()
+            })
+        };
+        eprintln!(
+            "audio probe: instructions_len={}",
+            instructions.chars().count()
+        );
+        let update = session_update_event(&voice_override, &instructions, &dialect);
+        let cancel = AtomicBool::new(false);
+        let result = with_realtime_socket(&url, Some(credential.as_str()), &cancel, |socket| {
+            send_text(socket, &update.to_string())?;
+            // 复刻 transcribe_turn 新流程：等 session.updated → 分块 append →
+            // 等 VAD 自动 committed → response.create。
+            wait_session_updated(socket, SESSION_UPDATED_TIMEOUT)?;
+            eprintln!("audio probe: session updated confirmed");
+            let chunk = dialect.input_rate as usize * 2 / 10;
+            for piece in pcm.chunks(chunk) {
+                send_text(socket, &append_audio_event(piece))?;
+            }
+            send_text(socket, r#"{"type":"input_audio_buffer.commit"}"#)?;
+            send_text(socket, &response_create_event(true))?;
+            for _ in 0..200 {
+                match socket.recv_text(Duration::from_secs(10)) {
+                    Ok(text) => {
+                        eprintln!("audio probe <- {}", &text[..text.len().min(500)]);
+                        if text.contains("\"response.done\"") || text.contains("\"type\":\"error\"")
+                        {
+                            return Ok(());
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!("audio probe recv error: {error:?}");
+                        return Err(error);
+                    }
+                }
+            }
+            Ok(())
+        });
+        eprintln!("audio probe result: {result:?}");
+    }
+
+    /// 应用同路径音频轮诊断：直接调 transcribe_turn（session.update→append→commit→collect_turn），
+    /// 打印最终 Err 的真实错误码，与手拼探针的帧级观测互为对照。
+    /// 运行：REALTIME_SMOKE_CONFIG=<config> REALTIME_SMOKE_ROUTE=<route id>
+    /// [REALTIME_SMOKE_WAV=<16k mono wav>]
+    #[test]
+    #[ignore = "Uses the saved Windows credential and consumes provider quota; set REALTIME_SMOKE_CONFIG and REALTIME_SMOKE_ROUTE explicitly"]
+    #[cfg(windows)]
+    fn live_transcribe_turn_smoke() {
+        use crate::secrets::{SecretService, WindowsSecretStore};
+        use std::sync::Arc;
+
+        let path = std::env::var("REALTIME_SMOKE_CONFIG").expect("explicit config path required");
+        let config: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let route_id = std::env::var("REALTIME_SMOKE_ROUTE").expect("route id required");
+        let route = config["speech"]["voiceRoutes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"].as_str() == Some(route_id.as_str()))
+            .expect("selected route must exist")
+            .clone();
+        let provider = config["models"]["providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == route["e2eProviderId"])
+            .unwrap()
+            .clone();
+        let secrets = SecretService::new("default", Arc::new(WindowsSecretStore::new())).unwrap();
+        let credential = secrets
+            .read(provider["credential"]["reference"].as_str().unwrap())
+            .unwrap()
+            .expect("saved credential must exist");
+        let endpoint = ProviderEndpoint {
+            provider_id: provider["id"].as_str().unwrap().to_owned(),
+            base_url: provider["baseUrl"].as_str().unwrap().to_owned(),
+        };
+
+        let wav_path = std::env::var("REALTIME_SMOKE_WAV")
+            .unwrap_or_else(|_| "C:/Users/28839/AppData/Local/Temp/clone-sample.wav".into());
+        let bytes = std::fs::read(&wav_path).unwrap();
+        let pcm = if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" {
+            let mut offset = 12usize;
+            loop {
+                if offset + 8 > bytes.len() {
+                    panic!("no data chunk in {wav_path}");
+                }
+                let id = &bytes[offset..offset + 4];
+                let size =
+                    u32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().unwrap()) as usize;
+                if id == b"data" {
+                    let end = (offset + 8 + size).min(bytes.len());
+                    break bytes[offset + 8..end].to_vec();
+                }
+                offset += 8 + size + (size & 1);
+            }
+        } else {
+            // 原始 16k mono PCM（如 roleai-utterance-latest.pcm 诊断转储）。
+            bytes
+        };
+        eprintln!("transcribe smoke: pcm_bytes={}", pcm.len());
+
+        // 与真实会话一致：优先用线路配置的音色，未设环境变量覆盖时取 route.voiceId。
+        let voice_override = std::env::var("REALTIME_SMOKE_VOICE")
+            .unwrap_or_else(|_| route["voiceId"].as_str().unwrap_or("").to_owned());
+        let cancel = AtomicBool::new(false);
+        let started = std::time::Instant::now();
+        let result = OpenAiCompatibleRealtime::new().transcribe_turn(
+            RealtimeAudioRequest {
+                endpoint: &endpoint,
+                credential: Some(credential.as_str()),
+                model_id: route["e2eModelId"].as_str().unwrap_or(""),
+                pcm16le: &pcm,
+                sample_rate: 16_000,
+                instructions: "你是会议助手，请用中文简短回答。",
+                voice: &voice_override,
+                hooks: super::super::TurnStreamHooks::none(),
+            },
+            &cancel,
+        );
+        eprintln!(
+            "transcribe smoke: elapsed={:?} result={result:?}",
+            started.elapsed()
+        );
+        let turn = result.expect("transcribe_turn should succeed");
+        eprintln!(
+            "transcribe smoke: user={} assistant={} pcm={}",
+            turn.user_text,
+            turn.assistant_text,
+            turn.tts_pcm.len()
+        );
+    }
+
+    #[test]
+    #[allow(unused_assignments)]
+    fn transcribe_turn_streams_audio_in_chunks_and_collects_reply() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = ProviderEndpoint {
+            provider_id: "local-test".into(),
+            base_url: format!(
+                "http://{}/api-ws/v1/realtime",
+                listener.local_addr().unwrap()
+            ),
+        };
+        // 3 秒 16kHz PCM：单帧 ~96KB，分块后应远大于 1 帧。
+        let pcm = vec![0x10_u8; 16_000 * 2 * 3];
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut ws = tungstenite::accept(stream).unwrap();
+            // session.update
+            let update: Value =
+                serde_json::from_str(ws.read().unwrap().to_text().unwrap()).unwrap();
+            assert_eq!(update["type"], "session.update");
+            assert_eq!(
+                update["session"]["voice"], "qwen-omni-vc-test",
+                "route-configured voice must reach session.update"
+            );
+            // Aliyun Manual 模式：禁用服务端 VAD（本地 SmartTurn 已判定语句结束），
+            // 由客户端 commit + response.create 驱动，避免 VAD 自动提交的竞态。
+            assert!(update["session"]["turn_detection"].is_null());
+            ws.send(Message::Text(r#"{"type":"session.created"}"#.into()))
+                .unwrap();
+            ws.send(Message::Text(r#"{"type":"session.updated"}"#.into()))
+                .unwrap();
+            // 收 append 帧与 commit；Manual 模式下 commit 后必须紧跟 response.create。
+            let mut chunk_sizes = Vec::new();
+            let mut commit_at: Option<usize> = None;
+            let mut create_at: Option<usize> = Some(0);
+            let mut frame_no = 0usize;
+            loop {
+                frame_no += 1;
+                let frame: Value =
+                    serde_json::from_str(ws.read().unwrap().to_text().unwrap()).unwrap();
+                match frame["type"].as_str().unwrap() {
+                    "input_audio_buffer.append" => {
+                        let decoded = STANDARD.decode(frame["audio"].as_str().unwrap()).unwrap();
+                        chunk_sizes.push(decoded.len());
+                    }
+                    "input_audio_buffer.commit" => commit_at = Some(frame_no),
+                    "response.create" => {
+                        create_at = Some(frame_no);
+                        break;
+                    }
+                    other => panic!("unexpected frame {other}"),
+                }
+            }
+            let commit = commit_at.expect("manual commit is required in manual mode");
+            let create = create_at.expect("response.create must follow commit");
+            assert!(create > commit, "response.create must be sent after commit");
+            assert!(
+                chunk_sizes.len() > 10,
+                "expected streamed chunks, got {}",
+                chunk_sizes.len()
+            );
+            for size in &chunk_sizes[..chunk_sizes.len() - 1] {
+                assert_eq!(
+                    *size, AUDIO_APPEND_CHUNK_BYTES,
+                    "all but last chunk are fixed size"
+                );
+            }
+            ws.send(Message::Text(
+                r#"{"type":"conversation.item.input_audio_transcription.completed","item_id":"item_1","transcript":"你好"}"#
+                    .into(),
+            ))
+            .unwrap();
+            ws.send(Message::Text(
+                format!(
+                    r#"{{"type":"response.audio.delta","delta":"{}"}}"#,
+                    STANDARD.encode([0x01_u8, 0x02])
+                )
+                .into(),
+            ))
+            .unwrap();
+            ws.send(Message::Text(
+                r#"{"type":"response.audio_transcript.delta","delta":"你好呀"}"#.into(),
+            ))
+            .unwrap();
+            ws.send(Message::Text(r#"{"type":"response.done"}"#.into()))
+                .unwrap();
+            chunk_sizes.len()
+        });
+
+        let cancel = AtomicBool::new(false);
+        let turn = OpenAiCompatibleRealtime::new()
+            .transcribe_turn(
+                RealtimeAudioRequest {
+                    endpoint: &endpoint,
+                    credential: None,
+                    model_id: "qwen3.8-omni-flash-realtime",
+                    pcm16le: &pcm,
+                    sample_rate: 16_000,
+                    instructions: "请简短回答。",
+                    voice: "qwen-omni-vc-test",
+                    hooks: super::super::TurnStreamHooks::none(),
+                },
+                &cancel,
+            )
+            .unwrap();
+        let chunk_count = server.join().unwrap();
+        assert_eq!(turn.user_text, "你好");
+        assert_eq!(turn.assistant_text, "你好呀");
+        assert_eq!(turn.tts_pcm, vec![0x01_u8, 0x02]);
+        assert!(
+            chunk_count <= 32,
+            "3s audio should be ~30 chunks, got {chunk_count}"
+        );
+    }
+
     #[test]
     fn failed_handshake_preserves_auth_status_without_response_body() {
         for status in [401, 403] {
@@ -1179,6 +1848,8 @@ mod connection_tests {
                     instructions: "请用中文简短回答。",
                     prompt,
                     include_audio: true,
+                    voice: route["voiceId"].as_str().unwrap_or(""),
+                    hooks: super::super::TurnStreamHooks::none(),
                 },
                 &cancel,
             );

@@ -1,9 +1,17 @@
 import { Fragment, FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import { Bot, ChevronDown, FileText, Hand, MessageSquare, MicOff, Play, RotateCcw, Square, Volume2, Wrench } from "lucide-react";
+import { Bot, Camera, ChevronDown, Copy, FileText, Globe, Hand, MessageSquare, Mic, MicOff, Pause, Play, Plus, RotateCcw, ScreenShare, Send, Square, Volume2, Wrench, X } from "lucide-react";
 
 import * as api from "../../api/commands";
 import "../../styles/workspace.css";
 import { MicStreamer, type MicStreamCallbacks, type MicStreamController } from "./mic-recorder";
+import {
+  WebAudioPlayer,
+  audioDiagnostics,
+  createAudioContextForOutput,
+  decodePcm16Base64,
+  resolveWebAudioSinkId,
+} from "./web-audio-player";
+import { VideoSharer, type VideoShareKind, type VideoSharerCallbacks, type VideoSharerController } from "./video-sharer";
 import { PreflightIssues } from "./preflight-issues";
 import type {
   AgentCommandInput,
@@ -75,6 +83,10 @@ const REMOTE_ERROR_HINTS: Record<string, string> = {
   "1113": "供应商余额不足：账号没有可用的语音资源包，请充值或更换语音线路。",
 };
 
+// 连续快速失败的常见原因是供应商限流（如阿里云实时模型对高频请求限流）：
+// 追加可行动的提示，避免用户在限流窗口内反复重试加深限流。
+const RATE_LIMIT_HINT = "若短时间内多次失败，可能是供应商限流，请等待 1–2 分钟后再说话重试。";
+
 function humanizeRemoteError(message: string): string {
   for (const [code, hint] of Object.entries(REMOTE_ERROR_HINTS)) {
     if (message.startsWith(code)) return hint;
@@ -112,6 +124,22 @@ const MODE_LABELS: Record<string, string> = {
   muted: "已静音",
 };
 
+// 音量条四根 bar 的灵敏度系数：同样的电平下制造出高低起伏，避免齐刷刷等高。
+const BAR_FACTORS = [0.45, 0.7, 0.6, 0.85] as const;
+
+function formatDuration(totalSeconds: number): string {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function clockOf(iso: string | undefined): string {
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
 export type SessionListen = <T>(
   event: string,
   handler: (payload: T) => void,
@@ -120,11 +148,39 @@ export type SessionListen = <T>(
 export interface WorkspaceSessionProps {
   finalizeUtterance?: (text: string) => Promise<void>;
   listen?: SessionListen;
-  createMicStreamer?: (callbacks: MicStreamCallbacks) => MicStreamController;
+  createMicStreamer?: (
+    callbacks: MicStreamCallbacks,
+    sharedContext?: AudioContext,
+  ) => MicStreamController;
+  createVideoSharer?: (
+    kind: VideoShareKind,
+    callbacks: VideoSharerCallbacks,
+  ) => VideoSharerController;
 }
 
-function defaultCreateMicStreamer(callbacks: MicStreamCallbacks): MicStreamController {
-  return new MicStreamer(callbacks);
+function defaultCreateMicStreamer(
+  callbacks: MicStreamCallbacks,
+  sharedContext?: AudioContext,
+): MicStreamController {
+  return new MicStreamer(callbacks, sharedContext);
+}
+
+interface LocalSessionAudioEvent {
+  seq: number;
+  pcmBase64: string;
+  sampleRate: number;
+}
+
+interface LocalSessionPlaybackControlEvent {
+  seq: number;
+  action: "clear";
+}
+
+function defaultCreateVideoSharer(
+  kind: VideoShareKind,
+  callbacks: VideoSharerCallbacks,
+): VideoSharerController {
+  return new VideoSharer(kind, callbacks);
 }
 
 async function defaultFinalizeUtterance(text: string) {
@@ -150,6 +206,7 @@ export function WorkspaceSession({
   finalizeUtterance = defaultFinalizeUtterance,
   listen = defaultListen,
   createMicStreamer = defaultCreateMicStreamer,
+  createVideoSharer = defaultCreateVideoSharer,
 }: WorkspaceSessionProps) {
   const [phase, setPhase] = useState("idle");
   const [mode, setMode] = useState("ai_active");
@@ -183,7 +240,7 @@ export function WorkspaceSession({
   useEffect(() => {
     let disposed = false;
     let unlisten = () => {};
-    Promise.resolve(listen<string>("virtual_audio.preparation.v1", (phase) => {
+    Promise.resolve(listen<string>("virtual_audio:preparation:v1", (phase) => {
       if (!disposed && phase in PREPARATION_PHASES) setAudioPreparationPhase(phase);
     })).then((cleanup) => { if (disposed) cleanup(); else unlisten = cleanup; }).catch(() => {});
     return () => { disposed = true; unlisten(); };
@@ -258,14 +315,40 @@ export function WorkspaceSession({
   useEffect(() => () => { requestEpoch.current += 1; }, []);
   const [sayText, setSayText] = useState("");
   const [correctText, setCorrectText] = useState("");
+  const [chatText, setChatText] = useState("");
+  const [micLevel, setMicLevel] = useState(0);
+  const [callSeconds, setCallSeconds] = useState(0);
+  const [videoKind, setVideoKind] = useState<"off" | VideoShareKind>("off");
+  const callStartRef = useRef<number | null>(null);
+  const pipVideoRef = useRef<HTMLVideoElement | null>(null);
   const [revision, setRevision] = useState(0);
   const [reportSummary, setReportSummary] = useState("");
   const [reportDetail, setReportDetail] = useState("");
   const statusSeq = useRef(0);
   const transcriptSeq = useRef(0);
   const replySeq = useRef(0);
+  const playbackSeq = useRef(0);
+  const webAudioPlayerRef = useRef<WebAudioPlayer | null>(null);
+  // 在「开始会话」点击手势内创建并 resume，避免自动播放策略让上下文一直挂起。
+  const playbackContextRef = useRef<AudioContext | null>(null);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreRef = useRef<HTMLDetailsElement | null>(null);
+  useEffect(() => {
+    if (!moreOpen) return;
+    const closeOnOutside = (event: PointerEvent) => {
+      if (moreRef.current && !moreRef.current.contains(event.target as Node)) setMoreOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") setMoreOpen(false); };
+    document.addEventListener("pointerdown", closeOnOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [moreOpen]);
   const sessionIdRef = useRef<string | null>(null);
   const refreshRef = useRef<() => Promise<void>>(async () => {});
+  const [realtimeStatus, setRealtimeStatus] = useState("idle");
 
   const applyStatus = useCallback((next: RuntimeStatus) => {
     if (next.seq <= statusSeq.current) return;
@@ -274,6 +357,9 @@ export function WorkspaceSession({
     setMode(next.mode);
     setUnusedMaterials(next.unusedMaterials);
     setRevision(next.revision);
+    if (next.realtimeStatus && next.realtimeStatus !== "unknown") {
+      setRealtimeStatus(next.realtimeStatus);
+    }
     if (next.mode !== "ai_active") {
       setPendingConfirmation(false);
     }
@@ -283,17 +369,36 @@ export function WorkspaceSession({
   }, []);
 
   const applyTranscript = useCallback((payload: SessionTranscriptEvent) => {
-    if (payload.seq <= transcriptSeq.current) return;
-    transcriptSeq.current = payload.seq;
-    setTranscript(payload.text);
-    void refreshRef.current();
+    if (payload.seq > transcriptSeq.current) {
+      transcriptSeq.current = payload.seq;
+      setTranscript(payload.text);
+    }
+    // done=true 表示已落库：流式快照用 2^32 起步的大序号，落库事件用小序号，
+    // 按序号门控会被当旧事件丢掉，所以落库收尾不看序号、总是刷新，文本以库为准。
+    if (payload.done) void refreshRef.current();
   }, []);
 
   const applyReply = useCallback((payload: SessionReplyEvent) => {
-    if (payload.seq <= replySeq.current) return;
-    replySeq.current = payload.seq;
-    setReply(payload.text);
-    void refreshRef.current();
+    if (payload.seq > replySeq.current) {
+      replySeq.current = payload.seq;
+      setReply(payload.text);
+    }
+    if (payload.done) void refreshRef.current();
+  }, []);
+  const applyPlaybackAudio = useCallback((payload: LocalSessionAudioEvent) => {
+    audioDiagnostics.eventsReceived += 1;
+    audioDiagnostics.bytesReceived += payload.pcmBase64.length;
+    if (payload.seq <= playbackSeq.current) return;
+    playbackSeq.current = payload.seq;
+    const player = webAudioPlayerRef.current;
+    if (!player) return;
+    void player.resume().catch(() => undefined);
+    player.appendPcm16(decodePcm16Base64(payload.pcmBase64));
+  }, []);
+  const applyPlaybackControl = useCallback((payload: LocalSessionPlaybackControlEvent) => {
+    if (payload.seq <= playbackSeq.current) return;
+    playbackSeq.current = payload.seq;
+    webAudioPlayerRef.current?.clear();
   }, []);
 
   const refresh = useCallback(
@@ -344,8 +449,8 @@ export function WorkspaceSession({
 
   const conversationRef = useRef<HTMLDivElement | null>(null);
   const conversationBottomRef = useRef<HTMLDivElement | null>(null);
-  // 事件文本最多 160 字符而库里是全文，因此用前缀比较识别“列表最后一轮就是当前显示轮”，
-  // 避免刷新落地前的窗口期里同一轮出现两次。
+  // 事件文本是本轮的前缀快照（上限 4000 字符）而库里是全文，因此用前缀比较识别
+  // “列表最后一轮就是当前显示轮”，避免刷新落地前的窗口期里同一轮出现两次。
   const lastTurn = turns.at(-1);
   const lastTurnIsLive = !!lastTurn && (transcript !== "" || reply !== "")
     && (transcript === "" || lastTurn.userText.startsWith(transcript))
@@ -380,9 +485,11 @@ export function WorkspaceSession({
     const unlisteners: Array<() => void> = [];
     void (async () => {
       const topics: Array<[string, (payload: never) => void]> = [
-        ["runtime.status.v1", applyStatus as (payload: never) => void],
-        ["session.transcript.v1", applyTranscript as (payload: never) => void],
-        ["session.reply.v1", applyReply as (payload: never) => void],
+        ["runtime:status:v1", applyStatus as (payload: never) => void],
+        ["session:transcript:v1", applyTranscript as (payload: never) => void],
+        ["session:reply:v1", applyReply as (payload: never) => void],
+        ["session:audio:v1", applyPlaybackAudio as (payload: never) => void],
+        ["session:playback-control:v1", applyPlaybackControl as (payload: never) => void],
       ];
       for (const [event, handler] of topics) {
         try {
@@ -401,7 +508,7 @@ export function WorkspaceSession({
       cancelled = true;
       unlisteners.forEach((unlisten) => unlisten());
     };
-  }, [listen, applyStatus, applyTranscript, applyReply]);
+  }, [listen, applyStatus, applyTranscript, applyReply, applyPlaybackAudio, applyPlaybackControl]);
 
   async function run(action: () => Promise<CommandResult<unknown>>, success = "") {
     setBusy(true);
@@ -424,6 +531,12 @@ export function WorkspaceSession({
 
   async function start() {
     requestEpoch.current += 1;
+    if (inputSource === "mic" && !playbackContextRef.current && typeof AudioContext === "function") {
+      // 必须在点击手势的同步阶段创建并 resume，await 之后手势已失效。
+      const { context } = createAudioContextForOutput("");
+      void context.resume().catch(() => undefined);
+      playbackContextRef.current = context;
+    }
     setBusy(true);
     setIssues([]);
     if (config && (!roleProfileId || !voiceRouteId)) {
@@ -457,6 +570,13 @@ export function WorkspaceSession({
       setSessionId(result.data.session.id);
       sessionIdRef.current = result.data.session.id;
       setPhase(result.data.session.status);
+      // 新会话从零计流式字幕 seq：上一会话的 partial 用过大号 seq，
+      // 不重置会把本会话开头的字幕事件整体门控丢弃。
+      transcriptSeq.current = 0;
+      replySeq.current = 0;
+      playbackSeq.current = 0;
+      webAudioPlayerRef.current?.clear();
+      setRealtimeStatus("connected");
       setTranscript("");
       setReply("");
       setTurns([]);
@@ -467,6 +587,7 @@ export function WorkspaceSession({
       setUnusedMaterials(false);
       setSayText("");
       setCorrectText("");
+      setVideoKind("off");
       setReportSummary("");
       setReportDetail("");
       setMessage("");
@@ -485,6 +606,7 @@ export function WorkspaceSession({
     if (ok) {
       setPhase("completed");
       setPendingConfirmation(false);
+      setVideoKind("off");
       await refresh();
     }
   }
@@ -557,6 +679,36 @@ export function WorkspaceSession({
     });
   }
 
+  // Composer 文本发送：与语音共用 finalize 管线（triggerSource=manual），
+  // 文字进入对话历史并由角色生成语音回复。
+  async function submitChat(event: FormEvent) {
+    event.preventDefault();
+    const text = chatText.trim();
+    if (!text || busy || !active || mode !== "ai_active") return;
+    setChatText("");
+    // 先把文字即时上屏为本轮转写；阻塞的轮次请求返回后由刷新接管。
+    setTranscript(text);
+    try {
+      await finalizeUtterance(text);
+      setMessage("");
+    } catch (error) {
+      setMessage(
+        error instanceof Error && error.message
+          ? humanizeRemoteError(error.message)
+          : "发送失败，请重试。",
+      );
+    }
+    await refresh();
+  }
+
+  function copyText(text: string) {
+    try {
+      void navigator.clipboard?.writeText(text).catch(() => {});
+    } catch {
+      // WebView2 剪贴板不可用时静默忽略，不影响会话。
+    }
+  }
+
   async function confirmCandidateAnswer(event: FormEvent) {
     event.preventDefault();
     const text = confirmationText.trim();
@@ -605,6 +757,23 @@ export function WorkspaceSession({
   }
 
   const active = ACTIVE_PHASES.has(phase);
+  // 通话计时：以会话在本界面内首次进入活跃态的时刻为锚点。
+  useEffect(() => {
+    if (!active) {
+      callStartRef.current = null;
+      setCallSeconds(0);
+      return;
+    }
+    if (callStartRef.current === null) callStartRef.current = Date.now();
+    const timer = window.setInterval(() => {
+      if (callStartRef.current !== null) {
+        setCallSeconds(Math.floor((Date.now() - callStartRef.current) / 1000));
+      }
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [active]);
+  const roleName = config?.roleProfiles.find((role) => role.id === roleProfileId)?.name ?? "RoleAI";
+  const showBargeHint = active && phase === "speaking" && allowBargeIn && mode === "ai_active";
   const selectedRoleScenario = roleScenario(config, roleProfileId);
   const hotkeyInFlight = useRef(false);
   useEffect(() => {
@@ -613,7 +782,7 @@ export function WorkspaceSession({
     let unlisten = () => {};
     void (async () => {
       try {
-        unlisten = await Promise.resolve(listen("session.assistant_hotkey.v1", () => {
+        unlisten = await Promise.resolve(listen("session:assistant_hotkey:v1", () => {
           if (disposed || hotkeyInFlight.current) return;
           hotkeyInFlight.current = true;
           void api.triggerMeetingAssistant()
@@ -639,6 +808,33 @@ export function WorkspaceSession({
   useEffect(() => {
     if (!active || inputSource !== "mic") return;
     let disposed = false;
+    let context: AudioContext | null = playbackContextRef.current;
+    playbackContextRef.current = null;
+    let player: WebAudioPlayer | null = null;
+    if (!context && typeof AudioContext === "function") {
+      context = createAudioContextForOutput("").context;
+    }
+    if (context) {
+      player = new WebAudioPlayer(context);
+      webAudioPlayerRef.current = player;
+      void player.resume().catch(() => undefined);
+      const outputName = audioOutputs.find((device) => device.id === outputDeviceId)?.name;
+      const target = context as AudioContext & { setSinkId?: (id: string) => Promise<void> };
+      if (outputDeviceId && typeof target.setSinkId === "function") {
+        void resolveWebAudioSinkId(outputName).then((sinkId) => {
+          if (disposed) return;
+          if (!sinkId) {
+            setMessage("未在浏览器中找到所选输出设备，已使用系统默认输出。");
+            return;
+          }
+          return target.setSinkId!(sinkId).then(() => {
+            audioDiagnostics.sinkId = sinkId;
+          });
+        }).catch(() => {
+          if (!disposed) setMessage("切换输出设备失败，已使用系统默认输出。");
+        });
+      }
+    }
     const streamer = createMicStreamer({
       onChunk: (pcm, sampleRate) => {
         // 接管/静音期间不推流，避免人工发言被当作对练内容转写。
@@ -648,16 +844,27 @@ export function WorkspaceSession({
         }).catch(() => { if (!disposed) setMessage("IPC_UNAVAILABLE：麦克风数据发送失败"); });
       },
       onError: (micError) => { if (!disposed) setMessage(micError); },
-    });
+      onLevel: (level) => { if (!disposed) setMicLevel(level); },
+    }, context ?? undefined);
     setMicActive(true);
     streamer.start().catch(() => {
       if (disposed) return;
       setMicActive(false);
       setMessage("无法访问麦克风，请检查系统麦克风权限后重试。");
     });
-    return () => { disposed = true; streamer.stop(); setMicActive(false); };
-  }, [active, inputSource, createMicStreamer]);
+    return () => {
+      disposed = true;
+      streamer.stop();
+      player?.clear();
+      if (context) void context.close().catch(() => undefined);
+      webAudioPlayerRef.current = null;
+      setMicActive(false);
+      setMicLevel(0);
+    };
+    // audioOutputs 只用于按名称映射 sinkId，不应因列表刷新而重建麦克风与播放。
+  }, [active, inputSource, outputDeviceId, createMicStreamer]);
   const audioFinalizePending = useRef(false);
+  const consecutiveAutoFailures = useRef(0);
   useEffect(() => {
     if (!active || phase !== "listening" || busy) return;
     if (inputSource === "meeting" && !new Set<RoleScenario>(["interviewer", "hr", "candidate", "meetingAssistant"]).has(selectedRoleScenario as RoleScenario)) return;
@@ -671,13 +878,17 @@ export function WorkspaceSession({
           if (!ready.ok || !ready.data.ready || audioFinalizePending.current) return;
           audioFinalizePending.current = true;
           await finalizeUtterance("");
+          consecutiveAutoFailures.current = 0;
           await refresh();
         } catch (error) {
           // 透出真实错误码（如 REALTIME_REMOTE_ERROR），否则用户只能看到笼统提示。
+          // 连续快速失败多为供应商限流：追加退避提示，避免用户在限流窗口内反复重试。
+          consecutiveAutoFailures.current += 1;
+          const backoff = consecutiveAutoFailures.current >= 2 ? RATE_LIMIT_HINT : "";
           setMessage(
-            humanizeRemoteError(
+            (humanizeRemoteError(
               error instanceof Error && error.message ? error.message : "",
-            ) || "自动转写失败，已保留会话，可重试或人工接管。",
+            ) || "自动转写失败，已保留会话，可重试或人工接管。") + (backoff ? backoff : ""),
           );
         } finally { audioFinalizePending.current = false; }
       })();
@@ -686,7 +897,43 @@ export function WorkspaceSession({
   }, [active, inputSource, phase, busy, selectedRoleScenario, finalizeUtterance, refresh]);
   const selectedRoute = config?.speech.voiceRoutes.find((route) => route.id === voiceRouteId);
   const searchProtocol = config?.models.providers.find((provider) => provider.id === selectedRoute?.llmProviderId)?.webCapability;
-  const canSearch = selectedRoute?.mode === "cascaded" && !!searchProtocol && searchProtocol !== "none";
+  // 端到端线路由 DashScope session.update enable_search 开启（Qwen3.8-Omni-Realtime 系
+  // 服务端搜索）；级联线路仍要求已选择支持的搜索协议。
+  const canSearch = selectedRoute?.mode === "e2e"
+    || (selectedRoute?.mode === "cascaded" && !!searchProtocol && searchProtocol !== "none");
+
+  // 视频帧上行（摄像头/桌面共享）仅端到端 Qwen-Omni 系线路支持
+  // （input_image_buffer.append 为 DashScope 方言能力，与联网搜索同判定模式）。
+  const canVideo = selectedRoute?.mode === "e2e";
+  useEffect(() => {
+    if (!active || !canVideo || videoKind === "off") return;
+    let disposed = false;
+    const sharer = createVideoSharer(videoKind, {
+      onFrame: (jpeg) => {
+        if (disposed) return;
+        void api.pushVideoFrame(jpeg).then((result) => {
+          if (disposed || result.ok) return;
+          setMessage(errorText(result.error));
+        }).catch(() => {
+          if (!disposed) setMessage("IPC_UNAVAILABLE：视频帧发送失败");
+        });
+      },
+      onError: (videoError) => { if (!disposed) setMessage(videoError); },
+      // 系统 UI 点"停止共享"/摄像头拔出：复位按钮与预览。
+      onEnded: () => { if (!disposed) setVideoKind("off"); },
+    });
+    sharer.start().then(() => {
+      if (disposed) return;
+      if (pipVideoRef.current && sharer.stream) pipVideoRef.current.srcObject = sharer.stream;
+    }).catch(() => {
+      if (disposed) return;
+      setVideoKind("off");
+      setMessage(videoKind === "camera"
+        ? "无法访问摄像头，请检查系统权限后重试。"
+        : "无法开始桌面共享，请重试。");
+    });
+    return () => { disposed = true; sharer.stop(); };
+  }, [active, canVideo, videoKind, createVideoSharer]);
 
   return (
     <section className="workspace-session" aria-labelledby="workspace-session-heading">
@@ -700,6 +947,8 @@ export function WorkspaceSession({
           <span className="status-badge" data-active={active}>
             {PHASE_LABELS[phase] ?? phase}
           </span>
+          {realtimeStatus === "reconnecting" && <span className="status-badge" data-active={active}>语音重连中…</span>}
+          {realtimeStatus === "failed" && <span className="status-badge" data-active={false}>语音连接失败</span>}
           <span className="session-mode">{MODE_LABELS[mode] ?? mode}</span>
         </div>
         <div className="session-config-heading">
@@ -734,11 +983,11 @@ export function WorkspaceSession({
               {virtualAudio?.installed && <small>虚拟声卡端点已就绪，将自动绑定音频线路；尚不代表会议对方已能听到声音。</small>}
             </>}
             {inputSource !== "meeting" && <><label>语音输出<select value={outputDeviceId} onChange={(event) => setOutputDeviceId(event.target.value)}>
-              <option value="">仅文字，不播放</option>
+              <option value="">系统默认输出</option>
               {audioOutputs.map((device) => <option key={device.id} value={device.id}>{device.name}</option>)}
             </select></label>
             <button type="button" onClick={() => void refreshAudioOutputs()}>刷新音频设备</button>
-            <small>{outputDeviceId ? "只向所选设备播放。会议需选择虚拟声卡的输入端，并在会议软件选择对应麦克风。" : "当前仅显示文字，AI 语音不会进入会议。"}</small>
+              <small>本机麦克风使用 WebView 全双工播放和浏览器回声消除；所选输出同时作为原生兜底设备。</small>
             </>}
 
             <label>语音线路<select value={voiceRouteId} onChange={(event) => setVoiceRouteId(event.target.value)}>
@@ -746,40 +995,10 @@ export function WorkspaceSession({
               {config.speech.voiceRoutes.filter((route) => route.configVersion > 0).map((route) => <option key={route.id} value={route.id}>{route.name} · {route.llmModelId ?? route.e2eModelId}</option>)}
             </select></label>
             <label><input type="checkbox" disabled={!canSearch} checked={allowWebSearch && canSearch} onChange={(event) => setAllowWebSearch(event.target.checked)} />允许本场联网搜索（可能产生费用）</label>
-            {!canSearch && <small>联网问答需要级联语音线路，并在模型供应商设置中选择支持的搜索协议。</small>}
+            {!canSearch && <small>联网问答：端到端线路需 DashScope Qwen3.8-Omni 系模型；级联线路需在模型供应商设置中选择支持的搜索协议。</small>}
             <label><input type="checkbox" disabled={busy || active} checked={allowBargeIn} onChange={(event) => setAllowBargeIn(event.target.checked)} />允许语音打断（说话即可停止 AI 播报）</label>
             <small>采集会议音频的会话会自动关闭打断；本机麦克风会话随时生效。</small>
           </fieldset>}
-        </div>
-        <div className="session-toolbar-controls">
-          <div className="service-actions session-controls">
-            <button className="button-primary" disabled={busy || active} type="button" onClick={() => void start()}>
-              <Play size={14} aria-hidden="true" />开始会话
-            </button>
-            <button disabled={!active} type="button" onClick={() => void stop()}>
-              <Square size={14} aria-hidden="true" />停止
-            </button>
-            <button disabled={!active} type="button" onClick={() => void setModeName("operator_speaking")}>
-              <Hand size={14} aria-hidden="true" />接管
-            </button>
-            <button
-              disabled={!active}
-              type="button"
-              onPointerDown={() => void setModeName("operator_speaking")}
-              onPointerUp={() => void setModeName("ai_active")}
-              onPointerCancel={() => void setModeName("ai_active")}
-              onKeyDown={(event) => { if (event.key === " " || event.key === "Enter") void setModeName("operator_speaking"); }}
-              onKeyUp={(event) => { if (event.key === " " || event.key === "Enter") void setModeName("ai_active"); }}
-            >
-              <Volume2 size={14} aria-hidden="true" />按住人工发言
-            </button>
-            <button disabled={busy || !active} type="button" onClick={() => void setModeName("ai_active")}>
-              <Bot size={14} aria-hidden="true" />恢复 AI
-            </button>
-            <button disabled={busy || !active} type="button" onClick={() => void setModeName("muted")}>
-              <MicOff size={14} aria-hidden="true" />静音
-            </button>
-          </div>
         </div>
       </header>
       <PreflightIssues issues={issues} />
@@ -812,13 +1031,19 @@ export function WorkspaceSession({
               <Fragment key={item.id}>
                 {item.userText && (
                   <article className="session-bubble session-bubble-user" aria-label={`用户转写 · 第 ${item.turnIndex + 1} 轮`}>
-                    <h3>你 <span>· 转写</span></h3>
                     <p>{item.userText}</p>
                   </article>
                 )}
                 {item.assistantText && (
                   <article className="session-bubble session-bubble-assistant" aria-label={`AI 回复 · 第 ${item.turnIndex + 1} 轮`}>
-                    <h3><Bot size={16} aria-hidden="true" />RoleAI</h3>
+                    <header className="bubble-head">
+                      <span className="bubble-avatar" aria-hidden="true"><Bot size={15} /></span>
+                      <h3>{roleName}</h3>
+                      {clockOf(item.createdAt) && <time className="bubble-time">{clockOf(item.createdAt)}</time>}
+                      <button type="button" className="bubble-copy" aria-label={`复制第 ${item.turnIndex + 1} 轮回复`} onClick={() => copyText(item.assistantText)}>
+                        <Copy size={13} aria-hidden="true" />
+                      </button>
+                    </header>
                     <p>{item.assistantText}</p>
                   </article>
                 )}
@@ -826,14 +1051,16 @@ export function WorkspaceSession({
             ))}
             {historyTurns.length > 0 && <p className="session-turn-label">当前轮</p>}
             {transcript && (
-              <article className="session-bubble session-bubble-user" aria-label="用户转写">
-                <h3>你 <span>· 转写</span></h3>
+              <article className="session-bubble session-bubble-user session-bubble-live" aria-label="用户转写">
                 <p>{transcript}</p>
               </article>
             )}
             {reply && (
-              <article className="session-bubble session-bubble-assistant" aria-label="AI 回复">
-                <h3><Bot size={16} aria-hidden="true" />RoleAI</h3>
+              <article className="session-bubble session-bubble-assistant session-bubble-live" aria-label="AI 回复">
+                <header className="bubble-head">
+                  <span className="bubble-avatar" aria-hidden="true"><Bot size={15} /></span>
+                  <h3>{roleName}</h3>
+                </header>
                 <p>{reply}</p>
               </article>
             )}
@@ -856,36 +1083,198 @@ export function WorkspaceSession({
         {unusedMaterials && <p className="session-materials-note">本轮未使用资料</p>}
         <div ref={conversationBottomRef} aria-hidden="true" />
       </div>
-      <details className="session-tools">
-        <summary><Wrench size={15} aria-hidden="true" />会话工具<ChevronDown size={15} className="session-tools-chevron" aria-hidden="true" /></summary>
-        <div className="session-tools-body" role="region" aria-label="会话工具">
-          <form className="service-form session-tool-form" onSubmit={submitSay}>
-            <label htmlFor="session-say">朗读文本</label>
-            <div className="session-tool-row">
-              <input id="session-say" value={sayText} onChange={(event) => setSayText(event.target.value)} placeholder="输入需要 AI 朗读的文本" />
-              <button disabled={busy || !active} type="submit"><Volume2 size={15} aria-hidden="true" />朗读</button>
-            </div>
-          </form>
-          <form className="service-form session-tool-form" onSubmit={(event) => { event.preventDefault(); void submitCorrect(); }}>
-            <label htmlFor="session-correct">纠正内容</label>
-            <div className="session-tool-row">
-              <input id="session-correct" value={correctText} onChange={(event) => setCorrectText(event.target.value)} placeholder="输入修正后的回答" />
-              <button disabled={busy || !active} type="submit">纠正</button>
-            </div>
-          </form>
-          <div className="service-actions">
-            <button disabled={busy || !active} type="button" onClick={() => void submitRetry()}><RotateCcw size={15} aria-hidden="true" />重试</button>
-            <button disabled={busy || !active} type="button" onClick={() => void submitReport()}><FileText size={15} aria-hidden="true" />报告</button>
-          </div>
-          {(reportSummary || reportDetail) && (
-            <section className="session-report" aria-labelledby="session-report-heading">
-              <h3 id="session-report-heading">会话纪要</h3>
-              {reportSummary && <p>{reportSummary}</p>}
-              {reportDetail && <p className="muted">{reportDetail}</p>}
-            </section>
+      <div className="session-footer">
+        <div className="session-footer-status">
+          {showBargeHint && (
+            <button
+              type="button"
+              className="session-hint-pill"
+              onClick={() => webAudioPlayerRef.current?.clear()}
+            >
+              <Pause size={12} aria-hidden="true" />说话、输入或点击打断
+            </button>
           )}
         </div>
-      </details>
+        <div className="session-compose">
+          {videoKind !== "off" && (
+            <div className="session-pip" role="region" aria-label="视频画面预览">
+              <video ref={pipVideoRef} autoPlay muted playsInline />
+              <span className="session-pip-label">{videoKind === "camera" ? "摄像头" : "共享桌面"}</span>
+              <button type="button" className="session-pip-stop" aria-label="停止视频共享" onClick={() => setVideoKind("off")}>
+                <X size={13} aria-hidden="true" />
+              </button>
+            </div>
+          )}
+          {/* 官方实时通话布局：上方文本输入，下方左侧是工具与麦克风/视频，右侧是发送与通话按钮。 */}
+          <form id="session-chat-form" className="composer-input" onSubmit={submitChat}>
+            <input
+              aria-label="输入内容"
+              value={chatText}
+              onChange={(event) => setChatText(event.target.value)}
+              placeholder={active ? "说话，或输入文字继续对话" : "开始会话后即可说话或输入文字"}
+              disabled={!active}
+            />
+          </form>
+          <div className="composer-toolbar">
+            <div className="composer-toolbar-group">
+              <details
+                className="composer-more"
+                open={moreOpen}
+                onToggle={(event) => setMoreOpen((event.currentTarget as HTMLDetailsElement).open)}
+                ref={moreRef}
+              >
+                <summary className="composer-icon-button" aria-label="更多操作">
+                  <Plus size={18} aria-hidden="true" />
+                </summary>
+                <div className="composer-more-panel" role="region" aria-label="会话工具">
+                  <p className="composer-more-title">工具调用</p>
+                  <label className="composer-switch">
+                    <span><Globe size={14} aria-hidden="true" />联网搜索</span>
+                    <input
+                      type="checkbox"
+                      role="switch"
+                      aria-label="联网搜索"
+                      disabled={active || !canSearch}
+                      checked={allowWebSearch && canSearch}
+                      onChange={(event) => setAllowWebSearch(event.target.checked)}
+                    />
+                  </label>
+                  <p className="composer-more-title">通话控制</p>
+                  <div className="composer-more-actions">
+                    {active && (
+                      <button className="button-primary" disabled type="button">
+                        <Play size={14} aria-hidden="true" />开始会话
+                      </button>
+                    )}
+                    <button disabled={!active} type="button" onClick={() => void stop()}>
+                      <Square size={14} aria-hidden="true" />停止
+                    </button>
+                    <button disabled={!active} type="button" onClick={() => void setModeName("operator_speaking")}>
+                      <Hand size={14} aria-hidden="true" />接管
+                    </button>
+                    <button
+                      disabled={!active}
+                      type="button"
+                      onPointerDown={() => void setModeName("operator_speaking")}
+                      onPointerUp={() => void setModeName("ai_active")}
+                      onPointerCancel={() => void setModeName("ai_active")}
+                      onKeyDown={(event) => { if (event.key === " " || event.key === "Enter") void setModeName("operator_speaking"); }}
+                      onKeyUp={(event) => { if (event.key === " " || event.key === "Enter") void setModeName("ai_active"); }}
+                    >
+                      <Volume2 size={14} aria-hidden="true" />按住人工发言
+                    </button>
+                    <button disabled={busy || !active} type="button" onClick={() => void setModeName("ai_active")}>
+                      <Bot size={14} aria-hidden="true" />恢复 AI
+                    </button>
+                    <button disabled={busy || !active} type="button" onClick={() => void setModeName("muted")}>
+                      <MicOff size={14} aria-hidden="true" />静音
+                    </button>
+                  </div>
+                  <p className="composer-more-title">内容工具</p>
+                  <form className="service-form session-tool-form" onSubmit={submitSay}>
+                    <label htmlFor="session-say">朗读文本</label>
+                    <div className="session-tool-row">
+                      <input id="session-say" value={sayText} onChange={(event) => setSayText(event.target.value)} placeholder="输入需要 AI 朗读的文本" />
+                      <button disabled={busy || !active} type="submit"><Volume2 size={15} aria-hidden="true" />朗读</button>
+                    </div>
+                  </form>
+                  <form className="service-form session-tool-form" onSubmit={(event) => { event.preventDefault(); void submitCorrect(); }}>
+                    <label htmlFor="session-correct">纠正内容</label>
+                    <div className="session-tool-row">
+                      <input id="session-correct" value={correctText} onChange={(event) => setCorrectText(event.target.value)} placeholder="输入修正后的回答" />
+                      <button disabled={busy || !active} type="submit">纠正</button>
+                    </div>
+                  </form>
+                  <div className="composer-more-actions">
+                    <button disabled={busy || !active} type="button" onClick={() => void submitRetry()}><RotateCcw size={15} aria-hidden="true" />重试</button>
+                    <button disabled={busy || !active} type="button" onClick={() => void submitReport()}><FileText size={15} aria-hidden="true" />报告</button>
+                  </div>
+                </div>
+              </details>
+              <span className="composer-role-chip" title={`当前角色：${roleName}`}>
+                <span className="composer-role-dot" aria-hidden="true" />{roleName}
+              </span>
+              <button
+                type="button"
+                className="composer-mic"
+                aria-label={!active ? "开始语音会话" : mode === "muted" ? "取消静音" : "静音麦克风"}
+                data-live={active && inputSource === "mic" && mode === "ai_active"}
+                disabled={busy}
+                onClick={() => {
+                  if (!active) void start();
+                  else void setModeName(mode === "muted" ? "ai_active" : "muted");
+                }}
+              >
+                {mode === "muted" && active ? (
+                  <MicOff size={16} aria-hidden="true" />
+                ) : (
+                  <Mic size={16} aria-hidden="true" />
+                )}
+                {active && inputSource === "mic" && mode !== "muted" && (
+                  <span className="composer-bars" aria-hidden="true">
+                    {BAR_FACTORS.map((factor) => (
+                      <span key={factor} className="composer-bar" style={{ height: `${Math.max(15, Math.round(micLevel * factor * 100))}%` }} />
+                    ))}
+                  </span>
+                )}
+              </button>
+              {canVideo && (
+                <>
+                  <button
+                    type="button"
+                    className="composer-icon-button composer-video"
+                    aria-label={videoKind === "camera" ? "关闭摄像头共享" : "共享摄像头"}
+                    data-active={videoKind === "camera"}
+                    disabled={!active || busy}
+                    onClick={() => setVideoKind(videoKind === "camera" ? "off" : "camera")}
+                  >
+                    <Camera size={17} aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    className="composer-icon-button composer-video"
+                    aria-label={videoKind === "screen" ? "关闭桌面共享" : "共享桌面"}
+                    data-active={videoKind === "screen"}
+                    disabled={!active || busy}
+                    onClick={() => setVideoKind(videoKind === "screen" ? "off" : "screen")}
+                  >
+                    <ScreenShare size={17} aria-hidden="true" />
+                  </button>
+                </>
+              )}
+            </div>
+            <div className="composer-toolbar-group">
+              <button
+                type="submit"
+                form="session-chat-form"
+                className="composer-send"
+                aria-label="发送"
+                disabled={busy || !active || mode !== "ai_active" || !chatText.trim()}
+              >
+                <Send size={15} aria-hidden="true" />
+              </button>
+              {/* 独立 key：开始/结束按钮占同一位置，复用同一 DOM 节点会让开始的那次点击触发结束。 */}
+              {active ? (
+                <button key="call-end" type="button" className="session-call-pill" aria-label="结束通话" disabled={busy} onClick={() => void stop()}>
+                  <Square size={11} aria-hidden="true" />
+                  <span className="session-call-time">{formatDuration(callSeconds)}</span>
+                </button>
+              ) : (
+                <button key="call-start" className="button-primary composer-start" disabled={busy} type="button" onClick={() => void start()}>
+                  <Play size={14} aria-hidden="true" />开始会话
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+        {(reportSummary || reportDetail) && (
+          <section className="session-report" aria-labelledby="session-report-heading">
+            <h3 id="session-report-heading">会话纪要</h3>
+            {reportSummary && <p>{reportSummary}</p>}
+            {reportDetail && <p className="muted">{reportDetail}</p>}
+          </section>
+        )}
+      </div>
     </section>
   );
 }

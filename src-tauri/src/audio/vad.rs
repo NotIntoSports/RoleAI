@@ -55,7 +55,7 @@ mod tests {
 // VAD 驱动的语句分段状态机：512@16k 窗口逐窗判定，语义与 `UtteranceSegmenter` 对齐。
 use crate::audio::pcm::downsample_48k_to_16k;
 use crate::audio::segmenter::SpeechSegmenter;
-use crate::audio::smart_turn::{TurnCompletenessDetector, TURN_COMPLETE_PROB};
+use crate::audio::smart_turn::{TURN_COMPLETE_PROB, TurnCompletenessDetector};
 use std::collections::VecDeque;
 
 const START_PROB: f32 = 0.5;

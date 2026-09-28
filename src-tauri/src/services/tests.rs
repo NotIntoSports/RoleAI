@@ -1,21 +1,20 @@
 use std::sync::{
-    atomic::{AtomicU32, Ordering},
     Arc,
+    atomic::{AtomicU32, Ordering},
 };
 
 use crate::{
     config::{ConfigStore, EmbeddingDistance},
     providers::{
-        DiscoveredModel, EmbeddingError, EmbeddingProbe,
-        ProviderEndpoint, ProviderError, ProviderProbe, RouteProbeError, RouteStageProbe,
+        DiscoveredModel, EmbeddingError, EmbeddingProbe, ProviderEndpoint, ProviderError,
+        ProviderProbe, RouteProbeError, RouteStageProbe,
     },
     secrets::{MemorySecretStore, SecretError, SecretService, SecretStore},
 };
 
 use super::{
-    EmbeddingConfigSaveInput, EmbeddingService,
-    ProviderSaveInput, ProviderService, RoleProfileCopyInput, RoleProfileSaveInput,
-    RoleProfileService,
+    EmbeddingConfigSaveInput, EmbeddingService, ProviderSaveInput, ProviderService,
+    RoleProfileCopyInput, RoleProfileSaveInput, RoleProfileService,
 };
 
 fn role_input(id: &str) -> RoleProfileSaveInput {
@@ -1343,7 +1342,6 @@ impl SecretStore for ScriptedSecretStore {
     }
 }
 
-
 mod voice_references {
     use std::sync::{Arc, Mutex};
 
@@ -1355,8 +1353,8 @@ mod voice_references {
         providers::{ProviderEndpoint, ProviderError},
         secrets::{MemorySecretStore, SecretService},
         services::{
-            ProviderSaveInput, ProviderService, VoiceCloneError, VoiceCloneGateway, VoiceReferenceSaveInput,
-            VoiceReferenceService,
+            ProviderSaveInput, ProviderService, VoiceCloneError, VoiceCloneGateway,
+            VoiceReferenceSaveInput, VoiceReferenceService,
         },
     };
 
@@ -1373,8 +1371,7 @@ mod voice_references {
         database.migrate().unwrap();
         let config = ConfigStore::new(directory.path().join("config.json"));
         config.restore_defaults().unwrap();
-        let secrets =
-            SecretService::new("test", Arc::new(MemorySecretStore::default())).unwrap();
+        let secrets = SecretService::new("test", Arc::new(MemorySecretStore::default())).unwrap();
         Environment {
             directory,
             database,
@@ -1403,11 +1400,17 @@ mod voice_references {
         bytes
     }
 
-    fn save_input(id: Option<&str>, name: &str, provider: Option<&str>, path: &str) -> VoiceReferenceSaveInput {
+    fn save_input(
+        id: Option<&str>,
+        name: &str,
+        provider: Option<&str>,
+        path: &str,
+    ) -> VoiceReferenceSaveInput {
         VoiceReferenceSaveInput {
             id: id.map(str::to_owned),
             name: name.to_owned(),
             provider_id: provider.map(str::to_owned),
+            target_model: None,
             transcript: Some(" 你好世界 ".into()),
             audio_path: path.to_owned(),
         }
@@ -1426,100 +1429,88 @@ mod voice_references {
     }
 
     #[derive(Clone)]
-    struct CapturedUpload {
+    struct CapturedCloneReference {
         endpoint: ProviderEndpoint,
         credential: Option<String>,
+        voice_name: String,
+        transcript: String,
+        target_model: Option<String>,
         file_name: String,
         mime_type: String,
         bytes_len: usize,
     }
 
-    #[derive(Clone)]
-    struct CapturedClone {
-        credential: Option<String>,
-        voice_name: String,
-        transcript: String,
-        file_id: String,
-    }
-
     struct OkGateway {
-        remote_file_id: &'static str,
-        voice_id: &'static str,
-        upload: Mutex<Option<CapturedUpload>>,
-        clone: Mutex<Option<CapturedClone>>,
+        outcome_voice_id: &'static str,
+        outcome_remote_file_id: Option<&'static str>,
+        clone: Mutex<Option<CapturedCloneReference>>,
     }
 
     impl OkGateway {
         fn new() -> Self {
             Self {
-                remote_file_id: "file_remote_1",
-                voice_id: "voice_clone_9",
-                upload: Mutex::new(None),
+                outcome_voice_id: "voice_clone_9",
+                outcome_remote_file_id: Some("file_remote_1"),
+                clone: Mutex::new(None),
+            }
+        }
+
+        fn qwen() -> Self {
+            Self {
+                outcome_voice_id: "qwen-omni-vc-roleai-1",
+                outcome_remote_file_id: None,
                 clone: Mutex::new(None),
             }
         }
     }
 
     impl VoiceCloneGateway for OkGateway {
-        fn upload_sample(
+        fn clone_reference(
             &self,
             endpoint: &ProviderEndpoint,
             credential: Option<&str>,
+            voice_name: &str,
+            transcript: &str,
+            target_model: Option<&str>,
             file_name: &str,
             mime_type: &str,
             bytes: Vec<u8>,
-        ) -> Result<String, VoiceCloneError> {
-            *self.upload.lock().unwrap() = Some(CapturedUpload {
+        ) -> Result<crate::providers::VoiceCloneOutcome, VoiceCloneError> {
+            *self.clone.lock().unwrap() = Some(CapturedCloneReference {
                 endpoint: endpoint.clone(),
                 credential: credential.map(str::to_owned),
+                voice_name: voice_name.to_owned(),
+                transcript: transcript.to_owned(),
+                target_model: target_model.map(str::to_owned),
                 file_name: file_name.to_owned(),
                 mime_type: mime_type.to_owned(),
                 bytes_len: bytes.len(),
             });
-            Ok(self.remote_file_id.to_owned())
-        }
-
-        fn clone_voice(
-            &self,
-            _endpoint: &ProviderEndpoint,
-            credential: Option<&str>,
-            voice_name: &str,
-            transcript: &str,
-            file_id: &str,
-        ) -> Result<String, VoiceCloneError> {
-            *self.clone.lock().unwrap() = Some(CapturedClone {
-                credential: credential.map(str::to_owned),
-                voice_name: voice_name.to_owned(),
-                transcript: transcript.to_owned(),
-                file_id: file_id.to_owned(),
-            });
-            Ok(self.voice_id.to_owned())
+            Ok(crate::providers::VoiceCloneOutcome {
+                voice_id: self.outcome_voice_id.to_owned(),
+                remote_file_id: self.outcome_remote_file_id.map(str::to_owned),
+            })
         }
     }
 
     struct ErrGateway;
 
     impl VoiceCloneGateway for ErrGateway {
-        fn upload_sample(
-            &self,
-            _endpoint: &ProviderEndpoint,
-            _credential: Option<&str>,
-            _file_name: &str,
-            _mime_type: &str,
-            _bytes: Vec<u8>,
-        ) -> Result<String, VoiceCloneError> {
-            Err(VoiceCloneError { kind: ProviderError::Unauthorized, provider_message: None })
-        }
-
-        fn clone_voice(
+        fn clone_reference(
             &self,
             _endpoint: &ProviderEndpoint,
             _credential: Option<&str>,
             _voice_name: &str,
             _transcript: &str,
-            _file_id: &str,
-        ) -> Result<String, VoiceCloneError> {
-            Err(VoiceCloneError { kind: ProviderError::RequestFailed, provider_message: None })
+            _target_model: Option<&str>,
+            _file_name: &str,
+            _mime_type: &str,
+            _bytes: Vec<u8>,
+        ) -> Result<crate::providers::VoiceCloneOutcome, VoiceCloneError> {
+            Err(VoiceCloneError {
+                kind: ProviderError::Unauthorized,
+                provider_message: None,
+            })
         }
     }
 
@@ -1544,7 +1535,12 @@ mod voice_references {
         let service = service(&environment, &gateway);
 
         let summary = service
-            .save(save_input(None, " 我的音色 ", Some("bigmodel"), &file.to_string_lossy()))
+            .save(save_input(
+                None,
+                " 我的音色 ",
+                Some("bigmodel"),
+                &file.to_string_lossy(),
+            ))
             .unwrap();
 
         assert_eq!(summary.name, "我的音色");
@@ -1594,7 +1590,12 @@ mod voice_references {
         let gateway = ErrGateway;
         let service = service(&environment, &gateway);
         let saved = service
-            .save(save_input(Some("voice-1"), "音色", Some("bigmodel"), &file.to_string_lossy()))
+            .save(save_input(
+                Some("voice-1"),
+                "音色",
+                Some("bigmodel"),
+                &file.to_string_lossy(),
+            ))
             .unwrap();
 
         environment
@@ -1609,7 +1610,12 @@ mod voice_references {
             .unwrap();
 
         let updated = service
-            .save(save_input(Some("voice-1"), "音色", Some("bigmodel"), &file.to_string_lossy()))
+            .save(save_input(
+                Some("voice-1"),
+                "音色",
+                Some("bigmodel"),
+                &file.to_string_lossy(),
+            ))
             .unwrap();
         assert_eq!(updated.id, saved.id);
         assert_eq!(updated.clone_status, "pending");
@@ -1636,7 +1642,7 @@ mod voice_references {
     }
 
     #[test]
-    fn clone_uploads_registers_and_persists_voice_id() {
+    fn clone_passes_context_to_gateway_and_persists_outcome() {
         let environment = environment();
         provider_with_credential(&environment);
         let file = environment.directory.path().join("sample.wav");
@@ -1644,29 +1650,66 @@ mod voice_references {
         let gateway = OkGateway::new();
         let service = service(&environment, &gateway);
         let saved = service
-            .save(save_input(None, " 音色 ", Some("bigmodel"), &file.to_string_lossy()))
+            .save(save_input(
+                None,
+                " 音色 ",
+                Some("bigmodel"),
+                &file.to_string_lossy(),
+            ))
             .unwrap();
 
         let result = service.clone_voice(&saved.id).unwrap();
 
         assert_eq!(result.voice_id, "voice_clone_9");
         assert_eq!(result.remote_file_id, "file_remote_1");
-        let upload = gateway.upload.lock().unwrap().clone().unwrap();
-        assert_eq!(upload.endpoint.base_url, "https://open.bigmodel.cn/api/paas/v4");
-        assert_eq!(upload.credential.as_deref(), Some("credential-value"));
-        assert_eq!(upload.mime_type, "audio/wav");
-        assert!(upload.file_name.ends_with(".wav"));
-        assert_eq!(upload.bytes_len, 44 + 32_000);
         let clone = gateway.clone.lock().unwrap().clone().unwrap();
-        assert_eq!(clone.file_id, "file_remote_1");
-        assert_eq!(clone.transcript, "你好世界");
+        assert_eq!(
+            clone.endpoint.base_url,
+            "https://open.bigmodel.cn/api/paas/v4"
+        );
         assert_eq!(clone.credential.as_deref(), Some("credential-value"));
+        assert_eq!(clone.mime_type, "audio/wav");
+        assert_eq!(clone.target_model, None);
+        assert!(clone.file_name.ends_with(".wav"));
+        assert_eq!(clone.bytes_len, 44 + 32_000);
+        assert_eq!(clone.transcript, "你好世界");
         assert!(clone.voice_name.starts_with("roleai_"));
         assert!(clone.voice_name.len() <= 30);
         let listed = service.list().unwrap().remove(0);
         assert_eq!(listed.clone_status, "cloned");
         assert_eq!(listed.voice_id.as_deref(), Some("voice_clone_9"));
         assert_eq!(listed.remote_file_id.as_deref(), Some("file_remote_1"));
+    }
+
+    #[test]
+    fn clone_with_qwen_target_model_persists_voice_without_remote_file() {
+        let environment = environment();
+        provider_with_credential(&environment);
+        let file = environment.directory.path().join("sample.wav");
+        std::fs::write(&file, wav_bytes(16_000, 1, 16, 32_000)).unwrap();
+        let gateway = OkGateway::qwen();
+        let service = service(&environment, &gateway);
+        let mut input = save_input(None, "音色", Some("bigmodel"), &file.to_string_lossy());
+        input.target_model = Some(" qwen3.8-omni-flash-realtime ".into());
+        let saved = service.save(input).unwrap();
+
+        let result = service.clone_voice(&saved.id).unwrap();
+
+        assert_eq!(result.voice_id, "qwen-omni-vc-roleai-1");
+        assert_eq!(result.remote_file_id, "");
+        let clone = gateway.clone.lock().unwrap().clone().unwrap();
+        assert_eq!(
+            clone.target_model.as_deref(),
+            Some("qwen3.8-omni-flash-realtime")
+        );
+        let listed = service.list().unwrap().remove(0);
+        assert_eq!(listed.clone_status, "cloned");
+        assert_eq!(listed.voice_id.as_deref(), Some("qwen-omni-vc-roleai-1"));
+        assert!(listed.remote_file_id.is_none());
+        assert_eq!(
+            listed.target_model.as_deref(),
+            Some("qwen3.8-omni-flash-realtime")
+        );
     }
 
     #[test]
@@ -1678,7 +1721,12 @@ mod voice_references {
         let gateway = ErrGateway;
         let service = service(&environment, &gateway);
         let saved = service
-            .save(save_input(None, "音色", Some("bigmodel"), &file.to_string_lossy()))
+            .save(save_input(
+                None,
+                "音色",
+                Some("bigmodel"),
+                &file.to_string_lossy(),
+            ))
             .unwrap();
 
         let error = service.clone_voice(&saved.id).unwrap_err();
@@ -1688,7 +1736,7 @@ mod voice_references {
         assert_eq!(listed.clone_status, "failed");
         assert_eq!(
             listed.clone_error.as_deref(),
-            Some("上传参考音频失败：PROVIDER_UNAUTHORIZED")
+            Some("音色克隆失败：PROVIDER_UNAUTHORIZED")
         );
     }
 
@@ -1708,21 +1756,31 @@ mod voice_references {
         assert_eq!(error.code(), "VOICE_REFERENCE_PROVIDER_MISSING");
     }
 
-    fn audio_input(id: Option<&str>, name: &str, base64_audio: &str) -> super::super::VoiceReferenceAudioSaveInput {
+    fn audio_input(
+        id: Option<&str>,
+        name: &str,
+        base64_audio: &str,
+    ) -> super::super::VoiceReferenceAudioSaveInput {
         super::super::VoiceReferenceAudioSaveInput {
             id: id.map(str::to_owned),
             name: name.to_owned(),
             provider_id: None,
+            target_model: None,
             transcript: Some(" 你好世界 ".into()),
             audio_base64: base64_audio.to_owned(),
         }
     }
 
-    fn update_input(id: &str, name: &str, provider: Option<&str>) -> super::super::VoiceReferenceUpdateInput {
+    fn update_input(
+        id: &str,
+        name: &str,
+        provider: Option<&str>,
+    ) -> super::super::VoiceReferenceUpdateInput {
         super::super::VoiceReferenceUpdateInput {
             id: id.to_owned(),
             name: name.to_owned(),
             provider_id: provider.map(str::to_owned),
+            target_model: None,
             transcript: Some(" 更新文字 ".into()),
         }
     }
@@ -1732,7 +1790,8 @@ mod voice_references {
         let environment = environment();
         let gateway = OkGateway::new();
         let service = service(&environment, &gateway);
-        let encoded = base64::engine::general_purpose::STANDARD.encode(wav_bytes(16_000, 1, 16, 128_000));
+        let encoded =
+            base64::engine::general_purpose::STANDARD.encode(wav_bytes(16_000, 1, 16, 128_000));
         let saved = service
             .save_audio(audio_input(None, "原名", &encoded))
             .unwrap();
@@ -1763,10 +1822,14 @@ mod voice_references {
         let gateway = ErrGateway;
         let service = service(&environment, &gateway);
 
-        let error = service.update_metadata(update_input("ghost", "   ", None)).unwrap_err();
+        let error = service
+            .update_metadata(update_input("ghost", "   ", None))
+            .unwrap_err();
         assert_eq!(error.code(), "VOICE_REFERENCE_FIELDS_INVALID");
 
-        let error = service.update_metadata(update_input("ghost", "名", None)).unwrap_err();
+        let error = service
+            .update_metadata(update_input("ghost", "名", None))
+            .unwrap_err();
         assert_eq!(error.code(), "VOICE_REFERENCE_NOT_FOUND");
     }
 
@@ -1815,8 +1878,11 @@ mod voice_references {
         let gateway = ErrGateway;
         let service = service(&environment, &gateway);
 
-        let short = base64::engine::general_purpose::STANDARD.encode(wav_bytes(16_000, 1, 16, 16_000));
-        let error = service.save_audio(audio_input(None, "短录音", &short)).unwrap_err();
+        let short =
+            base64::engine::general_purpose::STANDARD.encode(wav_bytes(16_000, 1, 16, 16_000));
+        let error = service
+            .save_audio(audio_input(None, "短录音", &short))
+            .unwrap_err();
         assert_eq!(error.code(), "VOICE_REFERENCE_AUDIO_TOO_SHORT");
 
         let error = service
@@ -1830,7 +1896,8 @@ mod voice_references {
             .unwrap_err();
         assert_eq!(error.code(), "VOICE_REFERENCE_AUDIO_INVALID");
 
-        let oversize = base64::engine::general_purpose::STANDARD.encode(vec![0_u8; 10 * 1024 * 1024 + 1]);
+        let oversize =
+            base64::engine::general_purpose::STANDARD.encode(vec![0_u8; 10 * 1024 * 1024 + 1]);
         let error = service
             .save_audio(audio_input(None, "过大", &oversize))
             .unwrap_err();

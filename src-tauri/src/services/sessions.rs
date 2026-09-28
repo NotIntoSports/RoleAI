@@ -8,9 +8,9 @@ use crate::{
     config::{PublicConfig, RoleScenario, VoiceRouteMode},
     database::{Database, DatabaseError},
     providers::{
-        CascadeError, CascadeStage, ChatMessage, ChatModel, EmbeddingProbe, OpenAiCompatibleCascade,
-        ProviderEndpoint, RealtimeAudioRequest, RealtimeError, RealtimeModel, RealtimeTextRequest,
-        SpeechToText, TextToSpeech,
+        CascadeError, CascadeStage, ChatMessage, ChatModel, EmbeddingProbe,
+        OpenAiCompatibleCascade, ProviderEndpoint, RealtimeAudioRequest, RealtimeError,
+        RealtimeModel, RealtimeTextRequest, SpeechToText, TextToSpeech, TurnStreamHooks,
     },
     runtime::{
         AgentCommand, AgentCommandAction, AgentCommandError, AgentCommandOutcome, AgentMode,
@@ -39,6 +39,8 @@ pub enum SessionServiceError {
     Realtime(RealtimeError),
     Audio(AudioError),
     Database(DatabaseError),
+    /// 播放流句柄启动失败（携带 sidecar 错误码）。
+    Playback(&'static str),
 }
 
 impl SessionServiceError {
@@ -53,6 +55,7 @@ impl SessionServiceError {
             Self::Realtime(error) => error.code(),
             Self::Audio(error) => error.code(),
             Self::Database(error) => error.code(),
+            Self::Playback(code) => code,
         }
     }
 }
@@ -94,12 +97,8 @@ impl From<RuntimeError> for SessionServiceError {
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum SessionStartOutcome {
-    Started {
-        session: SessionRecord,
-    },
-    Blocked {
-        issues: Vec<PreflightIssue>,
-    },
+    Started { session: SessionRecord },
+    Blocked { issues: Vec<PreflightIssue> },
 }
 
 pub struct SessionProbes<'a> {
@@ -178,7 +177,10 @@ impl SessionControl {
     }
 
     pub fn set_barge_in_source(&self, flag: Arc<AtomicBool>) {
-        *self.barge_in_source.lock().unwrap_or_else(|p| p.into_inner()) = Some(flag);
+        *self
+            .barge_in_source
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = Some(flag);
     }
     pub fn barge_in_requested(&self) -> bool {
         self.barge_in_source
@@ -216,7 +218,10 @@ impl SessionControl {
         self.mode
             .store(mode_u8(AgentMode::AiActive), Ordering::SeqCst);
         // 丢弃 barge 旗标来源：停止/重建会话后，旧 capture 的旗标不得继续作用于控制端。
-        *self.barge_in_source.lock().unwrap_or_else(|p| p.into_inner()) = None;
+        *self
+            .barge_in_source
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = None;
         self.set_session_id(None);
     }
 }
@@ -237,6 +242,27 @@ pub struct SessionService<S: PlaybackSink = NoopSink> {
     pending_confirmation_epoch: Option<u64>,
     // 阶段 4：后台摘要压缩 job 的结果通道；Some 表示有一个压缩任务在途。
     summary_job: Option<std::sync::mpsc::Receiver<Result<(String, i64), String>>>,
+    // 实时会话泵（端到端流式路线）：读侧共享状态 + 泵本体（Drop 即关停）。
+    realtime_shared: Option<std::sync::Arc<crate::services::realtime_pump::PumpShared>>,
+    realtime_pump: Option<crate::services::realtime_pump::RealtimePump>,
+}
+
+/// 实时泵装配依赖（commands 层在会话启动后构造）。
+pub struct RealtimePumpDeps {
+    pub endpoint: crate::providers::ProviderEndpoint,
+    pub credential: Option<String>,
+    pub model_id: String,
+    pub voice: String,
+    pub instructions: String,
+    pub history: Vec<(String, String)>,
+    pub auto_respond: bool,
+    /// 联网搜索（DashScope 端到端线路 session.update enable_search）。
+    pub enable_search: bool,
+    pub role_name: String,
+    pub hold_playback: bool,
+    pub playback_mode: crate::services::realtime_pump::RealtimePlaybackMode,
+    pub playback_exe: Option<std::path::PathBuf>,
+    pub playback_endpoint_id: Option<String>,
 }
 
 impl SessionService<NoopSink> {
@@ -268,6 +294,8 @@ impl<S: PlaybackSink> SessionService<S> {
             text_only: false,
             pending_confirmation_epoch: None,
             summary_job: None,
+            realtime_shared: None,
+            realtime_pump: None,
         }
     }
 
@@ -302,9 +330,41 @@ impl<S: PlaybackSink> SessionService<S> {
     }
 
     pub fn utterance_ready(&self) -> bool {
-        self.has_active_session()
-            && self.runtime.phase() == SessionPhase::Listening
-            && self.capture.utterance_ready()
+        if !self.has_active_session() || self.runtime.phase() != SessionPhase::Listening {
+            return false;
+        }
+        // 端到端流式路线：就绪信号是泵完成轮；其余路线沿用本地 VAD 分段。
+        self.realtime_shared
+            .as_ref()
+            .map(|shared| shared.completed_count() > 0)
+            .unwrap_or_else(|| self.capture.utterance_ready())
+    }
+
+    /// 端到端流式路线播报中（UI 阶段显示 Speaking）。
+    pub fn realtime_speaking(&self) -> bool {
+        self.realtime_shared
+            .as_ref()
+            .is_some_and(|shared| shared.speaking.load(Ordering::SeqCst))
+    }
+
+    /// 实时语音 WS 链路状态：idle（无实时路线）/ connected / reconnecting /
+    /// failed（终局，如鉴权失败）。读取不消费 failed——finalize 仍会取走。
+    pub fn realtime_link_status(&self) -> &'static str {
+        let Some(shared) = self.realtime_shared.as_ref() else {
+            return "idle";
+        };
+        if shared
+            .failed
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .is_some()
+        {
+            return "failed";
+        }
+        if shared.reconnecting.load(Ordering::SeqCst) {
+            return "reconnecting";
+        }
+        "connected"
     }
 
     pub fn sink(&self) -> &S {
@@ -332,6 +392,152 @@ impl<S: PlaybackSink> SessionService<S> {
         self.playback = playback;
     }
 
+    /// 装配实时会话泵（端到端流式路线）：常驻连接 + 常驻流式播放 + 麦克风 tap。
+    /// 幂等：重复调用先关停旧泵（会话重启场景）。
+    pub fn attach_realtime_pump(
+        &mut self,
+        deps: RealtimePumpDeps,
+        live_sink: Option<Box<dyn Fn(crate::services::PumpLive) + Send + Sync>>,
+    ) -> Result<(), SessionServiceError> {
+        self.detach_realtime_pump();
+        let (tap_tx, tap_rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(50);
+        self.capture.set_pcm_tap(Some(tap_tx));
+        let playback: std::sync::Arc<dyn crate::services::realtime_pump::PlaybackStream> =
+            match deps
+                .playback_endpoint_id
+                .as_deref()
+                .filter(|id| !id.trim().is_empty())
+            {
+                Some(endpoint_id) => {
+                    let exe = deps
+                        .playback_exe
+                        .clone()
+                        .ok_or(SessionServiceError::NotFound)?;
+                    std::sync::Arc::new(
+                        crate::audio::playback::StreamPlayback::start(&exe, endpoint_id, 24_000)
+                            .map_err(SessionServiceError::Playback)?,
+                    )
+                }
+                None => std::sync::Arc::new(crate::services::realtime_pump::SilentPlayback),
+            };
+        let session = crate::providers::realtime_session::RealtimeSession::start(
+            crate::providers::realtime_session::RealtimeSessionConfig {
+                endpoint: deps.endpoint,
+                credential: deps.credential,
+                model_id: deps.model_id,
+                voice: deps.voice,
+                instructions: deps.instructions,
+                history: deps.history,
+                auto_respond: deps.auto_respond,
+                enable_search: deps.enable_search,
+            },
+        )?;
+        let echo_suppress = self.capture.echo_suppress_handle();
+        let pump = crate::services::realtime_pump::RealtimePump::start(
+            session,
+            tap_rx,
+            playback,
+            crate::services::realtime_pump::PumpConfig {
+                auto_respond: deps.auto_respond,
+                role_name: deps.role_name,
+                hold_playback: deps.hold_playback,
+                playback_mode: deps.playback_mode,
+                suppress_echo: Some(Box::new(move |duration| {
+                    echo_suppress.suppress_for(duration);
+                })),
+            },
+            live_sink,
+        );
+        self.realtime_shared = Some(std::sync::Arc::clone(&pump.shared));
+        self.realtime_pump = Some(pump);
+        // 采集侧本地判定（分段说完/打断）→ 泵命令转发桥。Manual 模式
+        // （DashScope）服务端 VAD 已禁用，这是转写提交与播报打断的唯一驱动。
+        let (signal_tx, signal_rx) =
+            std::sync::mpsc::channel::<crate::audio::capture::RealtimeCaptureSignal>();
+        self.capture.set_realtime_sink(Some(signal_tx));
+        let command_sink = self.realtime_pump.as_ref().map(|pump| pump.command_sink());
+        if let Some(command_sink) = command_sink {
+            std::thread::Builder::new()
+                .name("realtime-signal-bridge".into())
+                .spawn(move || {
+                    while let Ok(signal) = signal_rx.recv() {
+                        let command = match signal {
+                            crate::audio::capture::RealtimeCaptureSignal::CommitTurn => {
+                                crate::services::realtime_pump::PumpCommand::CommitTurn
+                            }
+                            crate::audio::capture::RealtimeCaptureSignal::BargeIn => {
+                                crate::services::realtime_pump::PumpCommand::LocalBargeIn
+                            }
+                        };
+                        if command_sink.send(command).is_err() {
+                            break;
+                        }
+                    }
+                })
+                .ok();
+        }
+        Ok(())
+    }
+
+    /// 关停泵并摘除 tap。
+    pub fn detach_realtime_pump(&mut self) {
+        self.capture.set_realtime_sink(None); // 先断信号源，转发桥随通道关闭退出
+        self.realtime_pump.take(); // Drop → Shutdown + join
+        self.realtime_shared.take();
+        self.capture.set_pcm_tap(None);
+    }
+
+    /// 取走最旧的完成轮（finalize 持久化用）。
+    pub fn take_realtime_turn(&self) -> Option<crate::services::realtime_pump::CompletedTurn> {
+        self.realtime_shared
+            .as_ref()
+            .and_then(|shared| shared.take_completed())
+    }
+
+    /// 取走泵的终局错误（一次）。
+    pub fn take_realtime_failure(&self) -> Option<String> {
+        let shared = self.realtime_shared.as_ref()?;
+        let mut slot = shared.failed.lock().unwrap_or_else(|p| p.into_inner());
+        slot.take()
+    }
+
+    /// 每轮落库后同步上下文（重连时回放最近 N 轮）。
+    pub fn push_realtime_history(&self, history: Vec<(String, String)>) {
+        if let Some(pump) = self.realtime_pump.as_ref() {
+            pump.send(crate::services::realtime_pump::PumpCommand::SetHistory(
+                history,
+            ));
+        }
+    }
+
+    /// 视频帧（摄像头/桌面共享，base64 JPEG）直通实时会话。
+    /// 返回 false 表示当前无泵会话（级联/未开始/降级旧路径），前端应停止推帧。
+    pub fn push_video_frame(&self, jpeg_b64: &str) -> bool {
+        self.realtime_pump
+            .as_ref()
+            .map(|pump| {
+                pump.send(crate::services::realtime_pump::PumpCommand::AppendImage(
+                    jpeg_b64.to_owned(),
+                ));
+                true
+            })
+            .unwrap_or(false)
+    }
+
+    /// 候选确认：放行扣住的音频。
+    pub fn flush_realtime_held(&self) {
+        if let Some(pump) = self.realtime_pump.as_ref() {
+            pump.send(crate::services::realtime_pump::PumpCommand::FlushHeld);
+        }
+    }
+
+    /// 候选拒绝/接管：丢弃扣住的音频。
+    pub fn discard_realtime_held(&self) {
+        if let Some(pump) = self.realtime_pump.as_ref() {
+            pump.send(crate::services::realtime_pump::PumpCommand::DiscardHeld);
+        }
+    }
+
     #[cfg(test)]
     fn runtime_can_answer(&self) -> bool {
         self.runtime.can_answer()
@@ -356,7 +562,13 @@ impl<S: PlaybackSink> SessionService<S> {
         capture: MeetingCapture<'_>,
         allow_barge_in: bool,
     ) -> Result<SessionStartOutcome, SessionServiceError> {
-        self.start_inner(database, config, secrets_ready, Some(capture), allow_barge_in)
+        self.start_inner(
+            database,
+            config,
+            secrets_ready,
+            Some(capture),
+            allow_barge_in,
+        )
     }
 
     fn start_inner(
@@ -447,6 +659,7 @@ impl<S: PlaybackSink> SessionService<S> {
         }
         if mode != AgentMode::AiActive {
             self.supersede_pending_confirmation(database);
+            self.discard_realtime_held();
         }
         if let Some(session_id) = &self.session_id {
             SessionStore::new(database).append_event(
@@ -462,6 +675,16 @@ impl<S: PlaybackSink> SessionService<S> {
         self.capture.push_pcm(pcm);
     }
 
+    /// 诊断：tap 满丢帧累计（实时上行背压观测）。
+    pub fn capture_tap_dropped(&self) -> u64 {
+        self.capture.tap_dropped()
+    }
+
+    /// 无锁热路径句柄（AppState 持有，IPC 推流不再等 sessions 锁）。
+    pub fn mic_ingest_handle(&self) -> crate::audio::capture::MicIngestHandle {
+        self.capture.mic_ingest_handle()
+    }
+
     pub fn finalize_utterance(
         &mut self,
         database: &Database,
@@ -470,7 +693,27 @@ impl<S: PlaybackSink> SessionService<S> {
         credentials: CascadeCredentials<'_>,
         text: Option<&str>,
     ) -> Result<Option<CascadeTurn>, SessionServiceError> {
-        self.finalize_utterance_inner(database, config, probes, credentials, text, false)
+        self.finalize_utterance_inner(
+            database,
+            config,
+            probes,
+            credentials,
+            text,
+            false,
+            &TurnStreamHooks::none(),
+        )
+    }
+
+    pub fn finalize_utterance_with_hooks(
+        &mut self,
+        database: &Database,
+        config: &PublicConfig,
+        probes: &SessionProbes<'_>,
+        credentials: CascadeCredentials<'_>,
+        text: Option<&str>,
+        hooks: &TurnStreamHooks<'_>,
+    ) -> Result<Option<CascadeTurn>, SessionServiceError> {
+        self.finalize_utterance_inner(database, config, probes, credentials, text, false, hooks)
     }
 
     pub fn finalize_utterance_forced(
@@ -480,9 +723,29 @@ impl<S: PlaybackSink> SessionService<S> {
         probes: &SessionProbes<'_>,
         credentials: CascadeCredentials<'_>,
     ) -> Result<Option<CascadeTurn>, SessionServiceError> {
-        self.finalize_utterance_inner(database, config, probes, credentials, None, true)
+        self.finalize_utterance_inner(
+            database,
+            config,
+            probes,
+            credentials,
+            None,
+            true,
+            &TurnStreamHooks::none(),
+        )
     }
 
+    pub fn finalize_utterance_forced_with_hooks(
+        &mut self,
+        database: &Database,
+        config: &PublicConfig,
+        probes: &SessionProbes<'_>,
+        credentials: CascadeCredentials<'_>,
+        hooks: &TurnStreamHooks<'_>,
+    ) -> Result<Option<CascadeTurn>, SessionServiceError> {
+        self.finalize_utterance_inner(database, config, probes, credentials, None, true, hooks)
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn finalize_utterance_inner(
         &mut self,
         database: &Database,
@@ -491,6 +754,7 @@ impl<S: PlaybackSink> SessionService<S> {
         credentials: CascadeCredentials<'_>,
         text: Option<&str>,
         force_meeting_assistant: bool,
+        hooks: &TurnStreamHooks<'_>,
     ) -> Result<Option<CascadeTurn>, SessionServiceError> {
         if force_meeting_assistant
             && self
@@ -509,8 +773,11 @@ impl<S: PlaybackSink> SessionService<S> {
         {
             match rx.try_recv() {
                 Ok(Ok((summary, upto))) => {
-                    SessionStore::new(database)
-                        .set_context_summary(&session_id, summary.trim(), upto)?;
+                    SessionStore::new(database).set_context_summary(
+                        &session_id,
+                        summary.trim(),
+                        upto,
+                    )?;
                 }
                 // job 未完成：继续挂起，留给下一次 finalize。
                 Err(std::sync::mpsc::TryRecvError::Empty) => self.summary_job = Some(rx),
@@ -607,6 +874,8 @@ impl<S: PlaybackSink> SessionService<S> {
             history: history_after,
             context_summary: Some(existing_summary.as_str()),
         };
+        let mut pump_playback_status: Option<&'static str> = None;
+        let mut pump_turn_meta = serde_json::Value::Null;
         let turn = if transcript_only {
             CascadeTurn {
                 user_text: transcribed_meeting_text.unwrap_or_default(),
@@ -616,6 +885,77 @@ impl<S: PlaybackSink> SessionService<S> {
                 materials_used: false,
                 error_code: None,
             }
+        } else if e2e_route && self.realtime_shared.is_some() && user_text.is_none() {
+            // 端到端流式路线：轮次已由泵完成（含播放/打断），这里只取结果落库。
+            // 手动文本（composer 输入）不经过泵：等泵轮次只会把输入静默丢弃，
+            // 与 say 相同走独立的 text_turn 连接（见下方 run_e2e_turn 分支）。
+            // 先取轮后查失败：历史遗留的终局失败（如 401 后槽未消费）不得误吞
+            // 已排队的完整轮次；仅当本轮确实无内容可落库时才上报失败。
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+            let mut completed = self.take_realtime_turn();
+            while completed.is_none() && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(25));
+                completed = self.take_realtime_turn();
+            }
+            let Some(completed) = completed else {
+                if let Some(reason) = self.take_realtime_failure() {
+                    self.last_error_code = Some(reason.clone());
+                    self.return_to_listening(database, &session_id)?;
+                    return Err(SessionServiceError::Realtime(RealtimeError::Remote(reason)));
+                }
+                // 就绪信号竞态兜底：无可落库轮次，不打扰前端。
+                return Ok(None);
+            };
+            pump_turn_meta = serde_json::json!({
+                "latencyMsFirstAudio": completed.first_audio_ms,
+                "ingressDropped": self.capture.tap_dropped(),
+                "audioBytes": completed.audio_bytes,
+                "playbackWriteFailed": completed.playback_write_failed,
+                "playbackAlive": completed.playback_alive,
+                "audioDeltaCount": completed.audio_delta_count,
+                "audioDeltaMaxGapMs": completed.audio_delta_max_gap_ms,
+                "audioDeltaGapsOver150Ms": completed.audio_delta_gaps_over_150_ms,
+                "audioDeltaGapsOver500Ms": completed.audio_delta_gaps_over_500_ms,
+                "aecResidualCorrelation": completed.aec_residual_correlation,
+                "aecResidualMax": completed.aec_residual_max,
+                "aecResidualOverThreshold": completed.aec_residual_over_threshold,
+                "playbackMode": if completed.playback_mode
+                    == crate::services::realtime_pump::RealtimePlaybackMode::WebAudio
+                {
+                    "web_audio"
+                } else {
+                    "native"
+                },
+                "playbackGeneration": completed.playback_generation,
+                "playbackRestarts": completed.playback_restarts,
+                "playbackRestartedDuringTurn": completed.playback_restarted_during_turn,
+                "playbackLastEvent": completed.playback_last_event,
+                "echoDropped": completed.echo_dropped,
+                "echoDroppedTotal": completed.echo_dropped_total,
+                "timeline": completed.timeline,
+                "finalizeLagMs": completed.completed_at.elapsed().as_millis() as u64,
+            });
+            pump_playback_status = if completed.interrupted {
+                Some("interrupted")
+            } else if completed.transcript_only {
+                Some("text_only")
+            } else if completed.held {
+                None // 候选闸门：由 candidate 分支标注 pending_confirmation
+            } else if completed.playback_write_failed || !completed.playback_alive {
+                Some("failed")
+            } else if completed.audio_bytes == 0 {
+                Some("text_only")
+            } else {
+                Some("played")
+            };
+            CascadeTurn {
+                user_text: completed.user_text,
+                assistant_text: completed.assistant_text,
+                tts_pcm: Vec::new(),
+                materials_used: false,
+                citations: Vec::new(),
+                error_code: None,
+            }
         } else if e2e_route {
             match run_e2e_turn(
                 probes.realtime,
@@ -623,6 +963,7 @@ impl<S: PlaybackSink> SessionService<S> {
                 &request,
                 &pcm,
                 self.control.cancel_flag(),
+                hooks,
             ) {
                 Ok(turn) => turn,
                 Err(error) => {
@@ -630,13 +971,33 @@ impl<S: PlaybackSink> SessionService<S> {
                 }
             }
         } else {
-            match run_cascade_turn(&deps, request, self.control.cancel_flag()) {
+            match run_cascade_turn(&deps, request, self.control.cancel_flag(), hooks) {
                 Ok(turn) => turn,
                 Err(error) => {
                     return self.recover_from_cascade_error(database, &session_id, error);
                 }
             }
         };
+
+        // 文本级回声过滤（最后一道防线）：AI 播报声被麦克风回收、被 ASR
+        // 转写成「用户发言」时整轮丢弃——绝不落库/进上下文，否则
+        // 「自己回答自己」的循环被固化为正式对话历史。音频闸门（上行门控/
+        // 回声抑制窗）是第一道防线；这里兜底级联、旧 e2e 与文本注入所有路线。
+        // 比对只看此前轮次的播报（history 取自本轮写入前的数据库）。
+        let recent_assistant: Vec<String> = history
+            .iter()
+            .rev()
+            .map(|turn| turn.assistant_text.as_str())
+            .filter(|text| !text.is_empty())
+            .take(2)
+            .map(str::to_owned)
+            .collect();
+        if !turn.user_text.trim().is_empty()
+            && crate::services::echo_guard::is_echo(&turn.user_text, &recent_assistant)
+        {
+            self.return_to_listening(database, &session_id)?;
+            return Ok(None);
+        }
 
         let turn_id = uuid::Uuid::new_v4().to_string();
         store.insert_turn(NewTurn {
@@ -674,6 +1035,14 @@ impl<S: PlaybackSink> SessionService<S> {
         self.revision += 1;
         self.unused_materials = !turn.materials_used;
         self.last_error_code = None;
+        if self.realtime_pump.is_some() {
+            let mut updated_history: Vec<(String, String)> = history
+                .iter()
+                .map(|entry| (entry.user_text.clone(), entry.assistant_text.clone()))
+                .collect();
+            updated_history.push((turn.user_text.clone(), turn.assistant_text.clone()));
+            self.push_realtime_history(updated_history);
+        }
 
         // 阶段 4：未摘要轮次超过阈值时，后台把较早轮次压缩为滚动摘要。
         // 压缩失败不影响本轮回答；落库要等下一次 finalize 开头的轮询。
@@ -693,12 +1062,11 @@ impl<S: PlaybackSink> SessionService<S> {
                     .iter()
                     .skip(compress_from as usize)
                     .take((compress_to - compress_from + 1) as usize)
-                    .map(|turn| {
-                        format!("用户：{}\n助手：{}", turn.user_text, turn.assistant_text)
-                    })
+                    .map(|turn| format!("用户：{}\n助手：{}", turn.user_text, turn.assistant_text))
                     .collect();
-                let credential =
-                    credentials.llm.map(|s| zeroize::Zeroizing::new(s.to_string()));
+                let credential = credentials
+                    .llm
+                    .map(|s| zeroize::Zeroizing::new(s.to_string()));
                 let (tx, rx) = std::sync::mpsc::channel();
                 self.summary_job = Some(rx);
                 std::thread::spawn(move || {
@@ -744,6 +1112,8 @@ impl<S: PlaybackSink> SessionService<S> {
             == Some(RoleScenario::Candidate);
         let mut playback_status = if candidate_confirmation_required {
             "pending_confirmation"
+        } else if let Some(status) = pump_playback_status {
+            status
         } else if turn.tts_pcm.is_empty() {
             "text_only"
         } else {
@@ -791,17 +1161,18 @@ impl<S: PlaybackSink> SessionService<S> {
                 playback_status = "played";
             }
         }
-        store.append_event(
-            &session_id,
-            "turn_meta",
-            &serde_json::json!({
-                "turnId": turn_id,
-                "triggerSource": if force_meeting_assistant { "hotkey" } else if user_text.is_some() { "manual" } else { "voice" },
-                "userConfirmed": !candidate_confirmation_required,
-                "playbackStatus": playback_status,
-            })
-            .to_string(),
-        )?;
+        let mut meta = serde_json::json!({
+            "turnId": turn_id,
+            "triggerSource": if force_meeting_assistant { "hotkey" } else if user_text.is_some() { "manual" } else { "voice" },
+            "userConfirmed": !candidate_confirmation_required,
+            "playbackStatus": playback_status,
+        });
+        if let Some(object) = pump_turn_meta.as_object() {
+            for (key, value) in object {
+                meta[key.as_str()] = value.clone();
+            }
+        }
+        store.append_event(&session_id, "turn_meta", &meta.to_string())?;
         if self.control.stop_requested() {
             self.finish_stop(database)?;
             return Ok(Some(turn));
@@ -822,6 +1193,25 @@ impl<S: PlaybackSink> SessionService<S> {
         probes: &SessionProbes<'_>,
         credentials: CascadeCredentials<'_>,
         command: AgentCommand,
+    ) -> Result<AgentCommandOutcome, SessionServiceError> {
+        self.execute_command_with_hooks(
+            database,
+            config,
+            probes,
+            credentials,
+            command,
+            &TurnStreamHooks::none(),
+        )
+    }
+
+    pub fn execute_command_with_hooks(
+        &mut self,
+        database: &Database,
+        config: &PublicConfig,
+        probes: &SessionProbes<'_>,
+        credentials: CascadeCredentials<'_>,
+        command: AgentCommand,
+        hooks: &TurnStreamHooks<'_>,
     ) -> Result<AgentCommandOutcome, SessionServiceError> {
         self.poll_sidecar(database)?;
         self.runtime.set_mode(self.control.mode());
@@ -919,6 +1309,43 @@ impl<S: PlaybackSink> SessionService<S> {
             })
             .collect::<Vec<_>>();
         let last_turn_id = turns.last().map(|turn| turn.id.clone());
+        // 端到端流式候选确认：未改稿直接放行扣留音频（零合成延迟）；改稿丢弃扣留后走旧合成路径。
+        if command.action == AgentCommandAction::ConfirmCandidate && self.realtime_pump.is_some() {
+            let last_assistant = turns
+                .last()
+                .map(|turn| turn.assistant_text.trim().to_owned())
+                .unwrap_or_default();
+            if command.text.trim() == last_assistant {
+                self.flush_realtime_held();
+                if let Some(turn_id) = last_turn_id.as_deref() {
+                    store.update_assistant_text(turn_id, &command.text)?;
+                    store.append_event(
+                        &session_id,
+                        "reply",
+                        &serde_json::json!({ "text": truncate(&command.text) }).to_string(),
+                    )?;
+                    store.append_event(
+                        &session_id,
+                        "turn_meta",
+                        &serde_json::json!({
+                            "turnId": turn_id,
+                            "triggerSource": "user_confirmation",
+                            "userConfirmed": true,
+                            "playbackStatus": "played",
+                        })
+                        .to_string(),
+                    )?;
+                }
+                self.revision += 1;
+                self.last_error_code = None;
+                return Ok(AgentCommandOutcome::ok(
+                    command.command_id,
+                    command.action,
+                    serde_json::Map::new(),
+                ));
+            }
+            self.discard_realtime_held();
+        }
         let cached_pcm = std::cell::RefCell::new(Option::<Vec<u8>>::None);
         let played_audio = std::cell::Cell::new(false);
         let last_error = std::cell::RefCell::new(Option::<SessionServiceError>::None);
@@ -933,6 +1360,7 @@ impl<S: PlaybackSink> SessionService<S> {
                 prompt,
                 e2e_route,
                 include_audio,
+                hooks,
             },
             cancel,
         ) {
@@ -1169,6 +1597,8 @@ impl<S: PlaybackSink> SessionService<S> {
     }
 
     fn finish_stop(&mut self, database: &Database) -> Result<SessionRecord, SessionServiceError> {
+        // 会话终态：立即关停实时泵、摘除 tap（常驻连接与上行随会话终止）。
+        self.detach_realtime_pump();
         let session_id = self
             .session_id
             .clone()
@@ -1193,6 +1623,7 @@ impl<S: PlaybackSink> SessionService<S> {
     }
 
     fn fail_session(&mut self, database: &Database) -> Result<(), SessionServiceError> {
+        self.detach_realtime_pump();
         let Some(session_id) = self.session_id.clone() else {
             return Ok(());
         };
@@ -1226,6 +1657,7 @@ struct CommandGenerate<'a> {
     prompt: &'a str,
     e2e_route: bool,
     include_audio: bool,
+    hooks: &'a TurnStreamHooks<'a>,
 }
 
 fn generate_command_text(
@@ -1240,6 +1672,13 @@ fn generate_command_text(
         } else {
             instructions
         };
+        let route_voice = active_voice_route(request.config)
+            .and_then(|route| route.voice_id.clone())
+            .and_then(|voice| {
+                let voice = voice.trim().to_owned();
+                (!voice.is_empty()).then_some(voice)
+            })
+            .unwrap_or_default();
         let turn = request.probes.realtime.text_turn(
             RealtimeTextRequest {
                 endpoint: &endpoint,
@@ -1248,6 +1687,11 @@ fn generate_command_text(
                 instructions: &instructions,
                 prompt: &command_prompt(request.history, request.prompt),
                 include_audio: request.include_audio,
+                voice: &route_voice,
+                hooks: TurnStreamHooks {
+                    user_text: None,
+                    assistant_text: request.hooks.assistant_text,
+                },
             },
             cancel,
         )?;
@@ -1255,11 +1699,15 @@ fn generate_command_text(
     }
     let (endpoint, model_id) = llm_endpoint(request.config)?;
     let messages = command_messages(request.config, request.history, request.prompt);
-    let text =
-        request
-            .probes
-            .llm
-            .complete(&endpoint, request.credentials.llm, &model_id, &messages)?;
+    let noop = |_: &str| {};
+    let on_snapshot: &dyn Fn(&str) = request.hooks.assistant_text.unwrap_or(&noop);
+    let text = request.probes.llm.complete_streaming(
+        &endpoint,
+        request.credentials.llm,
+        &model_id,
+        &messages,
+        on_snapshot,
+    )?;
     Ok((text, Vec::new()))
 }
 
@@ -1277,6 +1725,13 @@ fn speak_command_text(
     }
     if e2e_route {
         let (endpoint, model_id) = e2e_endpoint(config)?;
+        let route_voice = active_voice_route(config)
+            .and_then(|route| route.voice_id.clone())
+            .and_then(|voice| {
+                let voice = voice.trim().to_owned();
+                (!voice.is_empty()).then_some(voice)
+            })
+            .unwrap_or_default();
         let turn = probes.realtime.text_turn(
             RealtimeTextRequest {
                 endpoint: &endpoint,
@@ -1285,6 +1740,9 @@ fn speak_command_text(
                 instructions: "逐字朗读用户提供的文本，不添加、不删除、不改写。",
                 prompt: text,
                 include_audio: true,
+                voice: &route_voice,
+                // 朗读文本已知且由收尾事件整体上屏，这里无需流式回调。
+                hooks: TurnStreamHooks::none(),
             },
             cancel,
         )?;
@@ -1523,6 +1981,7 @@ fn run_e2e_turn(
     request: &CascadeTurnRequest<'_>,
     pcm: &[u8],
     cancel: &AtomicBool,
+    hooks: &TurnStreamHooks<'_>,
 ) -> Result<CascadeTurn, RealtimeError> {
     if cancel.load(Ordering::SeqCst) {
         return Err(RealtimeError::Cancelled);
@@ -1554,6 +2013,13 @@ fn run_e2e_turn(
         .user_text
         .map(str::trim)
         .filter(|text| !text.is_empty());
+    // 线路配置的音色（克隆音色 ID 或官方音色名）：DashScope realtime 没有可用的
+    // 方言级默认音色，缺失会被服务端以 Voice not supported 拒绝。
+    let route_voice = route
+        .voice_id
+        .as_deref()
+        .filter(|voice| !voice.trim().is_empty())
+        .unwrap_or("");
     let citations = known_text
         .map(|text| retrieve(deps, request, text))
         .unwrap_or_default();
@@ -1567,6 +2033,12 @@ fn run_e2e_turn(
                 instructions: &instructions,
                 prompt,
                 include_audio: true,
+                voice: route_voice,
+                // 手动输入时用户文本已知，无需流式转写回调。
+                hooks: TurnStreamHooks {
+                    user_text: None,
+                    assistant_text: hooks.assistant_text,
+                },
             },
             cancel,
         )
@@ -1579,6 +2051,8 @@ fn run_e2e_turn(
                 pcm16le: pcm,
                 sample_rate: request.sample_rate,
                 instructions: &instructions,
+                voice: route_voice,
+                hooks: *hooks,
             },
             cancel,
         )
@@ -1597,7 +2071,7 @@ fn run_e2e_turn(
     })
 }
 
-fn e2e_instructions(
+pub(crate) fn e2e_instructions(
     role: Option<&crate::config::RoleProfileConfig>,
     citations: &[crate::runtime::TurnCitation],
 ) -> String {
@@ -1633,7 +2107,7 @@ fn is_terminal_phase(phase: SessionPhase) -> bool {
     matches!(phase, SessionPhase::Completed | SessionPhase::Failed)
 }
 
-fn active_session_role_scenario(config: &PublicConfig) -> Option<RoleScenario> {
+pub(crate) fn active_session_role_scenario(config: &PublicConfig) -> Option<RoleScenario> {
     let active_id = config.active_role_profile_id.as_deref()?;
     let profile = config
         .role_profiles
@@ -1682,7 +2156,7 @@ fn transcribe_meeting_pcm(
     }
 }
 
-fn meeting_assistant_was_mentioned(text: &str, role_name: &str) -> bool {
+pub(crate) fn meeting_assistant_was_mentioned(text: &str, role_name: &str) -> bool {
     let normalized = text.to_ascii_lowercase();
     let name = role_name.trim().to_ascii_lowercase();
     (!name.is_empty() && normalized.contains(&name))
@@ -1972,6 +2446,9 @@ mod tests {
             if self.cancel_after {
                 cancel.store(true, Ordering::SeqCst);
             }
+            // 模拟 WS 转写增量： hooks 挂了回调就会收到完整前缀快照。
+            request.hooks.notify_user(&self.user_text);
+            request.hooks.notify_assistant(&self.assistant_text);
             Ok(RealtimeTurn {
                 user_text: self.user_text.clone(),
                 assistant_text: self.assistant_text.clone(),
@@ -1994,6 +2471,7 @@ mod tests {
             if let Some(error) = self.error.lock().expect("error").take() {
                 return Err(error);
             }
+            request.hooks.notify_assistant(&self.assistant_text);
             Ok(RealtimeTurn {
                 user_text: self.user_text.clone(),
                 assistant_text: self.assistant_text.clone(),
@@ -3598,6 +4076,79 @@ mod tests {
     }
 
     #[test]
+    fn e2e_manual_text_with_pump_uses_dedicated_text_turn() {
+        let (_directory, database) = opened();
+        let mut service = SessionService::with_sink(RecordingSink::default());
+        start_ready_sink(&mut service, &database, &ready_e2e_public_config());
+        // 全双工泵在线（真实泵由 commands 层装配；注入共享状态即可命中泵分支）。
+        // 手动文本不得等泵轮次（等 500ms 后静默丢弃），必须走独立 text_turn。
+        service.realtime_shared = Some(std::sync::Arc::new(
+            crate::services::realtime_pump::PumpShared::new(),
+        ));
+        let asr = ScriptedAsr::ok("voice-should-not-run");
+        let llm = ScriptedLlm::ok("should-not-run");
+        let tts = ScriptedTts::ok(&[0x99]);
+        let realtime = FakeRealtime::ok("", "文字已收到", &[0x31, 0x32]);
+        let probes = e2e_probes(&asr, &llm, &tts, &UnusedEmbed, &realtime);
+        let turn = service
+            .finalize_utterance_with_hooks(
+                &database,
+                &ready_e2e_public_config(),
+                &probes,
+                credentials(),
+                Some("用打字问的问题"),
+                &crate::providers::TurnStreamHooks::none(),
+            )
+            .unwrap()
+            .expect("manual text turn");
+        assert_eq!(turn.user_text, "用打字问的问题");
+        assert_eq!(turn.assistant_text, "文字已收到");
+        assert_eq!(realtime.text_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(realtime.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(asr.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(llm.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(service.sink().recorded(), [0x31, 0x32]);
+    }
+
+    #[test]
+    fn e2e_voice_finalize_forwards_stream_snapshots_to_hooks() {
+        let (_directory, database) = opened();
+        let mut service = SessionService::with_sink(RecordingSink::default());
+        start_ready_sink(&mut service, &database, &ready_e2e_public_config());
+        let asr = ScriptedAsr::ok("should-not-run");
+        let llm = ScriptedLlm::ok("should-not-run");
+        let tts = ScriptedTts::ok(&[0x99]);
+        let realtime = FakeRealtime::ok("现在几点", "现在是三点", &[0x77]);
+        let probes = e2e_probes(&asr, &llm, &tts, &UnusedEmbed, &realtime);
+        let user_snapshots = Mutex::new(Vec::<String>::new());
+        let assistant_snapshots = Mutex::new(Vec::<String>::new());
+        let hooks = crate::providers::TurnStreamHooks {
+            user_text: Some(&|text| user_snapshots.lock().unwrap().push(text.to_owned())),
+            assistant_text: Some(&|text| assistant_snapshots.lock().unwrap().push(text.to_owned())),
+        };
+
+        let turn = service
+            .finalize_utterance_with_hooks(
+                &database,
+                &ready_e2e_public_config(),
+                &probes,
+                credentials(),
+                None,
+                &hooks,
+            )
+            .unwrap()
+            .expect("e2e voice turn");
+
+        assert_eq!(turn.user_text, "现在几点");
+        assert_eq!(turn.assistant_text, "现在是三点");
+        assert_eq!(user_snapshots.lock().unwrap().as_slice(), ["现在几点"]);
+        assert_eq!(
+            assistant_snapshots.lock().unwrap().as_slice(),
+            ["现在是三点"]
+        );
+    }
+
+    #[test]
     fn stale_barge_flag_before_playback_is_discarded_not_swallowing_the_answer() {
         // 意义：played 后 700ms 尾窗内的真实人声会残留 barge 旗标；播报开始前必须
         // 显式消费，否则下一轮播报闭包入口即取消、整段回答被吞（interrupted）。
@@ -3730,15 +4281,13 @@ mod tests {
         // 断言二：摘要并入本轮系统提示，被摘要的轮次不再作为原始历史发送。
         let latest = llm.seen_messages().pop().expect("second llm call");
         assert!(
-            latest[0]
-                .content
-                .contains("此前对话摘要：这是滚动摘要文本"),
+            latest[0].content.contains("此前对话摘要：这是滚动摘要文本"),
             "system prompt: {}",
             latest[0].content
         );
         assert!(latest.iter().any(|message| message.content == "第二问"));
         assert!(!latest.iter().any(|message| message.content == "第一问"));
-        assert!(matches!(service.summary_job, None));
+        assert!(service.summary_job.is_none());
 
         // 断言三：失败路径（摘要生成失败）不落库，且回答照常。
         let (tx, rx) = std::sync::mpsc::channel();
@@ -3753,7 +4302,7 @@ mod tests {
             SessionStore::new(&database).context_summary(&id).unwrap(),
             Some(("这是滚动摘要文本".to_string(), 0))
         );
-        assert!(matches!(service.summary_job, None));
+        assert!(service.summary_job.is_none());
         let latest = llm.seen_messages().pop().expect("third llm call");
         assert!(latest.iter().any(|message| message.content == "第三问"));
         let stored = SessionStore::new(&database).list_turns(&id).unwrap();

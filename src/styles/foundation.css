@@ -8,6 +8,9 @@
   --border-strong: #c9c9c2;
   --accent: #292929;
   --accent-contrast: #ffffff;
+  --accent-strong: #2c6bef;
+  --accent-strong-contrast: #ffffff;
+  --accent-strong-soft: #e9f0fe;
   --success: #24754c;
   --success-bg: #eef7f0;
   --danger: #b33d3d;
@@ -35,6 +38,9 @@
   --border-strong: #545452;
   --accent: #ecece9;
   --accent-contrast: #202020;
+  --accent-strong: #7aa5f8;
+  --accent-strong-contrast: #101c33;
+  --accent-strong-soft: #26365e;
   --success: #8dcea5;
   --success-bg: #20372a;
   --danger: #ee9b94;

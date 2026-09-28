@@ -35,6 +35,7 @@ function turn(overrides: Partial<SessionTurnView> = {}): SessionTurnView {
     assistantText: "这是一个后端岗位",
     materialsUsed: false,
     citations: [{ materialId: "mat-1", chunkId: "chunk-1", snippet: "负责订单服务" }],
+    createdAt: "2026-09-05T10:00:30Z",
     ...overrides,
   };
 }

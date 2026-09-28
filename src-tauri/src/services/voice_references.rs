@@ -6,7 +6,7 @@ use rusqlite::OptionalExtension;
 use crate::{
     config::{ConfigError, ConfigStore, ProviderConfig},
     database::{Database, DatabaseError},
-    providers::{ProviderEndpoint, ProviderError},
+    providers::{ProviderEndpoint, ProviderError, VoiceCloneOutcome},
     secrets::{SecretError, SecretService},
 };
 
@@ -25,6 +25,8 @@ pub struct VoiceReferenceSaveInput {
     #[serde(default)]
     pub provider_id: Option<String>,
     #[serde(default)]
+    pub target_model: Option<String>,
+    #[serde(default)]
     pub transcript: Option<String>,
     pub audio_path: String,
 }
@@ -39,6 +41,8 @@ pub struct VoiceReferenceAudioSaveInput {
     #[serde(default)]
     pub provider_id: Option<String>,
     #[serde(default)]
+    pub target_model: Option<String>,
+    #[serde(default)]
     pub transcript: Option<String>,
     pub audio_base64: String,
 }
@@ -52,6 +56,8 @@ pub struct VoiceReferenceUpdateInput {
     #[serde(default)]
     pub provider_id: Option<String>,
     #[serde(default)]
+    pub target_model: Option<String>,
+    #[serde(default)]
     pub transcript: Option<String>,
 }
 
@@ -62,6 +68,7 @@ pub struct VoiceReferenceSummary {
     pub id: String,
     pub name: String,
     pub provider_id: Option<String>,
+    pub target_model: Option<String>,
     pub mime_type: String,
     pub byte_size: i64,
     pub duration_ms: Option<i64>,
@@ -122,61 +129,46 @@ impl From<ProviderError> for VoiceReferenceServiceError {
     }
 }
 
-/// 上传参考音频并调用音色克隆的网关抽象；生产实现包装智谱 files/voice-clone 接口。
+/// 上传参考音频并调用音色克隆的网关抽象。生产实现按供应商分发：
+/// 智谱走 上传→克隆 两步；DashScope 内部再按目标模型分发
+/// （qwen-voice-enrollment 单调用 / cosyvoice 上传+create_voice）。
 pub trait VoiceCloneGateway {
-    fn upload_sample(
-        &self,
-        endpoint: &ProviderEndpoint,
-        credential: Option<&str>,
-        file_name: &str,
-        mime_type: &str,
-        bytes: Vec<u8>,
-    ) -> Result<String, crate::providers::VoiceCloneError>;
-
-    fn clone_voice(
+    #[allow(clippy::too_many_arguments)]
+    fn clone_reference(
         &self,
         endpoint: &ProviderEndpoint,
         credential: Option<&str>,
         voice_name: &str,
         transcript: &str,
-        file_id: &str,
-    ) -> Result<String, crate::providers::VoiceCloneError>;
+        target_model: Option<&str>,
+        file_name: &str,
+        mime_type: &str,
+        bytes: Vec<u8>,
+    ) -> Result<VoiceCloneOutcome, crate::providers::VoiceCloneError>;
 }
 
 impl VoiceCloneGateway for crate::providers::VoiceCloneProbe {
-    fn upload_sample(
-        &self,
-        endpoint: &ProviderEndpoint,
-        credential: Option<&str>,
-        file_name: &str,
-        mime_type: &str,
-        bytes: Vec<u8>,
-    ) -> Result<String, crate::providers::VoiceCloneError> {
-        crate::providers::VoiceCloneProbe::upload_sample(
-            self,
-            endpoint,
-            credential,
-            file_name,
-            mime_type,
-            bytes,
-        )
-    }
-
-    fn clone_voice(
+    fn clone_reference(
         &self,
         endpoint: &ProviderEndpoint,
         credential: Option<&str>,
         voice_name: &str,
         transcript: &str,
-        file_id: &str,
-    ) -> Result<String, crate::providers::VoiceCloneError> {
-        crate::providers::VoiceCloneProbe::clone_voice(
+        target_model: Option<&str>,
+        file_name: &str,
+        mime_type: &str,
+        bytes: Vec<u8>,
+    ) -> Result<VoiceCloneOutcome, crate::providers::VoiceCloneError> {
+        crate::providers::VoiceCloneProbe::clone_reference(
             self,
             endpoint,
             credential,
             voice_name,
             transcript,
-            file_id,
+            target_model,
+            file_name,
+            mime_type,
+            bytes,
         )
     }
 }
@@ -217,7 +209,18 @@ impl<'a> VoiceReferenceService<'a> {
         let (mime_type, bytes, duration_ms) = read_audio_file(&input.audio_path)?;
         let now = chrono::Utc::now().to_rfc3339();
         let provider_id = clean(input.provider_id);
-        self.upsert_summary(&id, name, provider_id.as_deref(), &mime_type, &bytes, duration_ms, &transcript, &now)?;
+        let target_model = clean(input.target_model);
+        self.upsert_summary(
+            &id,
+            name,
+            provider_id.as_deref(),
+            target_model.as_deref(),
+            &mime_type,
+            &bytes,
+            duration_ms,
+            &transcript,
+            &now,
+        )?;
         self.load_summary(&id)
     }
 
@@ -240,7 +243,18 @@ impl<'a> VoiceReferenceService<'a> {
         let (mime_type, duration_ms) = validate_audio_payload(&bytes)?;
         let now = chrono::Utc::now().to_rfc3339();
         let provider_id = clean(input.provider_id);
-        self.upsert_summary(&id, name, provider_id.as_deref(), mime_type, &bytes, duration_ms, &transcript, &now)?;
+        let target_model = clean(input.target_model);
+        self.upsert_summary(
+            &id,
+            name,
+            provider_id.as_deref(),
+            target_model.as_deref(),
+            mime_type,
+            &bytes,
+            duration_ms,
+            &transcript,
+            &now,
+        )?;
         self.load_summary(&id)
     }
 
@@ -255,17 +269,19 @@ impl<'a> VoiceReferenceService<'a> {
         }
         let transcript = input.transcript.as_deref().unwrap_or("").trim().to_owned();
         let provider_id = clean(input.provider_id);
+        let target_model = clean(input.target_model);
         let changed = self
             .database
             .with_connection(|connection| {
                 connection.execute(
                     "UPDATE voice_references
-                     SET name = ?2, provider_id = ?3, transcript = ?4, updated_at = ?5
+                     SET name = ?2, provider_id = ?3, target_model = ?4, transcript = ?5, updated_at = ?6
                      WHERE id = ?1",
                     rusqlite::params![
                         input.id,
                         name,
                         provider_id,
+                        target_model,
                         transcript,
                         chrono::Utc::now().to_rfc3339()
                     ],
@@ -284,6 +300,7 @@ impl<'a> VoiceReferenceService<'a> {
         id: &str,
         name: &str,
         provider_id: Option<&str>,
+        target_model: Option<&str>,
         mime_type: &str,
         bytes: &[u8],
         duration_ms: Option<i64>,
@@ -295,13 +312,14 @@ impl<'a> VoiceReferenceService<'a> {
                 connection
                     .execute(
                         "INSERT INTO voice_references(
-                            id, name, provider_id, mime_type, byte_size, duration_ms, transcript,
+                            id, name, provider_id, target_model, mime_type, byte_size, duration_ms, transcript,
                             audio, remote_file_id, voice_id, clone_status, clone_error,
                             created_at, updated_at
-                        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, NULL, 'pending', NULL, ?9, ?9)
+                        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, NULL, 'pending', NULL, ?10, ?10)
                         ON CONFLICT(id) DO UPDATE SET
                             name = excluded.name,
                             provider_id = excluded.provider_id,
+                            target_model = excluded.target_model,
                             mime_type = excluded.mime_type,
                             byte_size = excluded.byte_size,
                             duration_ms = excluded.duration_ms,
@@ -316,6 +334,7 @@ impl<'a> VoiceReferenceService<'a> {
                             id,
                             name,
                             provider_id,
+                            target_model,
                             mime_type,
                             bytes.len() as i64,
                             duration_ms,
@@ -329,10 +348,7 @@ impl<'a> VoiceReferenceService<'a> {
             .map_err(VoiceReferenceServiceError::Database)
     }
 
-    fn load_summary(
-        &self,
-        id: &str,
-    ) -> Result<VoiceReferenceSummary, VoiceReferenceServiceError> {
+    fn load_summary(&self, id: &str) -> Result<VoiceReferenceSummary, VoiceReferenceServiceError> {
         self.database
             .with_connection(|connection| query_summary(connection, id))
             .map_err(VoiceReferenceServiceError::Database)?
@@ -343,7 +359,7 @@ impl<'a> VoiceReferenceService<'a> {
         self.database
             .with_connection(|connection| {
                 let mut statement = connection.prepare(
-                    "SELECT id, name, provider_id, mime_type, byte_size, duration_ms,
+                    "SELECT id, name, provider_id, target_model, mime_type, byte_size, duration_ms,
                             transcript, remote_file_id, voice_id, clone_status, clone_error,
                             created_at, updated_at
                      FROM voice_references ORDER BY created_at, id",
@@ -371,7 +387,7 @@ impl<'a> VoiceReferenceService<'a> {
         Ok(())
     }
 
-    /// 上传参考音频、调用音色克隆，并把返回的音色 ID 持久化到该条参考记录。
+    /// 调用音色克隆（网关内部按供应商/目标模型分发），把返回的音色 ID 持久化到该条参考记录。
     pub fn clone_voice(
         &self,
         reference_id: &str,
@@ -381,8 +397,8 @@ impl<'a> VoiceReferenceService<'a> {
             .with_connection(|connection| {
                 connection
                     .query_row(
-                        "SELECT audio, mime_type, transcript, provider_id FROM voice_references
-                         WHERE id = ?1",
+                        "SELECT audio, mime_type, transcript, provider_id, target_model
+                         FROM voice_references WHERE id = ?1",
                         rusqlite::params![reference_id],
                         |row| {
                             Ok((
@@ -390,6 +406,7 @@ impl<'a> VoiceReferenceService<'a> {
                                 row.get::<_, String>("mime_type")?,
                                 row.get::<_, String>("transcript")?,
                                 row.get::<_, Option<String>>("provider_id")?,
+                                row.get::<_, Option<String>>("target_model")?,
                             ))
                         },
                     )
@@ -397,12 +414,14 @@ impl<'a> VoiceReferenceService<'a> {
             })
             .map_err(VoiceReferenceServiceError::Database)?
             .ok_or(VoiceReferenceServiceError::NotFound)?;
-        let (audio, mime_type, transcript, provider_id) = row;
-        let provider_id =
-            provider_id.filter(|value| !value.trim().is_empty()).ok_or(
-                VoiceReferenceServiceError::ProviderMissing,
-            )?;
-        let config = self.config.load().map_err(VoiceReferenceServiceError::Config)?;
+        let (audio, mime_type, transcript, provider_id, target_model) = row;
+        let provider_id = provider_id
+            .filter(|value| !value.trim().is_empty())
+            .ok_or(VoiceReferenceServiceError::ProviderMissing)?;
+        let config = self
+            .config
+            .load()
+            .map_err(VoiceReferenceServiceError::Config)?;
         let provider = config
             .models
             .providers
@@ -418,35 +437,25 @@ impl<'a> VoiceReferenceService<'a> {
         };
         let credential = read_credential(provider, self.secrets)?;
 
-        let upload = self.gateway.upload_sample(
-            &endpoint,
-            credential.as_deref(),
-            &format!("{reference_id}.{}", audio_extension(&mime_type)),
-            &mime_type,
-            audio,
-        );
-        let remote_file_id = match upload {
-            Ok(remote_file_id) => remote_file_id,
-            Err(error) => {
-                self.mark_failed(reference_id, &format!("上传参考音频失败：{}", error.detail()))?;
-                return Err(VoiceReferenceServiceError::Provider(error.kind));
-            }
-        };
-        self.mark_uploaded(reference_id, &remote_file_id)?;
-
         // 智谱限制音色名 ≤30 字符：前缀 7 位 + uuid4 简写前 23 位十六进制（约 92 位随机，撞名可忽略）。
-        let voice_name = format!("roleai_{}", &uuid::Uuid::new_v4().simple().to_string()[..23]);
+        let voice_name = format!(
+            "roleai_{}",
+            &uuid::Uuid::new_v4().simple().to_string()[..23]
+        );
         debug_assert_eq!(voice_name.chars().count(), 30);
-        let voice = match self.gateway.clone_voice(
+        let outcome = match self.gateway.clone_reference(
             &endpoint,
             credential.as_deref(),
             &voice_name,
             &transcript,
-            &remote_file_id,
+            target_model.as_deref(),
+            &format!("{reference_id}.{}", audio_extension(&mime_type)),
+            &mime_type,
+            audio,
         ) {
-            Ok(voice) => voice,
+            Ok(outcome) => outcome,
             Err(error) => {
-                self.mark_failed(reference_id, &format!("调用音色克隆失败：{}", error.detail()))?;
+                self.mark_failed(reference_id, &format!("音色克隆失败：{}", error.detail()))?;
                 return Err(VoiceReferenceServiceError::Provider(error.kind));
             }
         };
@@ -454,40 +463,24 @@ impl<'a> VoiceReferenceService<'a> {
             .with_connection(|connection| {
                 connection
                     .execute(
-                        "UPDATE voice_references SET voice_id = ?2, clone_status = 'cloned',
-                                clone_error = NULL, updated_at = ?3 WHERE id = ?1",
-                        rusqlite::params![reference_id, voice, chrono::Utc::now().to_rfc3339()],
+                        "UPDATE voice_references SET voice_id = ?2, remote_file_id = ?3,
+                                clone_status = 'cloned', clone_error = NULL, updated_at = ?4
+                         WHERE id = ?1",
+                        rusqlite::params![
+                            reference_id,
+                            outcome.voice_id,
+                            outcome.remote_file_id,
+                            chrono::Utc::now().to_rfc3339()
+                        ],
                     )
                     .map(|_| ())
             })
             .map_err(VoiceReferenceServiceError::Database)?;
         Ok(VoiceReferenceCloneResult {
             reference_id: reference_id.to_owned(),
-            voice_id: voice,
-            remote_file_id,
+            remote_file_id: outcome.remote_file_id.unwrap_or_default(),
+            voice_id: outcome.voice_id,
         })
-    }
-
-    fn mark_uploaded(
-        &self,
-        reference_id: &str,
-        remote_file_id: &str,
-    ) -> Result<(), VoiceReferenceServiceError> {
-        self.database
-            .with_connection(|connection| {
-                connection
-                    .execute(
-                        "UPDATE voice_references SET remote_file_id = ?2,
-                                clone_status = 'uploaded', updated_at = ?3 WHERE id = ?1",
-                        rusqlite::params![
-                            reference_id,
-                            remote_file_id,
-                            chrono::Utc::now().to_rfc3339()
-                        ],
-                    )
-                    .map(|_| ())
-            })
-            .map_err(VoiceReferenceServiceError::Database)
     }
 
     fn mark_failed(
@@ -501,11 +494,7 @@ impl<'a> VoiceReferenceService<'a> {
                     .execute(
                         "UPDATE voice_references SET clone_status = 'failed', clone_error = ?2,
                                 updated_at = ?3 WHERE id = ?1",
-                        rusqlite::params![
-                            reference_id,
-                            detail,
-                            chrono::Utc::now().to_rfc3339()
-                        ],
+                        rusqlite::params![reference_id, detail, chrono::Utc::now().to_rfc3339()],
                     )
                     .map(|_| ())
             })
@@ -519,8 +508,8 @@ fn query_summary(
 ) -> rusqlite::Result<Option<VoiceReferenceSummary>> {
     connection
         .query_row(
-            "SELECT id, name, provider_id, mime_type, byte_size, duration_ms, transcript,
-                    remote_file_id, voice_id, clone_status, clone_error, created_at, updated_at
+            "SELECT id, name, provider_id, target_model, mime_type, byte_size, duration_ms,
+                    transcript, remote_file_id, voice_id, clone_status, clone_error, created_at, updated_at
              FROM voice_references WHERE id = ?1",
             rusqlite::params![id],
             map_summary,
@@ -533,6 +522,7 @@ fn map_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<VoiceReferenceSummar
         id: row.get("id")?,
         name: row.get("name")?,
         provider_id: row.get("provider_id")?,
+        target_model: row.get("target_model")?,
         mime_type: row.get("mime_type")?,
         byte_size: row.get("byte_size")?,
         duration_ms: row.get("duration_ms")?,
@@ -553,7 +543,8 @@ fn read_audio_file(
     if path.is_relative() {
         return Err(VoiceReferenceServiceError::AudioInvalid);
     }
-    let canonical = std::fs::canonicalize(path).map_err(|_| VoiceReferenceServiceError::AudioInvalid)?;
+    let canonical =
+        std::fs::canonicalize(path).map_err(|_| VoiceReferenceServiceError::AudioInvalid)?;
     if !canonical.is_file() {
         return Err(VoiceReferenceServiceError::AudioInvalid);
     }
@@ -567,7 +558,8 @@ fn read_audio_file(
         Some("mp3") => ("audio/mpeg", false),
         _ => return Err(VoiceReferenceServiceError::AudioInvalid),
     };
-    let metadata = std::fs::metadata(&canonical).map_err(|_| VoiceReferenceServiceError::AudioInvalid)?;
+    let metadata =
+        std::fs::metadata(&canonical).map_err(|_| VoiceReferenceServiceError::AudioInvalid)?;
     if metadata.len() == 0 {
         return Err(VoiceReferenceServiceError::AudioInvalid);
     }
@@ -623,8 +615,7 @@ fn validate_audio_payload(
         return Err(VoiceReferenceServiceError::AudioTooLarge);
     }
     if bytes.len() >= 12 && bytes[0..4] == *b"RIFF" && bytes[8..12] == *b"WAVE" {
-        let duration_ms =
-            wav_duration_ms(bytes).ok_or(VoiceReferenceServiceError::AudioInvalid)?;
+        let duration_ms = wav_duration_ms(bytes).ok_or(VoiceReferenceServiceError::AudioInvalid)?;
         if duration_ms < MIN_AUDIO_MS {
             return Err(VoiceReferenceServiceError::AudioTooShort);
         }

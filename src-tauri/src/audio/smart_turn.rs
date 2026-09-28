@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use ort::session::builder::GraphOptimizationLevel;
 use ort::value::Tensor;
-use rustfft::{num_complex::Complex, FftPlanner};
+use rustfft::{FftPlanner, num_complex::Complex};
 
 // —— Whisper 特征参数（transformers WhisperFeatureExtractor 默认值，8s 窗）——
 const MEL_BINS: usize = 80;
@@ -51,11 +51,11 @@ pub struct SmartTurnAnalyzer {
     fft: Arc<dyn rustfft::Fft<f32>>,
     fft_scratch: Vec<Complex<f32>>,
     // 每次评分复用的缓冲区，避免实时路径反复分配。
-    sample_buf: Vec<f32>,     // 左补零后的固定窗采样
-    padded_buf: Vec<f32>,     // 两侧反射补边后 window + N_FFT
+    sample_buf: Vec<f32>, // 左补零后的固定窗采样
+    padded_buf: Vec<f32>, // 两侧反射补边后 window + N_FFT
     frame_buf: Vec<Complex<f32>>,
-    spectrum_buf: Vec<f32>,   // 单帧功率谱 FREQUENCY_BINS
-    features: Vec<f32>,       // [mel_bins × frames] 对数梅尔特征
+    spectrum_buf: Vec<f32>, // 单帧功率谱 FREQUENCY_BINS
+    features: Vec<f32>,     // [mel_bins × frames] 对数梅尔特征
 }
 
 impl SmartTurnAnalyzer {
@@ -85,10 +85,7 @@ impl SmartTurnAnalyzer {
 
         let mut planner = FftPlanner::<f32>::new();
         let fft = planner.plan_fft_forward(N_FFT);
-        let fft_scratch = vec![
-            Complex::new(0f32, 0f32);
-            fft.get_inplace_scratch_len()
-        ];
+        let fft_scratch = vec![Complex::new(0f32, 0f32); fft.get_inplace_scratch_len()];
 
         Ok(Self {
             session,
@@ -112,8 +109,7 @@ impl SmartTurnAnalyzer {
         let window = self.window;
         let n = samples_16k.len().min(window);
         self.sample_buf.fill(0.0);
-        self.sample_buf[window - n..]
-            .copy_from_slice(&samples_16k[samples_16k.len() - n..]);
+        self.sample_buf[window - n..].copy_from_slice(&samples_16k[samples_16k.len() - n..]);
     }
 
     /// Step 1 核对 2：`(x - mean) / sqrt(var + 1e-7)`，总体方差。
@@ -316,9 +312,7 @@ mod tests {
     fn short_input_is_left_padded_like_window_input() {
         // 左补零语义：窗内不足 8s 时，结果必须与“零填充到整窗”的输入一致。
         let mut a = SmartTurnAnalyzer::new(&model_path()).expect("load");
-        let samples: Vec<f32> = (0..32_000)
-            .map(|i| (i as f32 * 0.01).sin() * 0.3)
-            .collect();
+        let samples: Vec<f32> = (0..32_000).map(|i| (i as f32 * 0.01).sin() * 0.3).collect();
         let short = a.score(&samples);
         let mut padded = vec![0f32; 128_000];
         padded[96_000..].copy_from_slice(&samples);
@@ -334,8 +328,7 @@ mod tests {
         let mut x = vec![1.0, 2.0, 3.0, 4.0];
         zero_mean_unit_variance(&mut x);
         let mean: f32 = x.iter().sum::<f32>() / x.len() as f32;
-        let var: f32 =
-            x.iter().map(|v| (*v - mean) * (*v - mean)).sum::<f32>() / x.len() as f32;
+        let var: f32 = x.iter().map(|v| (*v - mean) * (*v - mean)).sum::<f32>() / x.len() as f32;
         assert!(mean.abs() < 1e-6);
         assert!((var - 1.0).abs() < 1e-3, "var={var}");
     }

@@ -31,6 +31,7 @@ vi.mock("../../api/commands", async (importOriginal) => ({
   sessionAgentCommand: vi.fn(),
   isSessionAudioReady: vi.fn(),
   pushMicPcm: vi.fn(),
+  pushVideoFrame: vi.fn(),
 }));
 
 
@@ -56,6 +57,7 @@ function status(overrides: Partial<RuntimeStatus> = {}): RuntimeStatus {
     unusedMaterials: false,
     lastErrorCode: null,
     revision: 0,
+    realtimeStatus: "connected",
     ...overrides,
   };
 }
@@ -87,6 +89,7 @@ function turn(overrides: Partial<SessionTurnView> = {}): SessionTurnView {
     assistantText: "这是一个后端岗位",
     materialsUsed: true,
     citations: [],
+    createdAt: "2026-09-05T10:00:30Z",
     ...overrides,
   };
 }
@@ -140,6 +143,7 @@ describe("WorkspaceSession", () => {
     });
     vi.mocked(commands.isSessionAudioReady).mockResolvedValue({ ok: true, data: { ready: false } });
     vi.mocked(commands.pushMicPcm).mockResolvedValue({ ok: true, data: { accepted: true } });
+    vi.mocked(commands.pushVideoFrame).mockResolvedValue({ ok: true, data: { accepted: true } });
     vi.mocked(commands.listAudioOutputs).mockResolvedValue({
       ok: true,
       data: [{ id: "spk-1", name: "扬声器" }],
@@ -199,7 +203,7 @@ describe("WorkspaceSession", () => {
     };
     let hotkey: (() => void) | undefined;
     const listen = vi.fn(async (event: string, handler: (payload: never) => void) => {
-      if (event === "session.assistant_hotkey.v1") hotkey = handler as () => void;
+      if (event === "session:assistant_hotkey:v1") hotkey = handler as () => void;
       return () => {};
     });
     vi.mocked(commands.getConfigPublic).mockResolvedValue({ ok: true, data: config });
@@ -254,7 +258,7 @@ describe("WorkspaceSession", () => {
   it("keeps session tools collapsed and preserves input when reopened", async () => {
     render(<WorkspaceSession />);
     await screen.findByText("未开始");
-    const toggle = screen.getByText("会话工具", { selector: "summary" });
+    const toggle = screen.getByLabelText("更多操作");
     const tools = toggle.closest("details") as HTMLDetailsElement;
     expect(tools.open).toBe(false);
     expect(screen.getByRole("button", { name: "朗读" })).not.toBeVisible();
@@ -499,10 +503,10 @@ describe("WorkspaceSession", () => {
       reply?: (payload: SessionReplyEvent) => void;
     } = {};
     const listen = vi.fn(async (event: string, handler: (payload: never) => void) => {
-      if (event === "session.transcript.v1") {
+      if (event === "session:transcript:v1") {
         listeners.transcript = handler as (payload: SessionTranscriptEvent) => void;
       }
-      if (event === "session.reply.v1") listeners.reply = handler as (payload: SessionReplyEvent) => void;
+      if (event === "session:reply:v1") listeners.reply = handler as (payload: SessionReplyEvent) => void;
       return () => {};
     });
     let storedTurns = [
@@ -524,8 +528,8 @@ describe("WorkspaceSession", () => {
       turn({ id: "turn-3", turnIndex: 2, userText: "第三轮问题", assistantText: "第三轮回答", materialsUsed: false }),
     ];
     await act(async () => {
-      listeners.transcript?.({ seq: 4, text: "第三轮问题" });
-      listeners.reply?.({ seq: 5, text: "第三轮回答" });
+      listeners.transcript?.({ seq: 4, text: "第三轮问题", done: true });
+      listeners.reply?.({ seq: 5, text: "第三轮回答", done: true });
     });
     await waitFor(() => expect(screen.getByText("第三轮回答")).toBeTruthy());
     await waitFor(() => expect(commands.getSession).toHaveBeenCalledTimes(3));
@@ -541,16 +545,16 @@ describe("WorkspaceSession", () => {
       reply?: (payload: SessionReplyEvent) => void;
     } = {};
     const listen = vi.fn(async (event: string, handler: (payload: never) => void) => {
-      if (event === "runtime.status.v1") listeners.status = handler as (payload: RuntimeStatus) => void;
-      if (event === "session.transcript.v1") {
+      if (event === "runtime:status:v1") listeners.status = handler as (payload: RuntimeStatus) => void;
+      if (event === "session:transcript:v1") {
         listeners.transcript = handler as (payload: SessionTranscriptEvent) => void;
       }
-      if (event === "session.reply.v1") listeners.reply = handler as (payload: SessionReplyEvent) => void;
+      if (event === "session:reply:v1") listeners.reply = handler as (payload: SessionReplyEvent) => void;
       return () => {};
     });
 
     render(<WorkspaceSession listen={listen} />);
-    await waitFor(() => expect(listen).toHaveBeenCalledWith("session.reply.v1", expect.any(Function)));
+    await waitFor(() => expect(listen).toHaveBeenCalledWith("session:reply:v1", expect.any(Function)));
 
     act(() => {
       listeners.status?.({
@@ -560,6 +564,7 @@ describe("WorkspaceSession", () => {
         unusedMaterials: false,
         lastErrorCode: null,
         revision: 0,
+        realtimeStatus: "connected",
       });
     });
     expect(document.body.textContent).toContain("思考中");
@@ -571,30 +576,76 @@ describe("WorkspaceSession", () => {
         unusedMaterials: false,
         lastErrorCode: null,
         revision: 0,
+        realtimeStatus: "connected",
       });
     });
     expect(document.body.textContent).toContain("思考中");
     expect(document.body.textContent).not.toMatch(/未开始/);
 
     act(() => {
-      listeners.transcript?.({ seq: 4, text: "新转写" });
+      listeners.transcript?.({ seq: 4, text: "新转写", done: true });
     });
     expect(document.body.textContent).toContain("新转写");
     act(() => {
-      listeners.transcript?.({ seq: 1, text: "旧转写" });
+      listeners.transcript?.({ seq: 1, text: "旧转写", done: true });
     });
     expect(document.body.textContent).toContain("新转写");
     expect(document.body.textContent).not.toContain("旧转写");
 
     act(() => {
-      listeners.reply?.({ seq: 5, text: "新回复" });
+      listeners.reply?.({ seq: 5, text: "新回复", done: true });
     });
     expect(document.body.textContent).toContain("新回复");
     act(() => {
-      listeners.reply?.({ seq: 2, text: "旧回复" });
+      listeners.reply?.({ seq: 2, text: "旧回复", done: true });
     });
     expect(document.body.textContent).toContain("新回复");
     expect(document.body.textContent).not.toContain("旧回复");
+  });
+
+  it("streams partial text without refreshing and refreshes only on done", async () => {
+    const listeners: {
+      transcript?: (payload: SessionTranscriptEvent) => void;
+      reply?: (payload: SessionReplyEvent) => void;
+    } = {};
+    const listen = vi.fn(async (event: string, handler: (payload: never) => void) => {
+      if (event === "session:transcript:v1") {
+        listeners.transcript = handler as (payload: SessionTranscriptEvent) => void;
+      }
+      if (event === "session:reply:v1") listeners.reply = handler as (payload: SessionReplyEvent) => void;
+      return () => {};
+    });
+    vi.mocked(commands.getSession).mockImplementation(async () => ({
+      ok: true,
+      data: detail({ turns: [] }),
+    }));
+    vi.mocked(commands.startSession).mockResolvedValue({
+      ok: true,
+      data: { kind: "started", session: summary({ id: "sess-stream" }) },
+    });
+
+    render(<WorkspaceSession listen={listen} />);
+    await waitFor(() => expect(listen).toHaveBeenCalledWith("session:reply:v1", expect.any(Function)));
+    fireEvent.click(await screen.findByRole("button", { name: "开始会话" }));
+    await waitFor(() => expect(commands.startSession).toHaveBeenCalledTimes(1));
+    const initialFetches = vi.mocked(commands.getSession).mock.calls.length;
+
+    // 流式增量（done=false）：文本持续增长，但不触发会话详情刷新。
+    act(() => {
+      listeners.reply?.({ seq: 4, text: "今", done: false });
+      listeners.reply?.({ seq: 5, text: "今天", done: false });
+      listeners.reply?.({ seq: 6, text: "今天是测试日", done: false });
+    });
+    expect(document.body.textContent).toContain("今天是测试日");
+    expect(vi.mocked(commands.getSession).mock.calls.length).toBe(initialFetches);
+
+    // 收尾事件（done=true）：才拉取会话详情，把已落库轮次并入列表。
+    await act(async () => {
+      listeners.reply?.({ seq: 7, text: "今天是测试日", done: true });
+    });
+    await waitFor(() =>
+      expect(vi.mocked(commands.getSession).mock.calls.length).toBeGreaterThan(initialFetches),
+    );
   });
 
   it("shows IPC failures and never uses fetch or meeting-bridge copy", async () => {
@@ -612,7 +663,7 @@ describe("WorkspaceSession", () => {
 
   it("keeps command buttons disabled while the session is inactive", async () => {
     render(<WorkspaceSession />);
-    fireEvent.click(screen.getByText("会话工具", { selector: "summary" }));
+    fireEvent.click(screen.getByLabelText("更多操作"));
     expect((await screen.findByRole("button", { name: "朗读" }) as HTMLButtonElement).disabled).toBe(
       true,
     );
@@ -630,7 +681,7 @@ describe("WorkspaceSession", () => {
     vi.spyOn(globalThis.crypto, "randomUUID").mockReturnValue("00000000-0000-0000-0000-000000000001");
 
     render(<WorkspaceSession />);
-    fireEvent.click(screen.getByText("会话工具", { selector: "summary" }));
+    fireEvent.click(screen.getByLabelText("更多操作"));
     await screen.findByText("聆听中");
     fireEvent.change(screen.getByLabelText("朗读文本"), { target: { value: "请开始自我介绍" } });
     fireEvent.click(screen.getByRole("button", { name: "朗读" }));
@@ -720,7 +771,7 @@ describe("WorkspaceSession", () => {
       .mockReturnValueOnce("00000000-0000-0000-0000-000000000003");
 
     render(<WorkspaceSession />);
-    fireEvent.click(screen.getByText("会话工具", { selector: "summary" }));
+    fireEvent.click(screen.getByLabelText("更多操作"));
     await screen.findByText("聆听中");
     fireEvent.click(screen.getByRole("button", { name: "重试" }));
     await waitFor(() =>
@@ -774,7 +825,7 @@ describe("WorkspaceSession", () => {
     });
 
     render(<WorkspaceSession />);
-    fireEvent.click(screen.getByText("会话工具", { selector: "summary" }));
+    fireEvent.click(screen.getByLabelText("更多操作"));
     await screen.findByText("聆听中");
     fireEvent.click(screen.getByRole("button", { name: "重试" }));
     expect((await screen.findByRole("status")).textContent).toContain("SESSION_CHANGED");
@@ -796,7 +847,7 @@ describe("WorkspaceSession", () => {
     });
 
     render(<WorkspaceSession />);
-    fireEvent.click(screen.getByText("会话工具", { selector: "summary" }));
+    fireEvent.click(screen.getByLabelText("更多操作"));
     await screen.findByText("聆听中");
     fireEvent.click(screen.getByRole("button", { name: "重试" }));
     await waitFor(() => {
@@ -954,11 +1005,16 @@ describe("WorkspaceSession", () => {
     const start = vi.fn(async () => {});
     const stop = vi.fn();
     let onChunk: ((pcm: string, sampleRate: number) => void) | undefined;
-    const factory = vi.fn((callbacks: { onChunk: (pcm: string, sampleRate: number) => void }) => {
+    let onLevel: ((level: number) => void) | undefined;
+    const factory = vi.fn((callbacks: {
+      onChunk: (pcm: string, sampleRate: number) => void;
+      onLevel?: (level: number) => void;
+    }) => {
       onChunk = callbacks.onChunk;
+      onLevel = callbacks.onLevel;
       return { start, stop };
     });
-    return { factory, start, stop, speak: (pcm: string, rate = 48_000) => onChunk?.(pcm, rate) };
+    return { factory, start, stop, speak: (pcm: string, rate = 48_000) => onChunk?.(pcm, rate), level: (value: number) => onLevel?.(value) };
   }
 
   async function startMicSession(factory: (callbacks: never) => unknown, runtime: Partial<RuntimeStatus> = {}) {
@@ -1051,5 +1107,209 @@ describe("WorkspaceSession", () => {
     // 等过 250ms 轮询周期，确认接管期间不会自动提交转写。
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 400)); });
     expect(commands.finalizeSessionUtterance).not.toHaveBeenCalled();
+  });
+
+  it("sends composer text as a manual turn and clears the input", async () => {
+    vi.mocked(commands.getRuntimeStatus).mockResolvedValue({
+      ok: true,
+      data: status({ phase: "listening", seq: 2 }),
+    });
+    const finalize = vi.fn(async () => {});
+    render(<WorkspaceSession finalizeUtterance={finalize} />);
+    await screen.findByText("聆听中");
+    fireEvent.change(screen.getByLabelText("输入内容"), { target: { value: "用打字问的问题" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(finalize).toHaveBeenCalledWith("用打字问的问题"));
+    expect((screen.getByLabelText("输入内容") as HTMLInputElement).value).toBe("");
+    // 发送后文字即时上屏为本轮转写气泡。
+    expect(screen.getByText("用打字问的问题")).toBeTruthy();
+  });
+
+  it("blocks composer submission while the session is inactive", async () => {
+    const finalize = vi.fn(async () => {});
+    render(<WorkspaceSession finalizeUtterance={finalize} />);
+    await screen.findByText("未开始");
+    expect((screen.getByRole("button", { name: "发送" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByLabelText("输入内容") as HTMLInputElement).disabled).toBe(true);
+    expect(finalize).not.toHaveBeenCalled();
+  });
+
+  it("shows the call timer pill while active and ends the call on click", async () => {
+    vi.mocked(commands.getRuntimeStatus)
+      .mockResolvedValueOnce({ ok: true, data: status() })
+      .mockResolvedValue({ ok: true, data: status({ phase: "listening", seq: 2 }) });
+    render(<WorkspaceSession />);
+    expect(screen.queryByRole("button", { name: "结束通话" })).toBeNull();
+    fireEvent.click(await screen.findByRole("button", { name: "开始会话" }));
+    const pill = await screen.findByRole("button", { name: "结束通话" });
+    expect(pill.textContent).toMatch(/^\d{2}:\d{2}$/);
+    fireEvent.click(pill);
+    await waitFor(() => expect(commands.stopSession).toHaveBeenCalled());
+  });
+
+  it("shows the barge-in hint only while the assistant is speaking", async () => {
+    const listeners: { status?: (payload: RuntimeStatus) => void } = {};
+    const listen = vi.fn(async (event: string, handler: (payload: never) => void) => {
+      if (event === "runtime:status:v1") listeners.status = handler as (payload: RuntimeStatus) => void;
+      return () => {};
+    });
+    render(<WorkspaceSession listen={listen} />);
+    await waitFor(() => expect(listen).toHaveBeenCalled());
+    act(() => {
+      listeners.status?.(status({ phase: "listening", seq: 2 }));
+    });
+    expect(screen.queryByText("说话、输入或点击打断")).toBeNull();
+    act(() => {
+      listeners.status?.(status({ phase: "speaking", seq: 3 }));
+    });
+    expect(screen.getByText("说话、输入或点击打断")).toBeTruthy();
+    act(() => {
+      listeners.status?.(status({ phase: "listening", seq: 4 }));
+    });
+    expect(screen.queryByText("说话、输入或点击打断")).toBeNull();
+  });
+
+  it("subscribes to WebAudio playback events with valid Tauri event names", async () => {
+    const listeners: Record<string, (payload: never) => void> = {};
+    const listen = vi.fn(async (event: string, handler: (payload: never) => void) => {
+      listeners[event] = handler;
+      return () => {};
+    });
+    render(<WorkspaceSession listen={listen} />);
+    await waitFor(() => expect(listen).toHaveBeenCalledWith(
+      "session:audio:v1",
+      expect.any(Function),
+    ));
+    expect(listen).toHaveBeenCalledWith(
+      "session:playback-control:v1",
+      expect.any(Function),
+    );
+    // Tauri 2 事件名只允许字母数字与 - / : _，含点会让 listen 直接抛错。
+    for (const [event] of listen.mock.calls) {
+      expect(event).toMatch(/^[A-Za-z0-9\-/:_]+$/);
+    }
+    expect(listeners["session:playback-control:v1"]).toBeTypeOf("function");
+  });
+
+  it("drives the mic volume bars from the audio level callback", async () => {
+    const streamer = micStreamerFactory();
+    await startMicSession(streamer.factory as never);
+    await waitFor(() => expect(streamer.start).toHaveBeenCalled());
+    const bars = document.querySelectorAll<HTMLElement>(".composer-bar");
+    expect(bars.length).toBe(4);
+    expect(bars[0].style.height).toBe("15%");
+    await act(async () => streamer.level(0.8));
+    // 0.8 × 系数 0.45 = 36%。
+    expect(document.querySelectorAll<HTMLElement>(".composer-bar")[0].style.height).toBe("36%");
+  });
+
+  it("shows timestamps and a copy button on historical assistant bubbles", async () => {    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    const listeners: {
+      transcript?: (payload: SessionTranscriptEvent) => void;
+      reply?: (payload: SessionReplyEvent) => void;
+    } = {};
+    const listen = vi.fn(async (event: string, handler: (payload: never) => void) => {
+      if (event === "session:transcript:v1") listeners.transcript = handler as (payload: SessionTranscriptEvent) => void;
+      if (event === "session:reply:v1") listeners.reply = handler as (payload: SessionReplyEvent) => void;
+      return () => {};
+    });
+    let storedTurns = [turn()];
+    vi.mocked(commands.getSession).mockImplementation(async () => ({
+      ok: true,
+      data: detail({ turns: storedTurns }),
+    }));
+
+    render(<WorkspaceSession listen={listen} />);
+    fireEvent.click(await screen.findByRole("button", { name: "开始会话" }));
+    await waitFor(() => expect(screen.getByText("请介绍岗位")).toBeTruthy());
+
+    storedTurns = [
+      ...storedTurns,
+      turn({ id: "turn-2", turnIndex: 1, userText: "第二个问题", assistantText: "第二个回答", materialsUsed: false, createdAt: "2026-09-05T10:01:30Z" }),
+    ];
+    await act(async () => {
+      listeners.transcript?.({ seq: 4, text: "第二个问题", done: true });
+      listeners.reply?.({ seq: 5, text: "第二个回答", done: true });
+    });
+    await waitFor(() => expect(screen.getByText("第二个回答")).toBeTruthy());
+
+    // 第一轮已成历史气泡：带头像行、时间戳与复制按钮。
+    const stamp = document.querySelector<HTMLElement>(".bubble-time");
+    expect(stamp).toBeTruthy();
+    expect(stamp?.textContent ?? "").toMatch(/\d{1,2}:\d{2}/);
+    fireEvent.click(screen.getByRole("button", { name: "复制第 1 轮回复" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("这是一个后端岗位"));
+  });
+
+  function e2eVideoConfig(): PublicConfig {
+    const config = configuredSession();
+    config.speech.voiceRoutes = [{
+      id: "route-1", name: "GLM 实时语音", mode: "e2e", asrProviderId: null, asrModelId: null,
+      llmProviderId: null, llmModelId: null, ttsProviderId: null, ttsModelId: null, voiceId: null,
+      e2eProviderId: "dashscope", e2eModelId: "qwen3.8-omni-flash-realtime", active: true, ready: true, status: null, configVersion: 1,
+    }];
+    return config;
+  }
+
+  function videoSharerFactory() {
+    const start = vi.fn(async () => {});
+    const stop = vi.fn();
+    let callbacks: {
+      onFrame: (jpeg: string) => void;
+      onError: (message: string) => void;
+      onEnded: () => void;
+    } | undefined;
+    const factory = vi.fn((
+      _kind: "camera" | "screen",
+      received: {
+        onFrame: (jpeg: string) => void;
+        onError: (message: string) => void;
+        onEnded: () => void;
+      },
+    ) => {
+      callbacks = received;
+      return { start, stop, stream: null };
+    });
+    return { factory, start, stop, frame: (jpeg: string) => callbacks?.onFrame(jpeg) };
+  }
+
+  it("shows video share buttons only for e2e routes and gates them while inactive", async () => {
+    // 级联路线：无视频入口（input_image 为 DashScope E2E 方言能力）。
+    vi.mocked(commands.getConfigPublic).mockResolvedValue({ ok: true, data: configuredSession() });
+    render(<WorkspaceSession />);
+    await screen.findByText("未开始");
+    expect(screen.queryByRole("button", { name: "共享桌面" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "共享摄像头" })).toBeNull();
+
+    // 端到端路线：按钮出现，会话未开始时禁用。
+    cleanup();
+    vi.mocked(commands.getConfigPublic).mockResolvedValue({ ok: true, data: e2eVideoConfig() });
+    render(<WorkspaceSession />);
+    const shareScreen = await screen.findByRole("button", { name: "共享桌面" });
+    expect((shareScreen as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "共享摄像头" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("shares the desktop, pushes JPEG frames, and stops from the preview", async () => {
+    vi.mocked(commands.getConfigPublic).mockResolvedValue({ ok: true, data: e2eVideoConfig() });
+    vi.mocked(commands.getRuntimeStatus).mockResolvedValue({
+      ok: true,
+      data: status({ phase: "listening", seq: 2 }),
+    });
+    const sharer = videoSharerFactory();
+    render(<WorkspaceSession createVideoSharer={sharer.factory as never} />);
+    fireEvent.click(await screen.findByRole("button", { name: "开始会话" }));
+    fireEvent.click(await screen.findByRole("button", { name: "共享桌面" }));
+    await waitFor(() => expect(sharer.factory).toHaveBeenCalledWith("screen", expect.anything()));
+    await waitFor(() => expect(sharer.start).toHaveBeenCalled());
+
+    await act(async () => sharer.frame("aGk="));
+    await waitFor(() => expect(commands.pushVideoFrame).toHaveBeenCalledWith("aGk="));
+    expect(screen.getByRole("region", { name: "视频画面预览" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "停止视频共享" }));
+    await waitFor(() => expect(sharer.stop).toHaveBeenCalled());
+    expect(screen.queryByRole("region", { name: "视频画面预览" })).toBeNull();
   });
 });

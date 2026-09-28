@@ -335,7 +335,7 @@ export function ServicesPage() {
         </div>
       </section>
       <section id="services-panel-embedding" hidden={category !== "embedding"} aria-labelledby="services-category-embedding"><EmbeddingEditor focusId={embeddingFocusId} /></section>
-      <section id="services-panel-voices" hidden={category !== "voices"} aria-labelledby="services-category-voices"><VoiceReferenceEditor /></section>
+      <section id="services-panel-voices" hidden={category !== "voices"} aria-labelledby="services-category-voices"><VoiceReferenceEditor visible={category === "voices"} /></section>
       </div>
     </div>
   </div>;

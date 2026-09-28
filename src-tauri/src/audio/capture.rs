@@ -112,6 +112,16 @@ pub fn parse_level_peak(line: &str) -> Option<f64> {
     value.get("peak")?.as_f64()
 }
 
+/// 实时会话采集侧信号：本地分段/打断判定结果，由会话层转发给实时泵。
+/// （DashScope Manual 模式服务端 VAD 已禁用，说完提交与播报打断都靠本地判定。）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RealtimeCaptureSignal {
+    /// 分段器判定一句话说完：泵应向服务端提交音频缓冲。
+    CommitTurn,
+    /// 打断监听触发：泵应清空播放并取消在途响应。
+    BargeIn,
+}
+
 #[derive(Debug)]
 struct CaptureState {
     ring: PcmRing,
@@ -121,6 +131,78 @@ struct CaptureState {
     barge_in: Option<BargeInMonitor>,
     barge_flag: Arc<AtomicBool>,
     barge_utterance: Option<Vec<u8>>,
+    /// 实时上行 tap：实时会话泵订阅原始 PCM（有界通道，满则丢弃并计数）。
+    tap: Option<std::sync::mpsc::SyncSender<Vec<u8>>>,
+    tap_dropped: std::sync::atomic::AtomicU64,
+    /// 实时会话信号接收端：分段/打断判定经此转发给泵（None 表示无实时路线）。
+    realtime_sink: Option<std::sync::mpsc::Sender<RealtimeCaptureSignal>>,
+    /// AGC 当前增益（进分段器/tap 的链路；barge 监听保持原始电平）。
+    agc_gain: f32,
+}
+
+/// ingest 后取走本地判定信号并发往 sink；须在 capture 锁外调用（send 可能
+/// 触发泵侧工作，且重复加锁路径要避免嵌套）。
+fn drain_realtime_signals(state: &Mutex<CaptureState>) {
+    let sink = state
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .realtime_sink
+        .clone();
+    let Some(sink) = sink else { return };
+    let signals = {
+        let mut state = state.lock().unwrap_or_else(|p| p.into_inner());
+        let barge = state.barge_utterance.take();
+        if barge.is_some() {
+            // 复位旗标，允许监听器在下一次播报中继续触发。
+            state
+                .barge_flag
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+        let mut signals = Vec::new();
+        if barge.is_some() {
+            signals.push(RealtimeCaptureSignal::BargeIn);
+        }
+        // 段落音频服务端已随流收到，本地只借判定结果，数据直接丢弃。
+        while state.segmenter.take().is_some() {
+            signals.push(RealtimeCaptureSignal::CommitTurn);
+        }
+        signals
+    };
+    for signal in signals {
+        let _ = sink.send(signal);
+    }
+}
+
+/// 无锁热路径句柄：会话期间克隆进 AppState，`session_push_mic_pcm` 直接推送，
+/// 不经过 sessions 互斥锁（生成/播报期间麦克风数据不再被丢）。
+#[derive(Clone)]
+pub struct MicIngestHandle {
+    state: Arc<Mutex<CaptureState>>,
+}
+
+impl MicIngestHandle {
+    pub fn push_pcm(&self, pcm: &[u8]) {
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        ingest_into_state(&mut state, pcm);
+        drop(state);
+        drain_realtime_signals(&self.state);
+    }
+}
+
+/// 回声抑制窗句柄：实时泵播报期间由回调续窗，使 barge 监听只认真人插话
+/// （与级联路线 suppress_echo_for 语义一致，供非 'static 的会话服务外借）。
+#[derive(Clone)]
+pub struct EchoSuppressHandle {
+    state: Arc<Mutex<CaptureState>>,
+}
+
+impl EchoSuppressHandle {
+    pub fn suppress_for(&self, duration: std::time::Duration) {
+        self.state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .echo_until = Some(Instant::now() + duration);
+    }
 }
 
 #[derive(Debug)]
@@ -171,27 +253,50 @@ impl AudioCapture {
     }
 
     pub fn push_pcm(&mut self, pcm: &[u8]) {
-        let mut state = self.lock();
-        state.ring.push(pcm);
-        let suppressed = state.echo_until.is_some_and(|until| Instant::now() < until);
-        // 经 guard 的字段投影借用不相交不成立（deref_mut 独占整个 guard），先拆出可变借用。
-        let CaptureState {
-            barge_in,
-            barge_flag,
-            barge_utterance,
-            ..
-        } = &mut *state;
-        if suppressed
-            && let Some(monitor) = barge_in.as_mut()
-            && !barge_flag.load(Ordering::SeqCst)
         {
-            monitor.ingest(pcm);
-            if monitor.triggered() {
-                *barge_utterance = monitor.take_staged();
-                barge_flag.store(true, Ordering::SeqCst);
-            }
+            let mut state = self.lock();
+            ingest_into_state(&mut state, pcm);
         }
-        state.segmenter.ingest(pcm, suppressed);
+        drain_realtime_signals(&self.state);
+    }
+
+    /// 无锁热路径句柄：会话开始时由 AppState 持有，IPC 推流不再等 sessions 锁。
+    pub fn mic_ingest_handle(&self) -> MicIngestHandle {
+        MicIngestHandle {
+            state: Arc::clone(&self.state),
+        }
+    }
+
+    /// 订阅原始 PCM tap（实时会话上行）；返回旧 tap。容量 50 帧 ≈ 5s@100ms。
+    pub fn set_pcm_tap(
+        &self,
+        tap: Option<std::sync::mpsc::SyncSender<Vec<u8>>>,
+    ) -> Option<std::sync::mpsc::SyncSender<Vec<u8>>> {
+        let mut state = self.lock();
+        std::mem::replace(&mut state.tap, tap)
+    }
+
+    /// 注册实时会话信号接收端（分段/打断判定转发给泵）。None 摘除。
+    pub fn set_realtime_sink(&self, sink: Option<std::sync::mpsc::Sender<RealtimeCaptureSignal>>) {
+        self.lock().realtime_sink = sink;
+    }
+
+    /// 外借回声抑制窗句柄（实时泵播报续窗用）。
+    pub fn echo_suppress_handle(&self) -> EchoSuppressHandle {
+        EchoSuppressHandle {
+            state: Arc::clone(&self.state),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn stage_barge_utterance_for_tests(&self, pcm: Vec<u8>) {
+        self.lock().barge_utterance = Some(pcm);
+    }
+
+    pub fn tap_dropped(&self) -> u64 {
+        self.lock()
+            .tap_dropped
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn ingest_event_line(&mut self, line: &str) {
@@ -292,6 +397,10 @@ impl AudioCapture {
                 barge_in: None,
                 barge_flag: Arc::new(AtomicBool::new(false)),
                 barge_utterance: None,
+                tap: None,
+                tap_dropped: std::sync::atomic::AtomicU64::new(0),
+                realtime_sink: None,
+                agc_gain: 1.0,
             })),
             child: Mutex::new(None),
             sidecar_dead: Arc::new(AtomicBool::new(false)),
@@ -388,6 +497,79 @@ fn hide_windows_console(command: &mut Command) {
     }
 }
 
+/// AGC 目标峰值（约 40% 满量程）与增益限幅。实测麦克风电平仅 ~4% FS，
+/// Silero/SmartTurn/服务端 ASR 在低电平下都不稳定（碎裂/漏检）。
+const AGC_TARGET_PEAK: f32 = 0.4 * 32768.0;
+const AGC_GAIN_MIN: f32 = 1.0;
+const AGC_GAIN_MAX: f32 = 8.0;
+
+/// 对 PCM16 单声道按增益放大并限幅；返回 None 表示增益为 1 无需拷贝。
+fn apply_gain(pcm: &[u8], gain: f32) -> Option<Vec<u8>> {
+    if gain <= 1.0 + f32::EPSILON {
+        return None;
+    }
+    Some(
+        pcm.chunks_exact(2)
+            .flat_map(|chunk| {
+                let sample = i16::from_le_bytes([chunk[0], chunk[1]]) as f32 * gain;
+                (sample.clamp(-32768.0, 32767.0) as i16).to_le_bytes()
+            })
+            .collect::<Vec<u8>>(),
+    )
+}
+
+/// 热路径公共体：ring、回声窗、打断监听、分段器、tap 上行。IPC 推流与
+/// sidecar 采集线程共用同一条路，保证两种输入源行为一致。
+fn ingest_into_state(state: &mut CaptureState, pcm: &[u8]) {
+    state.ring.push(pcm);
+    // AGC：按块峰值自适应增益（平滑防跳变）。barge 打断监听保持原始电平——
+    // 放大后的回声可能误触发打断。
+    let chunk_peak = pcm
+        .chunks_exact(2)
+        .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]).unsigned_abs())
+        .max()
+        .unwrap_or(0) as f32;
+    if chunk_peak > 0.0 {
+        let target = (AGC_TARGET_PEAK / chunk_peak).clamp(AGC_GAIN_MIN, AGC_GAIN_MAX);
+        state.agc_gain += (target - state.agc_gain) * 0.25;
+    }
+    let gained;
+    let pcm_for_vad: &[u8] = match apply_gain(pcm, state.agc_gain) {
+        Some(gained_pcm) => {
+            gained = gained_pcm;
+            &gained
+        }
+        None => pcm,
+    };
+    let suppressed = state.echo_until.is_some_and(|until| Instant::now() < until);
+    // 经 guard 的字段投影借用不相交不成立（deref_mut 独占整个 guard），先拆出可变借用。
+    let CaptureState {
+        barge_in,
+        barge_flag,
+        barge_utterance,
+        tap,
+        tap_dropped,
+        segmenter,
+        ..
+    } = &mut *state;
+    if suppressed
+        && let Some(monitor) = barge_in.as_mut()
+        && !barge_flag.load(Ordering::SeqCst)
+    {
+        monitor.ingest(pcm);
+        if monitor.triggered() {
+            *barge_utterance = monitor.take_staged();
+            barge_flag.store(true, Ordering::SeqCst);
+        }
+    }
+    segmenter.ingest(pcm_for_vad, suppressed);
+    if let Some(tap) = tap.as_ref()
+        && tap.try_send(pcm_for_vad.to_vec()).is_err()
+    {
+        tap_dropped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 fn mark_sidecar_dead(dead: &AtomicBool, epoch: &AtomicU64, mine: u64) {
     if epoch.load(Ordering::SeqCst) == mine {
         dead.store(true, Ordering::SeqCst);
@@ -409,15 +591,16 @@ fn drain_pcm(
                 break;
             }
             Ok(n) => {
-                let mut state = state
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                if epoch.load(Ordering::SeqCst) != mine {
-                    break;
+                {
+                    let mut state = state
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    if epoch.load(Ordering::SeqCst) != mine {
+                        break;
+                    }
+                    ingest_into_state(&mut state, &buf[..n]);
                 }
-                state.ring.push(&buf[..n]);
-                let suppressed = state.echo_until.is_some_and(|until| Instant::now() < until);
-                state.segmenter.ingest(&buf[..n], suppressed);
+                drain_realtime_signals(&state);
             }
         }
     }
@@ -447,8 +630,8 @@ fn drain_events(
 #[cfg(test)]
 mod tests {
     use super::{
-        AudioCapture, AudioError, NoopSink, PlaybackSink, RecordingSink, SidecarPoll,
-        bridge_command_args, parse_level_peak,
+        AudioCapture, AudioError, NoopSink, PlaybackSink, RealtimeCaptureSignal, RecordingSink,
+        SidecarPoll, bridge_command_args, parse_level_peak,
     };
     use crate::audio::pcm::RING_CAPACITY_BYTES;
     use crate::processes::{FailingProcessEnumerator, InjectedProcessEnumerator, MeetingProcess};
@@ -481,6 +664,69 @@ mod tests {
         assert_eq!(capture.snapshot_48k(), pcm);
         assert_eq!(capture.overrun_count(), 0);
         assert_eq!(capture.pcm_for_asr(), le_i16(&[200]));
+    }
+
+    /// 实时信号：本地分段器判定说完后 push_pcm 应发出 CommitTurn；
+    /// 未注册 sink（级联路线）时不发。分段触发依赖能量实现，与工厂用例
+    /// 共用锁串行执行。
+    #[test]
+    fn push_pcm_emits_commit_turn_signal_when_segment_ready() {
+        crate::audio::segmenter::factory_test_support::with_vad_off(|| {
+            let mut capture = AudioCapture::from_injected();
+            let (tx, rx) = std::sync::mpsc::channel();
+            capture.set_realtime_sink(Some(tx));
+
+            // 240ms 语音 + 800ms 静音：超过 START/MIN_SPEECH/END_SILENCE 阈值。
+            let mut pcm = voiced_segment();
+            pcm.extend_from_slice(&silence_for(800));
+            capture.push_pcm(&pcm);
+
+            assert_eq!(
+                rx.recv_timeout(std::time::Duration::from_secs(2)),
+                Ok(RealtimeCaptureSignal::CommitTurn)
+            );
+        });
+    }
+
+    /// 打断信号：播报抑制窗内监听器触发（暂存话音）→ BargeIn 信号，
+    /// 且旗标复位允许后续再次触发。触发源用注入替身，不依赖 Silero 模型。
+    #[test]
+    fn push_pcm_emits_barge_in_signal_and_resets_flag() {
+        let mut capture = AudioCapture::from_injected();
+        let (tx, rx) = std::sync::mpsc::channel();
+        capture.set_realtime_sink(Some(tx));
+
+        capture.stage_barge_utterance_for_tests(vec![1, 2, 3, 4]);
+        capture
+            .barge_in_flag()
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        capture.push_pcm(&[0u8; 8]);
+
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(2)),
+            Ok(RealtimeCaptureSignal::BargeIn)
+        );
+        assert!(
+            !capture
+                .barge_in_flag()
+                .load(std::sync::atomic::Ordering::SeqCst),
+            "flag must reset so the monitor can trigger again"
+        );
+        // 暂存话音已消费，不落入 ASR 待取队列。
+        assert!(!capture.utterance_ready());
+    }
+
+    fn voiced_segment() -> Vec<u8> {
+        let mut pcm = Vec::new();
+        for _ in 0..12 {
+            // 20ms@48k 一帧，幅值远超能量阈值。
+            pcm.extend_from_slice(&le_i16(&[9000i16; 960]));
+        }
+        pcm
+    }
+
+    fn silence_for(millis: u64) -> Vec<u8> {
+        vec![0u8; (48 * 2 * millis) as usize]
     }
 
     #[test]
@@ -647,6 +893,28 @@ mod tests {
         assert_eq!(sink.recorded(), &[0x11, 0x22, 0x33, 0x44]);
         assert_eq!(sink.sample_rate(), Some(24_000));
         assert!(sink.cancelled());
+    }
+
+    #[test]
+    fn mic_ingest_handle_and_tap_feed_without_sessions_lock() {
+        let capture = AudioCapture::from_injected();
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(2);
+        capture.set_pcm_tap(Some(tx));
+        let handle = capture.mic_ingest_handle();
+        // 样本取满量程级（≥AGC 目标峰值）：增益被下限钳到 1，tap 应原样转发。
+        handle.push_pcm(&le_i16(&[14_000, 16_000]));
+        handle.push_pcm(&le_i16(&[13_000, 15_000]));
+        assert_eq!(rx.recv().unwrap(), le_i16(&[14_000, 16_000]));
+        assert_eq!(rx.recv().unwrap(), le_i16(&[13_000, 15_000]));
+        // 容量 2：灌满后继续推不阻塞，丢弃计数。
+        handle.push_pcm(&le_i16(&[14_000, 16_000]));
+        handle.push_pcm(&le_i16(&[13_000, 15_000]));
+        handle.push_pcm(&le_i16(&[14_000, 15_000]));
+        assert_eq!(capture.tap_dropped(), 1);
+        // 分段器照常收帧（ring/segmenter 不受 tap 影响）。
+        // 5 次 push × 4B = 20B。
+        assert_eq!(handle.state.lock().unwrap().ring.len(), 20);
+        capture.set_pcm_tap(None);
     }
 
     #[test]

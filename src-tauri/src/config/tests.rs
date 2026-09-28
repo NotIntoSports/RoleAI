@@ -426,7 +426,6 @@ fn embedding_dimensions_and_provider_reference_are_validated() {
     );
 }
 
-
 #[test]
 fn public_view_exposes_secret_references_but_never_secret_material() {
     let config = AppConfigV1::from_json(

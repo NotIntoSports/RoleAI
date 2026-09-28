@@ -2,8 +2,10 @@ mod cascade;
 mod embedding;
 mod openai_compatible;
 mod openai_realtime;
-pub mod web_search;
+pub(crate) mod realtime_session;
 mod voice_clone;
+mod voice_clone_dashscope;
+pub mod web_search;
 
 use std::fmt;
 
@@ -15,7 +17,8 @@ pub use cascade::{
 pub(crate) use cascade::{
     build_asr_multipart, build_llm_request, build_tts_request, json_body_too_large,
     normalize_chat_completions_url, normalize_speech_url, normalize_transcriptions_url,
-    parse_chat_completion, parse_transcript, parse_tts_pcm, pcm_to_wav, tts_body_too_large,
+    parse_chat_completion, parse_transcript, parse_tts_pcm, pcm_to_wav, stream_sse_text,
+    tts_body_too_large,
 };
 pub use embedding::{EmbeddingError, EmbeddingProbe, OpenAiCompatibleEmbeddingProbe};
 pub use openai_compatible::{OpenAiCompatibleProbe, StandardRouteProbe};
@@ -32,12 +35,44 @@ pub use openai_realtime::{
     OpenAiCompatibleRealtime, RealtimeAudioRequest, RealtimeError, RealtimeModel,
     RealtimeTextRequest, RealtimeTurn, probe_realtime_session,
 };
-pub use voice_clone::{VoiceCloneError, VoiceCloneProbe, VOICE_CLONE_TRIAL_TEXT};
+pub use voice_clone::{
+    VOICE_CLONE_TRIAL_TEXT, VoiceCloneError, VoiceCloneOutcome, VoiceCloneProbe,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderEndpoint {
     pub provider_id: String,
     pub base_url: String,
+}
+
+/// 单轮流式回调：收到的是"截至当前的完整文本快照"而非增量碎片，
+/// 与前端事件通道的整体替换语义一致，重试重启时发送方重发空串即可复位。
+/// 任一回调缺省时对应阶段静默跳过，行为退化为非流式。
+#[derive(Clone, Copy)]
+pub struct TurnStreamHooks<'a> {
+    pub user_text: Option<&'a dyn Fn(&str)>,
+    pub assistant_text: Option<&'a dyn Fn(&str)>,
+}
+
+impl<'a> TurnStreamHooks<'a> {
+    pub fn none() -> Self {
+        Self {
+            user_text: None,
+            assistant_text: None,
+        }
+    }
+
+    pub fn notify_user(&self, text: &str) {
+        if let Some(hook) = self.user_text {
+            hook(text);
+        }
+    }
+
+    pub fn notify_assistant(&self, text: &str) {
+        if let Some(hook) = self.assistant_text {
+            hook(text);
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,7 +109,9 @@ impl ProviderError {
     /// 供用户界面展示的完整说明；带状态码的变体会附上 HTTP 状态。
     pub fn detail(self) -> String {
         match self {
-            Self::RequestFailedWithStatus(status) => format!("Provider request failed (HTTP {status})"),
+            Self::RequestFailedWithStatus(status) => {
+                format!("Provider request failed (HTTP {status})")
+            }
             other => other.code().to_owned(),
         }
     }

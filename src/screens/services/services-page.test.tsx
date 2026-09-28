@@ -80,7 +80,7 @@ describe("ServicesPage", () => {
 
   it("lists voice references and saves a picked audio file", async () => {
     const reference = {
-      id: "ref-1", name: "我的音色", providerId: null, mimeType: "audio/wav",
+      id: "ref-1", name: "我的音色", providerId: null, targetModel: null, mimeType: "audio/wav",
       byteSize: BigInt(32000), durationMs: BigInt(12000), transcript: "你好世界",
       remoteFileId: null, voiceId: null, cloneStatus: "pending", cloneError: null,
       createdAt: "2026-09-25T00:00:00Z", updatedAt: "2026-09-25T00:00:00Z",
@@ -105,9 +105,26 @@ describe("ServicesPage", () => {
     expect(commands.saveVoiceReferenceAudio).toHaveBeenCalledWith(expect.objectContaining({ name: "新音色", audioBase64: expectedBase64 }));
   });
 
+  it("refreshes providers when the voices panel becomes visible", async () => {
+    const single = { ...emptyConfig, models: { providers: [{ id: "p1", name: "一号", baseUrl: "https://a.example.com/v1", credential: null }], activeProviderId: null } };
+    const updated = { ...single, models: { providers: [...single.models.providers, { id: "p2", name: "阿里云", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", credential: null }], activeProviderId: null } };
+    vi.mocked(commands.getConfigPublic)
+      .mockResolvedValueOnce({ ok: true, data: single })
+      .mockResolvedValue({ ok: true, data: updated });
+    vi.mocked(commands.listVoiceReferences).mockResolvedValue({ ok: true, data: [] });
+    render(<ServicesPage />);
+    await screen.findByRole("heading", { name: "模型供应商" });
+    const callsAfterLoad = vi.mocked(commands.getConfigPublic).mock.calls.length;
+    fireEvent.click(within(screen.getByRole("navigation", { name: "服务分类" })).getByRole("button", { name: "音色克隆" }));
+    const voicesPanel = document.getElementById("services-panel-voices") as HTMLElement;
+    await waitFor(() => expect(vi.mocked(commands.getConfigPublic).mock.calls.length).toBeGreaterThan(callsAfterLoad));
+    const select = within(voicesPanel).getByLabelText("供应商") as HTMLSelectElement;
+    expect(Array.from(select.options).some((option) => option.value === "p2")).toBe(true);
+  });
+
   it("edits an existing reference and updates metadata without rerecording", async () => {
     const reference = {
-      id: "ref-1", name: "我的音色", providerId: null, mimeType: "audio/wav",
+      id: "ref-1", name: "我的音色", providerId: null, targetModel: null, mimeType: "audio/wav",
       byteSize: BigInt(32000), durationMs: BigInt(12000), transcript: "你好世界",
       remoteFileId: null, voiceId: null, cloneStatus: "pending", cloneError: null,
       createdAt: "2026-09-25T00:00:00Z", updatedAt: "2026-09-25T00:00:00Z",
@@ -135,12 +152,48 @@ describe("ServicesPage", () => {
     expect(commands.saveVoiceReferenceAudio).not.toHaveBeenCalled();
   });
 
+  it("saves a picked audio file with the target model and echoes it when editing", async () => {
+    const reference = {
+      id: "ref-7", name: "omni 音色", providerId: "aliyun", targetModel: "qwen3.8-omni-flash-realtime", mimeType: "audio/wav",
+      byteSize: BigInt(32000), durationMs: BigInt(12000), transcript: "",
+      remoteFileId: null, voiceId: null, cloneStatus: "pending", cloneError: null,
+      createdAt: "2026-09-27T00:00:00Z", updatedAt: "2026-09-27T00:00:00Z",
+    };
+    vi.mocked(commands.listVoiceReferences)
+      .mockResolvedValueOnce({ ok: true, data: [] })
+      .mockResolvedValue({ ok: true, data: [reference] });
+    vi.mocked(commands.saveVoiceReferenceAudio).mockResolvedValue({ ok: true, data: reference });
+    render(<ServicesPage />);
+    const navigation = within(screen.getByRole("navigation", { name: "服务分类" }));
+    fireEvent.click(navigation.getByRole("button", { name: "音色克隆" }));
+    expect(await screen.findByRole("heading", { name: "音色克隆" })).toBeTruthy();
+    const wavBytes = new Uint8Array([82, 73, 70, 70, 0, 0, 0, 0, 87, 65, 86, 69]);
+    const file = new File([wavBytes], "sample.wav", { type: "audio/wav" });
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    Object.defineProperty(fileInput, "files", { value: [file] });
+    fireEvent.change(fileInput);
+    expect(await screen.findByText(/已选择 sample\.wav/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("名称"), { target: { value: "omni 音色" } });
+    fireEvent.change(screen.getByLabelText(/目标模型/), { target: { value: "qwen3.8-omni-flash-realtime" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存音色" }));
+    expect(await screen.findByText("音色已保存，请点击「克隆」生成音色 ID")).toBeTruthy();
+    expect(commands.saveVoiceReferenceAudio).toHaveBeenCalledWith(expect.objectContaining({
+      name: "omni 音色",
+      targetModel: "qwen3.8-omni-flash-realtime",
+    }));
+    // 保存后列表回显，再点编辑：目标模型输入框应带出已存值。
+    fireEvent.click(screen.getByRole("button", { name: "编辑 omni 音色" }));
+    const voicesPanel = document.getElementById("services-panel-voices") as HTMLElement;
+    const targetInput = within(voicesPanel).getByLabelText(/目标模型/) as HTMLInputElement;
+    expect(targetInput.value).toBe("qwen3.8-omni-flash-realtime");
+  });
+
   it("records in-app audio and saves it as a voice reference", async () => {
     vi.mocked(commands.listVoiceReferences).mockResolvedValue({ ok: true, data: [] });
     vi.mocked(commands.saveVoiceReferenceAudio).mockResolvedValue({
       ok: true,
       data: {
-        id: "ref-9", name: "录音音色", providerId: null, mimeType: "audio/wav",
+        id: "ref-9", name: "录音音色", providerId: null, targetModel: null, mimeType: "audio/wav",
         byteSize: BigInt(192044), durationMs: BigInt(12000), transcript: "",
         remoteFileId: null, voiceId: null, cloneStatus: "pending", cloneError: null,
         createdAt: "2026-09-25T00:00:00Z", updatedAt: "2026-09-25T00:00:00Z",

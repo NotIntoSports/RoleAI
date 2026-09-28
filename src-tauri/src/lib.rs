@@ -72,7 +72,7 @@ pub fn run() {
         tauri_plugin_global_shortcut::Builder::new()
             .with_handler(|app, _, event| {
                 if event.state() == ShortcutState::Pressed {
-                    let _ = app.emit("session.assistant_hotkey.v1", ());
+                    let _ = app.emit("session:assistant_hotkey:v1", ());
                 }
             })
             .build(),
@@ -145,6 +145,7 @@ pub fn run() {
             commands::virtual_audio_install,
             commands::session_audio_ready,
             commands::session_push_mic_pcm,
+            commands::session_push_video_frame,
             commands::livestream_create_draft,
             commands::livestream_generate,
             commands::livestream_get,
@@ -202,20 +203,38 @@ pub fn run() {
                 .min_inner_size(900.0, 620.0)
                 // 设置后 wry 不再追加默认参数，需自行补全；--use-fake-ui-for-media-stream
                 // 让 WebView2 自动授予麦克风/摄像头权限（wry 默认不处理该权限请求，页面静默被拒）。
-                .additional_browser_args(
-                    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --use-fake-ui-for-media-stream",
-                )
+                .additional_browser_args(&webview_browser_args())
                 .on_navigation(navigation_is_allowed)
                 .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
                 .build()?;
             let assistant_shortcut =
                 Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyA);
             let registered = app.global_shortcut().register(assistant_shortcut).is_ok();
-            let _ = app.emit("session.assistant_hotkey_status.v1", registered);
+            let _ = app.emit("session:assistant_hotkey_status:v1", registered);
             Ok(())
         })
         .run(tauri::generate_context!())
         .expect("failed to run RoleAI");
+}
+
+fn webview_browser_args() -> String {
+    let mut args = String::from(
+        "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --use-fake-ui-for-media-stream",
+    );
+    if cfg!(debug_assertions) {
+        // 开发版开放本机 CDP 端口（仅 127.0.0.1）读取播放诊断；正式包不带。
+        args.push_str(" --remote-debugging-port=9223");
+        // 开发版可用 WAV 充当麦克风做端到端复现，不需要真人对着麦克风说话。
+        if let Ok(wav) = std::env::var("ROLEAI_FAKE_MIC_WAV")
+            && !wav.trim().is_empty()
+            && !wav.contains('"')
+        {
+            args.push_str(&format!(
+                " --use-fake-device-for-media-stream --use-file-for-fake-audio-capture=\"{wav}\""
+            ));
+        }
+    }
+    args
 }
 
 #[cfg(test)]

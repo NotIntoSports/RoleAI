@@ -11,8 +11,10 @@ export default defineConfig({
     port: 1420,
     strictPort: true,
     watch: {
-      // Rust 编译时会锁定 PDB 文件，由 Tauri 负责监听后台目录。
-      ignored: ["**/src-tauri/**"],
+      // Rust 编译时会锁定 PDB 文件，由 Tauri 负责监听后台目录；
+      // AudioBridge 的 .NET 构建输出（obj/bin）会被写入方锁定，watch 到即 EBUSY 崩溃。
+      // 其他工具（如 Codex）在 .codex-tmp 等目录并行 cargo 构建时同样会锁定产物。
+      ignored: ["**/src-tauri/**", "**/native/**", "**/.codex-tmp/**", "**/target/**"],
     },
   },
   build: {

@@ -126,6 +126,22 @@ pub trait ChatModel: Send + Sync {
         model_id: &str,
         messages: &[ChatMessage],
     ) -> Result<String, CascadeError>;
+
+    /// 流式补全：每收到增量就以"截至当前的完整文本"回调 `on_snapshot`，
+    /// 供事件通道整体替换上屏。默认实现退化为一次性 `complete`，
+    /// 结束时回调全文，保证调用方语义一致。
+    fn complete_streaming(
+        &self,
+        endpoint: &ProviderEndpoint,
+        credential: Option<&str>,
+        model_id: &str,
+        messages: &[ChatMessage],
+        on_snapshot: &dyn Fn(&str),
+    ) -> Result<String, CascadeError> {
+        let text = self.complete(endpoint, credential, model_id, messages)?;
+        on_snapshot(&text);
+        Ok(text)
+    }
 }
 
 pub trait TextToSpeech: Send + Sync {
@@ -292,6 +308,147 @@ impl ChatModel for OpenAiCompatibleCascade {
         })?;
         parse_chat_completion(&bytes)
     }
+
+    fn complete_streaming(
+        &self,
+        endpoint: &ProviderEndpoint,
+        credential: Option<&str>,
+        model_id: &str,
+        messages: &[ChatMessage],
+        on_snapshot: &dyn Fn(&str),
+    ) -> Result<String, CascadeError> {
+        use super::web_search::{WebCapability, parse_search_response, search_request};
+        *self.last_web.lock().unwrap_or_else(|e| e.into_inner()) = Default::default();
+        if self.web_capability != WebCapability::None {
+            // 联网搜索协议没有流式形态：先同步搜索命中，成功则全文一次性回调；
+            // 失败降级走下面的流式补全，与 complete() 的降级顺序一致。
+            let suffix = if self.web_capability == WebCapability::QwenChatEnableSearch {
+                "/chat/completions"
+            } else {
+                "/responses"
+            };
+            let request = search_request(self.web_capability, model_id, messages);
+            let searched = self
+                .send(CascadeHttpRequest {
+                    url: normalize_cascade_url(&endpoint.base_url, suffix, CascadeStage::Llm)?,
+                    credential,
+                    content_type: "application/json",
+                    accept: "application/json",
+                    body: serde_json::to_vec(&request)
+                        .map_err(|_| CascadeError::RequestFailed(CascadeStage::Llm))?,
+                    stage: CascadeStage::Llm,
+                    max_bytes: JSON_BODY_LIMIT,
+                })
+                .and_then(|bytes| parse_search_response(self.web_capability, &bytes));
+            match searched {
+                Ok(result) => {
+                    let text = result.text.clone();
+                    *self.last_web.lock().unwrap_or_else(|e| e.into_inner()) = result;
+                    on_snapshot(&text);
+                    return Ok(text);
+                }
+                Err(_) => {
+                    self.last_web
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .degraded = true
+                }
+            }
+        }
+        let url = normalize_chat_completions_url(&endpoint.base_url)?;
+        let mut payload = build_llm_request(model_id, messages);
+        payload["stream"] = json!(true);
+        let body = serde_json::to_vec(&payload)
+            .map_err(|_| CascadeError::RequestFailed(CascadeStage::Llm))?;
+        let mut http = self
+            .client
+            .post(url)
+            .header("Accept", "text/event-stream")
+            .header("Content-Type", "application/json")
+            .body(body);
+        if let Some(credential) = credential.filter(|value| !value.is_empty()) {
+            http = http.bearer_auth(credential);
+        }
+        let response = http.send().map_err(|error| {
+            if error.is_timeout() {
+                CascadeError::Timeout(CascadeStage::Llm)
+            } else {
+                CascadeError::RequestFailed(CascadeStage::Llm)
+            }
+        })?;
+        let status = response.status();
+        if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+            return Err(CascadeError::Unauthorized(CascadeStage::Llm));
+        }
+        if !status.is_success() {
+            return Err(CascadeError::RequestFailed(CascadeStage::Llm));
+        }
+        stream_sse_text(response, on_snapshot)
+    }
+}
+
+/// SSE 累计文本上限：与 JSON 体积上限同量级，防止异常服务端无限推送。
+const STREAM_TEXT_CHAR_LIMIT: usize = 64 * 1024;
+
+/// 逐行读取 OpenAI 兼容 SSE 流，把 `choices[0].delta.content` 拼成全文，
+/// 每次拼接后以完整快照回调。`[DONE]` 或连接结束时返回累计文本。
+/// 兼容性回退：个别供应商会忽略 `stream:true` 直接返回整段 JSON，
+/// 全程未出现 SSE 帧时按普通补全解析。入参泛型化便于用 `Cursor` 做单元测试。
+pub(crate) fn stream_sse_text<R: std::io::Read>(
+    response: R,
+    on_snapshot: &dyn Fn(&str),
+) -> Result<String, CascadeError> {
+    use std::io::BufRead;
+    let mut reader = std::io::BufReader::new(response);
+    let mut line = String::new();
+    let mut text = String::new();
+    let mut raw = Vec::new();
+    let mut saw_sse_frame = false;
+    loop {
+        line.clear();
+        let read = reader
+            .read_line(&mut line)
+            .map_err(|_| CascadeError::ConnectionReset(CascadeStage::Llm))?;
+        if read == 0 {
+            break;
+        }
+        if raw.len() + read <= super::openai_compatible::MAX_RESPONSE_BYTES as usize {
+            raw.extend_from_slice(line.as_bytes());
+        }
+        let Some(data) = line.trim_end_matches(['\r', '\n']).strip_prefix("data:") else {
+            continue;
+        };
+        saw_sse_frame = true;
+        let data = data.trim_start();
+        if data == "[DONE]" {
+            break;
+        }
+        if data.is_empty() {
+            continue;
+        }
+        let Ok(event) = serde_json::from_str::<Value>(data) else {
+            continue;
+        };
+        if let Some(delta) = event["choices"][0]["delta"]["content"].as_str()
+            && !delta.is_empty()
+        {
+            text.push_str(delta);
+            if text.chars().count() > STREAM_TEXT_CHAR_LIMIT {
+                return Err(CascadeError::ResponseTooLarge(CascadeStage::Llm));
+            }
+            on_snapshot(&text);
+        }
+    }
+    if !saw_sse_frame {
+        let text = parse_chat_completion(&raw)?;
+        on_snapshot(&text);
+        return Ok(text);
+    }
+    let text = text.trim();
+    if text.is_empty() {
+        return Err(CascadeError::ResponseEmpty(CascadeStage::Llm));
+    }
+    Ok(text.to_owned())
 }
 
 impl TextToSpeech for OpenAiCompatibleCascade {

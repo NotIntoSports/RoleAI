@@ -6,8 +6,10 @@ mod cascade {
         SpeechToText, TextToSpeech, build_asr_multipart, build_llm_request, build_tts_request,
         json_body_too_large, normalize_chat_completions_url, normalize_speech_url,
         normalize_transcriptions_url, parse_chat_completion, parse_transcript, parse_tts_pcm,
-        pcm_to_wav, tts_body_too_large,
+        pcm_to_wav, stream_sse_text, tts_body_too_large,
     };
+    use std::io::Cursor;
+    use std::sync::Mutex;
 
     fn le_u16(bytes: &[u8], offset: usize) -> u16 {
         u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap())
@@ -108,6 +110,52 @@ mod cascade {
         assert!(json_body_too_large(1024 * 1024 + 1));
         assert!(!tts_body_too_large(8 * 1024 * 1024));
         assert!(tts_body_too_large(8 * 1024 * 1024 + 1));
+    }
+
+    #[test]
+    fn stream_sse_accumulates_prefix_snapshots_until_done() {
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n",
+            ": keep-alive\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"你\"}}]}\r\n\r\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"好，世界\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let snapshots = Mutex::new(Vec::<String>::new());
+        let text = stream_sse_text(Cursor::new(body), &|snapshot: &str| {
+            snapshots.lock().unwrap().push(snapshot.to_owned())
+        })
+        .unwrap();
+        assert_eq!(text, "你好，世界");
+        assert_eq!(
+            snapshots.lock().unwrap().as_slice(),
+            ["你".to_owned(), "你好，世界".to_owned()]
+        );
+    }
+
+    #[test]
+    fn stream_sse_falls_back_to_plain_completion_without_sse_frames() {
+        // 个别兼容端忽略 stream:true，直接回整段 JSON：按普通补全解析。
+        let body = "{\"choices\":[{\"message\":{\"content\":\"整体回复\"}}]}";
+        let snapshots = Mutex::new(Vec::<String>::new());
+        let text = stream_sse_text(Cursor::new(body), &|snapshot: &str| {
+            snapshots.lock().unwrap().push(snapshot.to_owned())
+        })
+        .unwrap();
+        assert_eq!(text, "整体回复");
+        assert_eq!(
+            snapshots.lock().unwrap().as_slice(),
+            ["整体回复".to_owned()]
+        );
+    }
+
+    #[test]
+    fn stream_sse_without_content_fails_with_stable_code() {
+        let empty_done = stream_sse_text(Cursor::new("data: [DONE]\n\n"), &|_| {}).unwrap_err();
+        assert_eq!(empty_done.code(), "LLM_RESPONSE_EMPTY");
+
+        let not_json = stream_sse_text(Cursor::new("gateway timeout page"), &|_| {}).unwrap_err();
+        assert_eq!(not_json.code(), "LLM_RESPONSE_INVALID");
     }
 
     #[test]
@@ -603,8 +651,7 @@ fn parses_deduplicated_sorted_model_ids() {
 
 #[test]
 fn merges_builtin_catalog_for_zhipu_models_endpoint() {
-    let mut models =
-        parse_model_catalog(br#"{"data":[{"id":"glm-5"},{"id":"glm-4.5"}]}"#).unwrap();
+    let mut models = parse_model_catalog(br#"{"data":[{"id":"glm-5"},{"id":"glm-4.5"}]}"#).unwrap();
     let url = normalize_models_url("https://open.bigmodel.cn/api/paas/v4").unwrap();
     merge_builtin_catalog(&url, &mut models);
     let ids = models.into_iter().map(|model| model.id).collect::<Vec<_>>();
@@ -1094,15 +1141,31 @@ mod openai_realtime {
                 "type": "error",
                 "error": {
                     "code": "invalid_value",
-                    "message": "bad field sk-secret-must-not-escape"
+                    "message": "bad field value; secret=sk-secret-must-not-escape"
                 }
             })
             .to_string())]),
         };
         let error = wait_session_updated(&mut socket, Duration::from_secs(1)).unwrap_err();
-        assert_eq!(error.code(), "invalid_value");
+        // code 与限长后的 message 均透出（否则无法诊断服务端拒绝原因），
+        // 但 access-key 样式的凭据片段必须剔除。
+        assert!(error.to_string().contains("invalid_value"));
+        assert!(error.to_string().contains("bad field value"));
         assert!(!error.to_string().contains("sk-secret-must-not-escape"));
-        assert!(!error.to_string().contains("bad field"));
+    }
+
+    #[test]
+    fn remote_error_without_code_falls_back_and_keeps_message() {
+        let mut socket = FakeSocket {
+            inbound: VecDeque::from([Ok(json!({
+                "type": "error",
+                "error": { "message": "quota exceeded for realtime model" }
+            })
+            .to_string())]),
+        };
+        let error = wait_session_updated(&mut socket, Duration::from_secs(1)).unwrap_err();
+        assert!(error.code().starts_with("REALTIME_REMOTE_ERROR"));
+        assert!(error.to_string().contains("quota exceeded"));
     }
 
     #[test]
@@ -1161,16 +1224,28 @@ mod mock_http {
     }
 
     pub fn serve_once(response: Vec<u8>) -> (String, Receiver<CapturedRequest>) {
+        serve_seq_with(|_| vec![response])
+    }
+
+    /// 依序伺服多个响应（每个响应一个连接），请求逐个捕获——用于多步接口流程。
+    pub fn serve_seq_with<F>(build: F) -> (String, Receiver<CapturedRequest>)
+    where
+        F: FnOnce(&str) -> Vec<Vec<u8>>,
+    {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
+        let base_url = format!("http://{address}/v1");
+        let responses = build(&base_url);
         let (sender, receiver) = mpsc::channel();
         thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let request = read_request(&mut stream);
-            stream.write_all(&response).unwrap();
-            let _ = sender.send(request);
+            for response in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let request = read_request(&mut stream);
+                stream.write_all(&response).unwrap();
+                let _ = sender.send(request);
+            }
         });
-        (format!("http://{address}/v1"), receiver)
+        (base_url, receiver)
     }
 
     fn read_request(stream: &mut TcpStream) -> CapturedRequest {
@@ -1279,7 +1354,12 @@ mod voice_clone {
         assert_eq!(voice, "voice_clone_abc");
         let captured = captured.recv_timeout(Duration::from_secs(2)).unwrap();
         assert_eq!(captured.request_line, "POST /v1/voice/clone HTTP/1.1");
-        assert!(!captured.headers.to_ascii_lowercase().contains("authorization:"));
+        assert!(
+            !captured
+                .headers
+                .to_ascii_lowercase()
+                .contains("authorization:")
+        );
         assert_eq!(
             serde_json::from_slice::<serde_json::Value>(&captured.body).unwrap(),
             serde_json::json!({
@@ -1299,7 +1379,13 @@ mod voice_clone {
         let probe = VoiceCloneProbe::new().unwrap();
 
         let error = probe
-            .clone_voice(&endpoint(base_url), None, "roleai_abc123def", "   ", "file_in_123")
+            .clone_voice(
+                &endpoint(base_url),
+                None,
+                "roleai_abc123def",
+                "   ",
+                "file_in_123",
+            )
             .unwrap_err();
 
         assert_eq!(error.code(), "PROVIDER_UNAUTHORIZED");
@@ -1321,7 +1407,13 @@ mod voice_clone {
         let probe = VoiceCloneProbe::new().unwrap();
 
         let error = probe
-            .clone_voice(&endpoint(base_url), None, "roleai_abc123def", "", "file_in_123")
+            .clone_voice(
+                &endpoint(base_url),
+                None,
+                "roleai_abc123def",
+                "",
+                "file_in_123",
+            )
             .unwrap_err();
 
         assert_eq!(error.code(), "PROVIDER_RESPONSE_INVALID");
@@ -1349,5 +1441,580 @@ mod voice_clone {
 
     fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
         haystack.windows(needle.len()).any(|part| part == needle)
+    }
+}
+
+mod voice_clone_dashscope {
+    use std::time::Duration;
+
+    use reqwest::blocking::Client;
+
+    use super::super::{ProviderEndpoint, voice_clone_dashscope};
+    use super::mock_http::{CapturedRequest, response, serve_once, serve_seq_with};
+
+    const SAMPLE: &[u8] = b"RIFFsynthetic-voice-sample-bytes";
+
+    fn endpoint(base_url: &str) -> ProviderEndpoint {
+        ProviderEndpoint {
+            provider_id: "provider-1".into(),
+            base_url: base_url.to_owned(),
+        }
+    }
+
+    fn client() -> Client {
+        Client::new()
+    }
+
+    fn policy_body(upload_host: &str) -> String {
+        format!(
+            r#"{{"request_id":"req-1","data":{{"policy":"pol-abc","signature":"sig-abc",
+            "upload_dir":"voice_enrollment/2026","upload_host":"{upload_host}",
+            "expire_in_seconds":300,"max_file_size_mb":10,"capacity_limit_mb":100,
+            "oss_access_key_id":"AKID","x_oss_object_acl":"public-read",
+            "x_oss_forbid_overwrite":"false"}}}}"#
+        )
+    }
+
+    #[test]
+    fn upload_sample_exchanges_policy_then_oss_and_returns_public_url() {
+        let (base_url, captured) = serve_seq_with(|base| {
+            let policy = policy_body(base);
+            vec![
+                response("200 OK", policy.as_bytes(), ""),
+                response("200 OK", b"", ""),
+            ]
+        });
+        let public_url = voice_clone_dashscope::upload_sample(
+            &client(),
+            &endpoint(&base_url),
+            Some("key-marker"),
+            "sample.wav",
+            "audio/wav",
+            SAMPLE.to_vec(),
+        )
+        .unwrap();
+
+        let policy_request = captured.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(
+            policy_request.request_line,
+            "GET /api/v1/uploads?action=getPolicy&model=voice-enrollment HTTP/1.1"
+        );
+        assert!(
+            policy_request
+                .headers
+                .to_ascii_lowercase()
+                .contains("authorization: bearer key-marker\r\n")
+        );
+
+        let oss_request = captured.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(oss_request.request_line, "POST /v1 HTTP/1.1");
+        let body = String::from_utf8_lossy(&oss_request.body).to_string();
+        assert!(body.contains("name=\"OSSAccessKeyId\""));
+        assert!(body.contains("AKID"));
+        assert!(body.contains("name=\"Signature\""));
+        assert!(body.contains("sig-abc"));
+        assert!(body.contains("name=\"policy\""));
+        assert!(body.contains("pol-abc"));
+        assert!(body.contains("name=\"key\""));
+        assert!(body.contains("voice_enrollment/2026/sample.wav"));
+        assert!(body.contains("name=\"success_action_status\""));
+        // OSS PostObject 规范：file 必须是最后一个表单字段。
+        let key_position = body.find("name=\"key\"").unwrap();
+        let file_position = body.find("name=\"file\"").unwrap();
+        assert!(file_position > key_position);
+        assert!(
+            oss_request
+                .body
+                .windows(SAMPLE.len())
+                .any(|part| part == SAMPLE)
+        );
+
+        assert_eq!(public_url, "oss://voice_enrollment/2026/sample.wav");
+    }
+
+    #[test]
+    fn clone_reference_cosyvoice_posts_create_voice_with_oss_resolve_header() {
+        let (base_url, captured) = serve_seq_with(|base| {
+            let policy = policy_body(base);
+            vec![
+                response("200 OK", policy.as_bytes(), ""),
+                response("200 OK", b"", ""),
+                response(
+                    "200 OK",
+                    br#"{"output":{"voice_id":"cosyvoice-v2-abc123"},"request_id":"req-2"}"#,
+                    "",
+                ),
+            ]
+        });
+
+        let outcome = voice_clone_dashscope::clone_reference(
+            &client(),
+            &endpoint(&base_url),
+            Some("key-marker"),
+            "roleai_0123456789abcdef0123456",
+            "cosyvoice-v2",
+            "sample.wav",
+            "audio/wav",
+            SAMPLE.to_vec(),
+        )
+        .unwrap();
+
+        assert_eq!(outcome.voice_id, "cosyvoice-v2-abc123");
+        assert_eq!(
+            outcome.remote_file_id.as_deref(),
+            Some("oss://voice_enrollment/2026/sample.wav")
+        );
+        let _policy_request = captured.recv_timeout(Duration::from_secs(2)).unwrap();
+        let _oss_request = captured.recv_timeout(Duration::from_secs(2)).unwrap();
+        let create = captured.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(
+            create.request_line,
+            "POST /api/v1/services/audio/tts/customization HTTP/1.1"
+        );
+        assert!(
+            create
+                .headers
+                .to_ascii_lowercase()
+                .contains("authorization: bearer key-marker\r\n")
+        );
+        assert!(
+            create
+                .headers
+                .to_ascii_lowercase()
+                .contains("x-dashscope-ossresourceresolve: enable\r\n")
+        );
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&create.body).unwrap(),
+            serde_json::json!({
+                "model": "voice-enrollment",
+                "input": {
+                    "action": "create_voice",
+                    "target_model": "cosyvoice-v2",
+                    "prefix": "roleai0123",
+                    "url": "oss://voice_enrollment/2026/sample.wav",
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn upload_sample_maps_policy_error_and_surfaces_provider_message() {
+        let marker = br#"{"message":"synthetic-invalid-key"}"#;
+        let (base_url, captured) = serve_once(response("401 Unauthorized", marker, ""));
+
+        let error = voice_clone_dashscope::upload_sample(
+            &client(),
+            &endpoint(&base_url),
+            Some("key-marker"),
+            "sample.wav",
+            "audio/wav",
+            SAMPLE.to_vec(),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), "PROVIDER_UNAUTHORIZED");
+        assert_eq!(
+            error.provider_message.as_deref(),
+            Some("synthetic-invalid-key")
+        );
+        assert!(!error.to_string().contains("{\"message\""));
+        let _ = captured.recv_timeout(Duration::from_secs(2)).unwrap();
+    }
+
+    #[test]
+    fn upload_sample_maps_oss_upload_failure() {
+        let (base_url, captured) = serve_seq_with(|base| {
+            let policy = policy_body(base);
+            vec![
+                response("200 OK", policy.as_bytes(), ""),
+                response("500 Internal Server Error", b"upstream-error-marker", ""),
+            ]
+        });
+
+        let error = voice_clone_dashscope::upload_sample(
+            &client(),
+            &endpoint(&base_url),
+            None,
+            "sample.wav",
+            "audio/wav",
+            SAMPLE.to_vec(),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), "PROVIDER_REQUEST_FAILED");
+        assert!(!error.to_string().contains("upstream-error-marker"));
+        let _ = captured.recv_timeout(Duration::from_secs(2)).unwrap();
+        let _ = captured.recv_timeout(Duration::from_secs(2)).unwrap();
+    }
+
+    #[test]
+    fn is_dashscope_base_matches_dashscope_hosts_only() {
+        assert!(voice_clone_dashscope::is_dashscope_base(
+            "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        ));
+        assert!(voice_clone_dashscope::is_dashscope_base(
+            "https://dashscope.aliyuncs.com/api/v1"
+        ));
+        assert!(voice_clone_dashscope::is_dashscope_base(
+            "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+        ));
+        assert!(!voice_clone_dashscope::is_dashscope_base(
+            "https://open.bigmodel.cn/api/paas/v4"
+        ));
+        assert!(!voice_clone_dashscope::is_dashscope_base(
+            "https://dashscope.aliyuncs.com.evil.example.com/v1"
+        ));
+        assert!(!voice_clone_dashscope::is_dashscope_base("not a url"));
+    }
+
+    #[test]
+    fn is_qwen_target_matches_omni_and_qwen_models_only() {
+        assert!(voice_clone_dashscope::is_qwen_target(
+            "qwen3.8-omni-flash-realtime"
+        ));
+        assert!(voice_clone_dashscope::is_qwen_target(
+            "qwen-omni-turbo-realtime"
+        ));
+        assert!(!voice_clone_dashscope::is_qwen_target("cosyvoice-v2"));
+        assert!(!voice_clone_dashscope::is_qwen_target(""));
+        assert!(!voice_clone_dashscope::is_qwen_target("  "));
+    }
+
+    #[test]
+    fn clone_reference_qwen_target_makes_single_enrollment_call() {
+        let body = br#"{"output":{"target_model":"qwen3.8-omni-flash-realtime","voice":"qwen-omni-vc-roleai-1"},"usage":{"count":1},"request_id":"req-9"}"#;
+        let (base_url, captured) = serve_once(response("200 OK", body, ""));
+
+        let outcome = voice_clone_dashscope::clone_reference(
+            &client(),
+            &endpoint(&base_url),
+            Some("key-marker"),
+            "roleai_0123456789abcdef0123456",
+            "qwen3.8-omni-flash-realtime",
+            "sample.wav",
+            "audio/wav",
+            SAMPLE.to_vec(),
+        )
+        .unwrap();
+
+        assert_eq!(outcome.voice_id, "qwen-omni-vc-roleai-1");
+        assert_eq!(outcome.remote_file_id, None);
+        let captured: CapturedRequest = captured.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(
+            captured.request_line,
+            "POST /api/v1/services/audio/tts/customization HTTP/1.1"
+        );
+        let payload: serde_json::Value = serde_json::from_slice(&captured.body).unwrap();
+        assert_eq!(payload["model"], "qwen-voice-enrollment");
+        assert_eq!(payload["parameters"]["voice_clone_mode"], "normal");
+        assert_eq!(payload["input"]["action"], "create");
+        assert_eq!(
+            payload["input"]["target_model"],
+            "qwen3.8-omni-flash-realtime"
+        );
+        assert_eq!(payload["input"]["preferred_name"], "roleai0123");
+        let audio_data = payload["input"]["audio"]["data"].as_str().unwrap();
+        assert!(audio_data.starts_with("data:audio/wav;base64,"));
+        assert!(audio_data.len() > 32);
+    }
+
+    #[test]
+    fn clone_reference_cosyvoice_target_keeps_upload_then_create_flow() {
+        let (base_url, captured) = serve_seq_with(|base| {
+            let policy = policy_body(base);
+            vec![
+                response("200 OK", policy.as_bytes(), ""),
+                response("200 OK", b"", ""),
+                response(
+                    "200 OK",
+                    br#"{"output":{"voice_id":"cosyvoice-v2-x"},"request_id":"req-3"}"#,
+                    "",
+                ),
+            ]
+        });
+
+        let outcome = voice_clone_dashscope::clone_reference(
+            &client(),
+            &endpoint(&base_url),
+            None,
+            "roleai_0123456789abcdef0123456",
+            "cosyvoice-v2",
+            "sample.wav",
+            "audio/wav",
+            SAMPLE.to_vec(),
+        )
+        .unwrap();
+
+        assert_eq!(outcome.voice_id, "cosyvoice-v2-x");
+        assert_eq!(
+            outcome.remote_file_id.as_deref(),
+            Some("oss://voice_enrollment/2026/sample.wav")
+        );
+        let first = captured.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(first.request_line.starts_with("GET /api/v1/uploads"));
+        let _oss = captured.recv_timeout(Duration::from_secs(2)).unwrap();
+        let third = captured.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(
+            third.request_line,
+            "POST /api/v1/services/audio/tts/customization HTTP/1.1"
+        );
+        let payload: serde_json::Value = serde_json::from_slice(&third.body).unwrap();
+        assert_eq!(payload["model"], "voice-enrollment");
+    }
+
+    #[test]
+    fn clone_reference_qwen_maps_error_status_and_message() {
+        let marker = br#"{"message":"synthetic-enrollment-quota"}"#;
+        let (base_url, _) = serve_once(response("400 Bad Request", marker, ""));
+
+        let error = voice_clone_dashscope::clone_reference(
+            &client(),
+            &endpoint(&base_url),
+            None,
+            "roleai_0123456789abcdef0123456",
+            "qwen3.8-omni-flash-realtime",
+            "sample.wav",
+            "audio/wav",
+            SAMPLE.to_vec(),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), "PROVIDER_REQUEST_FAILED");
+        assert_eq!(
+            error.provider_message.as_deref(),
+            Some("synthetic-enrollment-quota")
+        );
+    }
+
+    #[test]
+    fn clone_reference_qwen_rejects_malformed_response() {
+        let marker = br#"{"syntheticMarker":"must-not-escape"}"#;
+        let (base_url, _) = serve_once(response("200 OK", marker, ""));
+
+        let error = voice_clone_dashscope::clone_reference(
+            &client(),
+            &endpoint(&base_url),
+            None,
+            "roleai_0123456789abcdef0123456",
+            "qwen3.8-omni-flash-realtime",
+            "sample.wav",
+            "audio/wav",
+            SAMPLE.to_vec(),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), "PROVIDER_RESPONSE_INVALID");
+        assert!(!error.to_string().contains("must-not-escape"));
+    }
+
+    /// 真网冒烟：用本地配置里指向 DashScope 的供应商，经统一入口 clone_reference
+    /// 完整克隆（按 VOICE_CLONE_SMOKE_TARGET 分发：qwen 单调用 / cosyvoice 两步）。
+    /// 会真实创建克隆音色并计费。
+    /// 运行：VOICE_CLONE_SMOKE_CONFIG=<config path> VOICE_CLONE_SMOKE_WAV=<wav path>
+    /// [VOICE_CLONE_SMOKE_TARGET=<target model>]
+    /// cargo test --lib live_dashscope_voice_clone_smoke -- --ignored --nocapture
+    #[test]
+    #[ignore = "Uses the saved Windows credential and consumes provider quota; set VOICE_CLONE_SMOKE_CONFIG and VOICE_CLONE_SMOKE_WAV explicitly"]
+    #[cfg(windows)]
+    fn live_dashscope_voice_clone_smoke() {
+        use crate::secrets::{SecretService, WindowsSecretStore};
+        use std::sync::Arc;
+
+        let config_path =
+            std::env::var("VOICE_CLONE_SMOKE_CONFIG").expect("explicit config path required");
+        let wav_path = std::env::var("VOICE_CLONE_SMOKE_WAV")
+            .expect("reference wav path required (10-20s speech recommended)");
+        let target_model =
+            std::env::var("VOICE_CLONE_SMOKE_TARGET").unwrap_or_else(|_| "cosyvoice-v2".into());
+        let config: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
+        let provider = config["models"]["providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|provider| {
+                super::super::voice_clone_dashscope::is_dashscope_base(
+                    provider["baseUrl"].as_str().unwrap_or(""),
+                )
+            })
+            .expect("config must contain a DashScope provider")
+            .clone();
+        let secrets = SecretService::new("default", Arc::new(WindowsSecretStore::new())).unwrap();
+        let credential = secrets
+            .read(provider["credential"]["reference"].as_str().unwrap())
+            .unwrap()
+            .expect("saved credential must exist");
+        let endpoint = ProviderEndpoint {
+            provider_id: provider["id"].as_str().unwrap().to_owned(),
+            base_url: provider["baseUrl"].as_str().unwrap().to_owned(),
+        };
+        let probe = super::super::VoiceCloneProbe::new().unwrap();
+
+        let bytes = std::fs::read(&wav_path).unwrap();
+        let mime_type = if wav_path.ends_with(".mp3") {
+            "audio/mpeg"
+        } else {
+            "audio/wav"
+        };
+        let voice_name = format!("roleai_{}", uuid::Uuid::new_v4().simple());
+        let outcome = probe
+            .clone_reference(
+                &endpoint,
+                Some(credential.as_str()),
+                &voice_name,
+                "",
+                Some(&target_model),
+                "smoke-sample.wav",
+                mime_type,
+                bytes,
+            )
+            .expect("DashScope clone should succeed");
+        eprintln!(
+            "dashscope smoke: target={target_model} voice_id={} remote_file_id={:?}",
+            outcome.voice_id, outcome.remote_file_id
+        );
+        assert!(!outcome.voice_id.is_empty());
+    }
+
+    /// 合成探测诊断（不克隆，只对既有音色试合成）：对 compatible-mode /audio/speech
+    /// 打印每个变体的状态码与响应头，定位 TTS_REQUEST_FAILED 的具体原因。
+    /// 运行：VOICE_CLONE_SMOKE_CONFIG=<config> VOICE_CLONE_SMOKE_VOICE_ID=<id>
+    /// cargo test --lib live_dashscope_tts_probe -- --ignored --nocapture
+    #[test]
+    #[ignore = "Uses the saved Windows credential and consumes provider quota; set VOICE_CLONE_SMOKE_CONFIG and VOICE_CLONE_SMOKE_VOICE_ID explicitly"]
+    #[cfg(windows)]
+    fn live_dashscope_tts_probe() {
+        use crate::secrets::{SecretService, WindowsSecretStore};
+        use std::sync::Arc;
+
+        let config_path =
+            std::env::var("VOICE_CLONE_SMOKE_CONFIG").expect("explicit config path required");
+        let voice_id =
+            std::env::var("VOICE_CLONE_SMOKE_VOICE_ID").expect("cloned voice id required");
+        let config: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
+        let provider = config["models"]["providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|provider| {
+                super::super::voice_clone_dashscope::is_dashscope_base(
+                    provider["baseUrl"].as_str().unwrap_or(""),
+                )
+            })
+            .expect("config must contain a DashScope provider")
+            .clone();
+        let secrets = SecretService::new("default", Arc::new(WindowsSecretStore::new())).unwrap();
+        let credential = secrets
+            .read(provider["credential"]["reference"].as_str().unwrap())
+            .unwrap()
+            .expect("saved credential must exist");
+
+        let base = provider["baseUrl"].as_str().unwrap().trim_end_matches('/');
+        let speech_url = format!("{base}/audio/speech");
+        let variants: &[(&str, serde_json::Value)] = &[
+            (
+                "pcm",
+                serde_json::json!({
+                    "model": "cosyvoice-v2",
+                    "input": "你好，这是克隆音色的合成验证。",
+                    "voice": voice_id,
+                    "response_format": "pcm",
+                }),
+            ),
+            (
+                "default-format",
+                serde_json::json!({
+                    "model": "cosyvoice-v2",
+                    "input": "你好，这是克隆音色的合成验证。",
+                    "voice": voice_id,
+                }),
+            ),
+        ];
+        let client = reqwest::blocking::Client::new();
+        for (label, payload) in variants {
+            let response = client
+                .post(&speech_url)
+                .bearer_auth(credential.as_str())
+                .json(payload)
+                .send()
+                .expect("request should complete");
+            let status = response.status();
+            let content_type = response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("")
+                .to_owned();
+            let body = response.bytes().unwrap_or_default();
+            let head = String::from_utf8_lossy(&body[..body.len().min(300)]).to_string();
+            eprintln!(
+                "tts probe [{label}]: status={status} content_type={content_type} bytes={} head={head:?}",
+                body.len()
+            );
+        }
+    }
+
+    /// qwen-voice-enrollment 复刻探测：本地音频 base64 直传创建 omni/realtime 用音色。
+    /// 运行：VOICE_CLONE_SMOKE_CONFIG=<config> VOICE_CLONE_SMOKE_WAV=<wav>
+    /// VOICE_CLONE_SMOKE_TARGET=<target model，默认 qwen3.8-omni-flash-realtime>
+    #[test]
+    #[ignore = "Uses the saved Windows credential and consumes provider quota; set VOICE_CLONE_SMOKE_CONFIG, VOICE_CLONE_SMOKE_WAV and VOICE_CLONE_SMOKE_TARGET explicitly"]
+    #[cfg(windows)]
+    fn live_dashscope_qwen_enrollment_probe() {
+        use crate::secrets::{SecretService, WindowsSecretStore};
+        use std::sync::Arc;
+
+        let config_path =
+            std::env::var("VOICE_CLONE_SMOKE_CONFIG").expect("explicit config path required");
+        let wav_path = std::env::var("VOICE_CLONE_SMOKE_WAV").expect("wav path required");
+        let target_model = std::env::var("VOICE_CLONE_SMOKE_TARGET")
+            .unwrap_or_else(|_| "qwen3.8-omni-flash-realtime".into());
+        let config: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
+        let provider = config["models"]["providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|provider| {
+                super::super::voice_clone_dashscope::is_dashscope_base(
+                    provider["baseUrl"].as_str().unwrap_or(""),
+                )
+            })
+            .expect("config must contain a DashScope provider")
+            .clone();
+        let secrets = SecretService::new("default", Arc::new(WindowsSecretStore::new())).unwrap();
+        let credential = secrets
+            .read(provider["credential"]["reference"].as_str().unwrap())
+            .unwrap()
+            .expect("saved credential must exist");
+
+        let bytes = std::fs::read(&wav_path).unwrap();
+        use base64::Engine as _;
+        let data_uri = format!(
+            "data:audio/wav;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        );
+        let payload = serde_json::json!({
+            "model": "qwen-voice-enrollment",
+            "parameters": { "voice_clone_mode": "normal" },
+            "input": {
+                "action": "create",
+                "target_model": target_model,
+                "preferred_name": "roleai",
+                "audio": { "data": data_uri },
+            },
+        });
+        let client = reqwest::blocking::Client::new();
+        let response = client
+            .post("https://dashscope.aliyuncs.com/api/v1/services/audio/tts/customization")
+            .bearer_auth(credential.as_str())
+            .json(&payload)
+            .send()
+            .expect("request should complete");
+        let status = response.status();
+        let body = response.bytes().unwrap_or_default();
+        let head = String::from_utf8_lossy(&body[..body.len().min(400)]).to_string();
+        eprintln!("qwen enrollment probe: status={status} head={head:?}");
     }
 }

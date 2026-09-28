@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use rusqlite::Connection;
 
-use super::Database;
+use super::{Database, LATEST_SCHEMA_VERSION};
 
 fn database() -> (tempfile::TempDir, Database) {
     let directory = tempfile::tempdir().unwrap();
@@ -16,7 +16,7 @@ fn empty_database_migrates_once_and_passes_integrity_check() {
     database.migrate().unwrap();
     database.migrate().unwrap();
 
-    assert_eq!(database.schema_version().unwrap(), 7);
+    assert_eq!(database.schema_version().unwrap(), LATEST_SCHEMA_VERSION);
     assert_eq!(database.integrity_check().unwrap(), "ok");
     assert_eq!(
         database.application_table_names().unwrap(),
@@ -112,7 +112,7 @@ fn foundation_database_migrates_to_materials_schema() {
     let database = Database::open(path).unwrap();
     database.migrate().unwrap();
 
-    assert_eq!(database.schema_version().unwrap(), 7);
+    assert_eq!(database.schema_version().unwrap(), LATEST_SCHEMA_VERSION);
     assert!(
         database
             .application_table_names()
@@ -149,7 +149,7 @@ fn materials_schema_migrates_to_cascade_session_schema() {
     let database = Database::open(path).unwrap();
     database.migrate().unwrap();
 
-    assert_eq!(database.schema_version().unwrap(), 7);
+    assert_eq!(database.schema_version().unwrap(), LATEST_SCHEMA_VERSION);
     let tables = database.application_table_names().unwrap();
     for name in [
         "sessions",
@@ -309,7 +309,7 @@ fn cascade_session_schema_migrates_to_livekit_transport() {
     let database = Database::open(path).unwrap();
     database.migrate().unwrap();
 
-    assert_eq!(database.schema_version().unwrap(), 7);
+    assert_eq!(database.schema_version().unwrap(), LATEST_SCHEMA_VERSION);
     assert_eq!(database.integrity_check().unwrap(), "ok");
     assert_eq!(
         database
@@ -427,5 +427,33 @@ fn session_schema_includes_context_summary_columns() {
             )
             .unwrap(),
         "-1"
+    );
+}
+
+#[test]
+fn voice_reference_schema_includes_target_model_column() {
+    let (_directory, database) = database();
+    database.migrate().unwrap();
+
+    let columns = database
+        .query_strings("SELECT name FROM pragma_table_info('voice_references')")
+        .unwrap();
+    assert!(columns.contains(&"target_model".to_owned()));
+
+    database
+        .execute_batch(
+            "INSERT INTO voice_references(
+                id, name, mime_type, byte_size, audio, created_at, updated_at
+             ) VALUES ('ref-target', '示例', 'audio/wav', 4, x'00000000', '2026-09-27T00:00:00Z', '2026-09-27T00:00:00Z');",
+        )
+        .unwrap();
+    assert_eq!(
+        database
+            .query_string(
+                "SELECT COALESCE(target_model, '<null>')
+                 FROM voice_references WHERE id = 'ref-target'"
+            )
+            .unwrap(),
+        "<null>"
     );
 }

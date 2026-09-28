@@ -41,6 +41,8 @@ pub struct AppState {
     pub livestream_voice: Mutex<Option<crate::livestream::LivestreamVoiceSnapshot>>,
     pub obs_previous_scene: Mutex<Option<String>>,
     pub operator_monitor: Mutex<Option<std::process::Child>>,
+    /// 本机麦克风无锁热路径句柄（会话期间由 commands 层持有）。
+    pub mic_ingest: Mutex<Option<crate::audio::capture::MicIngestHandle>>,
     database_path: PathBuf,
     secret_backend_ready: bool,
     startup: RwLock<StartupState>,
@@ -176,6 +178,7 @@ impl AppState {
             livestream_voice: Mutex::new(None),
             obs_previous_scene: Mutex::new(None),
             operator_monitor: Mutex::new(None),
+            mic_ingest: Mutex::new(None),
             database_path,
             secret_backend_ready,
             startup: RwLock::new(startup),

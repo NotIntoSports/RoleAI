@@ -48,6 +48,17 @@ export interface MicStreamController {
 export interface MicStreamCallbacks {
   onChunk: (pcmBase64: string, sampleRate: number) => void;
   onError: (message: string) => void;
+  /** 每 ~100ms 上报一次 0..1 归一化 RMS 电平，驱动麦克风按钮音量条。 */
+  onLevel?: (level: number) => void;
+}
+
+// 语音 RMS 通常落在 0.02–0.3：乘 4 放大并夹到 0..1，供音量条直接用作高度。
+export function rmsLevel(samples: Float32Array): number {
+  let sum = 0;
+  for (let index = 0; index < samples.length; index++) {
+    sum += samples[index] * samples[index];
+  }
+  return Math.min(1, Math.sqrt(sum / samples.length) * 4);
 }
 
 export class MicStreamer implements MicStreamController {
@@ -57,14 +68,22 @@ export class MicStreamer implements MicStreamController {
   private worklet: AudioWorkletNode | null = null;
   private batcher: MicChunkBatcher | null = null;
 
-  constructor(private callbacks: MicStreamCallbacks) {}
+  constructor(
+    private callbacks: MicStreamCallbacks,
+    private readonly sharedContext?: AudioContext,
+  ) {}
 
   async start(): Promise<void> {
     if (this.context) throw new Error("mic streamer already started");
     const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+      audio: {
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
     });
-    const context = new AudioContext();
+    const context = this.sharedContext ?? new AudioContext();
     try {
       // WebView2 中 AudioContext 可能以 suspended 状态创建；不显式恢复会导致
       // 整个图不被拉动、一个采样都采不到（与音色克隆录音相同的问题）。
@@ -88,7 +107,10 @@ export class MicStreamer implements MicStreamController {
       const worklet = new AudioWorkletNode(context, "voice-capture");
       worklet.port.onmessage = (event) => {
         const chunk = this.batcher?.push(event.data as Float32Array);
-        if (chunk) this.callbacks.onChunk(bytesToBase64(encodePcm16(chunk)), context.sampleRate);
+        if (chunk) {
+          this.callbacks.onLevel?.(rmsLevel(chunk));
+          this.callbacks.onChunk(bytesToBase64(encodePcm16(chunk)), context.sampleRate);
+        }
       };
       const mute = context.createGain();
       mute.gain.value = 0;
@@ -115,7 +137,9 @@ export class MicStreamer implements MicStreamController {
     this.batcher = null;
     this.stream?.getTracks().forEach((track) => track.stop());
     this.stream = null;
-    void this.context?.close().catch(() => undefined);
+    if (!this.sharedContext) {
+      void this.context?.close().catch(() => undefined);
+    }
     this.context = null;
   }
 }

@@ -9,7 +9,7 @@ use crate::{
     materials::hybrid::search_hybrid,
     providers::{
         CascadeError, CascadeStage, ChatMessage, ChatModel, EmbeddingError, EmbeddingProbe,
-        ProviderEndpoint, SpeechToText, TextToSpeech,
+        ProviderEndpoint, SpeechToText, TextToSpeech, TurnStreamHooks,
     },
     runtime::{SessionRuntime, active_embedding, active_role_profile, active_voice_route},
 };
@@ -75,6 +75,7 @@ pub fn run_cascade_turn(
     deps: &CascadeTurnDeps<'_>,
     request: CascadeTurnRequest<'_>,
     cancel: &AtomicBool,
+    hooks: &TurnStreamHooks<'_>,
 ) -> Result<CascadeTurn, CascadeError> {
     cancelled(cancel)?;
     if !deps.runtime.can_answer() {
@@ -129,14 +130,19 @@ pub fn run_cascade_turn(
         &user_text,
         &citations,
     );
-    let assistant_text = run_with_retry(deps.sleep, classify_cascade, || {
-        deps.llm.complete(
-            &llm_endpoint,
-            request.credentials.llm,
-            llm_model_id,
-            &messages,
-        )
-    })?;
+    let assistant_text = {
+        let noop = |_: &str| {};
+        let on_snapshot: &dyn Fn(&str) = hooks.assistant_text.unwrap_or(&noop);
+        run_with_retry(deps.sleep, classify_cascade, || {
+            deps.llm.complete_streaming(
+                &llm_endpoint,
+                request.credentials.llm,
+                llm_model_id,
+                &messages,
+                on_snapshot,
+            )
+        })?
+    };
     cancelled(cancel)?;
     let (tts_pcm, error_code) = match voice_id {
         Some(voice_id) => match run_with_retry(deps.sleep, classify_cascade, || {
@@ -372,6 +378,7 @@ mod tests {
         CascadeCredentials, CascadeTurnDeps, CascadeTurnRequest, HistoryTurn, build_messages,
         run_cascade_turn,
     };
+    use crate::providers::TurnStreamHooks;
     use crate::{
         config::PublicConfig,
         database::Database,
@@ -666,6 +673,7 @@ mod tests {
                 context_summary: None,
             },
             cancel,
+            &TurnStreamHooks::none(),
         )
     }
 
@@ -1087,6 +1095,7 @@ mod tests {
                 context_summary: None,
             },
             &AtomicBool::new(false),
+            &TurnStreamHooks::none(),
         )
         .unwrap_err();
         assert_eq!(error, CascadeError::AnswerBlocked);
@@ -1134,6 +1143,7 @@ mod tests {
                 context_summary: None,
             },
             &AtomicBool::new(false),
+            &TurnStreamHooks::none(),
         )
         .unwrap();
         assert_eq!(turn.user_text, "现场转写");
@@ -1164,5 +1174,90 @@ mod tests {
         assert_eq!(messages[1].content, "旧问题");
         assert_eq!(messages[2].content, "旧回答");
         assert_eq!(messages[3].content, "新问题");
+    }
+
+    /// 只实现 complete_streaming 的假 LLM：模拟边生成边吐前缀快照。
+    struct StreamingLlm {
+        text: String,
+        complete_calls: AtomicU32,
+    }
+
+    impl ChatModel for StreamingLlm {
+        fn complete(
+            &self,
+            _: &ProviderEndpoint,
+            _: Option<&str>,
+            _: &str,
+            _: &[ChatMessage],
+        ) -> Result<String, CascadeError> {
+            panic!("streaming turns must not fall back to complete()");
+        }
+
+        fn complete_streaming(
+            &self,
+            _: &ProviderEndpoint,
+            _: Option<&str>,
+            _: &str,
+            _: &[ChatMessage],
+            on_snapshot: &dyn Fn(&str),
+        ) -> Result<String, CascadeError> {
+            self.complete_calls.fetch_add(1, Ordering::SeqCst);
+            let prefix = self.text.chars().take(2).collect::<String>();
+            on_snapshot(&prefix);
+            on_snapshot(&self.text);
+            Ok(self.text.clone())
+        }
+    }
+
+    #[test]
+    fn streaming_llm_snapshots_reach_turn_hooks() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = opened(&directory);
+        let llm = StreamingLlm {
+            text: "流式全文回答".into(),
+            complete_calls: AtomicU32::new(0),
+        };
+        let asr = ScriptedAsr::ok("unused");
+        let tts = ScriptedTts::ok(&[0x21, 0x00]);
+        let embed = ScriptedEmbed::fail(EmbeddingError::RequestFailed);
+        let runtime = SessionRuntime::new();
+        let config = cherry_config();
+        let deps = CascadeTurnDeps {
+            asr: &asr,
+            llm: &llm,
+            tts: &tts,
+            embed: &embed,
+            database: &database,
+            runtime: &runtime,
+            sleep: &|_| {},
+        };
+        let snapshots = Mutex::new(Vec::<String>::new());
+        let hooks = crate::providers::TurnStreamHooks {
+            user_text: None,
+            assistant_text: Some(&|snapshot| snapshots.lock().unwrap().push(snapshot.to_owned())),
+        };
+
+        let turn = run_cascade_turn(
+            &deps,
+            CascadeTurnRequest {
+                config: &config,
+                credentials: CascadeCredentials::default(),
+                pcm: None,
+                sample_rate: 16_000,
+                user_text: Some("流式问题"),
+                history: &[],
+                context_summary: None,
+            },
+            &AtomicBool::new(false),
+            &hooks,
+        )
+        .unwrap();
+
+        assert_eq!(turn.assistant_text, "流式全文回答");
+        assert_eq!(
+            snapshots.lock().unwrap().as_slice(),
+            ["流式".to_owned(), "流式全文回答".to_owned()]
+        );
+        assert_eq!(llm.complete_calls.load(Ordering::SeqCst), 1);
     }
 }

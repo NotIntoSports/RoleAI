@@ -6,6 +6,8 @@ export type FoundationStatus = { ready: boolean, };
 
 export type MicPcmAcceptance = { accepted: boolean, };
 
+export type VideoFrameAcceptance = { accepted: boolean, };
+
 export type SecretStatus = { reference: string, configured: boolean, };
 
 export type DiagnosticsExportResult = { exported: boolean, };
@@ -76,13 +78,13 @@ export type VoiceRouteSaveInput = { id: string | null, name: string, mode: Voice
 
 export type VoiceRouteTestResult = { routeId: string, ready: boolean, checkedProviderIds: Array<string>, };
 
-export type VoiceReferenceSaveInput = { id: string | null, name: string, providerId: string | null, transcript: string | null, audioPath: string, };
+export type VoiceReferenceSaveInput = { id: string | null, name: string, providerId: string | null, targetModel: string | null, transcript: string | null, audioPath: string, };
 
-export type VoiceReferenceAudioSaveInput = { id: string | null, name: string, providerId: string | null, transcript: string | null, audioBase64: string, };
+export type VoiceReferenceAudioSaveInput = { id: string | null, name: string, providerId: string | null, targetModel: string | null, transcript: string | null, audioBase64: string, };
 
-export type VoiceReferenceUpdateInput = { id: string, name: string, providerId: string | null, transcript: string | null, };
+export type VoiceReferenceUpdateInput = { id: string, name: string, providerId: string | null, targetModel: string | null, transcript: string | null, };
 
-export type VoiceReferenceSummary = { id: string, name: string, providerId: string | null, mimeType: string, byteSize: bigint, durationMs: bigint | null, transcript: string, remoteFileId: string | null, voiceId: string | null, cloneStatus: string, cloneError: string | null, createdAt: string, updatedAt: string, };
+export type VoiceReferenceSummary = { id: string, name: string, providerId: string | null, targetModel: string | null, mimeType: string, byteSize: bigint, durationMs: bigint | null, transcript: string, remoteFileId: string | null, voiceId: string | null, cloneStatus: string, cloneError: string | null, createdAt: string, updatedAt: string, };
 
 export type VoiceReferenceCloneResult = { referenceId: string, voiceId: string, remoteFileId: string, };
 
@@ -106,19 +108,30 @@ export type SessionSummary = { id: string, status: string, roleProfileId: string
 
 export type SessionStartResult = { "kind": "started", session: SessionSummary, } | { "kind": "blocked", issues: Array<PreflightIssue>, };
 
-export type RuntimeStatus = { phase: string, mode: string, seq: number, unusedMaterials: boolean, lastErrorCode: string | null, revision: number, };
+export type RuntimeStatus = { phase: string, mode: string, seq: number, unusedMaterials: boolean, lastErrorCode: string | null, revision: number, 
+/**
+ * 实时语音 WS 链路状态：idle（无实时路线）/ connected / reconnecting /
+ * failed / unknown（会话锁被占用暂时不可读）。
+ */
+realtimeStatus: string, };
 
 export type SessionExportResult = { path: string, };
 
 export type SessionCitationView = { materialId: string, chunkId: string, snippet: string, };
 
-export type SessionTurnView = { webSources?: Array<WebSource>, webDegraded?: boolean, triggerSource?: string, userConfirmed?: boolean, playbackStatus?: string, id: string, turnIndex: number, userText: string, assistantText: string, materialsUsed: boolean, citations: Array<SessionCitationView>, };
+export type SessionTurnView = { webSources?: Array<WebSource>, webDegraded?: boolean, triggerSource?: string, userConfirmed?: boolean, playbackStatus?: string, id: string, turnIndex: number, userText: string, assistantText: string, materialsUsed: boolean, citations: Array<SessionCitationView>, createdAt: string, };
 
 export type SessionDetail = { session: SessionSummary, turns: Array<SessionTurnView>, };
 
-export type SessionTranscriptEvent = { seq: number, text: string, };
+export type SessionTranscriptEvent = { seq: number, text: string, done: boolean, };
 
-export type SessionReplyEvent = { seq: number, text: string, };
+export type SessionReplyEvent = { seq: number, text: string, done: boolean, };
+
+export type SessionPlaybackControlEvent = { seq: number, 
+/**
+ * 目前只有 `clear`：清空前端播放队列。
+ */
+action: string, };
 
 export type AudioLevelEvent = { peak: number, seq: number, };
 

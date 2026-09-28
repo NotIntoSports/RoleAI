@@ -283,6 +283,11 @@ description = "Allows streaming local microphone PCM into the active session utt
 commands.allow = ["session_push_mic_pcm"]
 
 [[permission]]
+identifier = "allow-session-push-video-frame"
+description = "Allows streaming camera or screen-share JPEG frames into the active realtime session."
+commands.allow = ["session_push_video_frame"]
+
+[[permission]]
 identifier = "allow-livestream-create-draft"
 description = "Allows creating a bounded local livestream script draft."
 commands.allow = ["livestream_create_draft"]

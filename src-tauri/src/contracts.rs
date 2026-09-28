@@ -5,15 +5,15 @@ use std::path::Path;
 #[cfg(test)]
 use crate::config::{
     ApplicationConfig, DiagnosticsConfig, EmbeddingConfig, EmbeddingDistance, KnowledgeConfig,
-    ModelConfig, ProviderConfig, PublicConfig, RoleProfileConfig, RoleScenario,
-    SecretSlot, SpeechConfig, StorageConfig, VoiceRouteConfig, VoiceRouteMode,
+    ModelConfig, ProviderConfig, PublicConfig, RoleProfileConfig, RoleScenario, SecretSlot,
+    SpeechConfig, StorageConfig, VoiceRouteConfig, VoiceRouteMode,
 };
 #[cfg(test)]
 use crate::services::{
-    DiscoveredModelDto, EmbeddingConfigSaveInput, EmbeddingTestResult,
-    MaterialIndexResult, MaterialSearchHit, MaterialSummary,
-    ModelDiscoveryResult, ProviderSaveInput, ProviderTestResult, RoleProfileCopyInput,
-    RoleProfileSaveInput, VoiceRouteSaveInput, VoiceRouteTestResult,
+    DiscoveredModelDto, EmbeddingConfigSaveInput, EmbeddingTestResult, MaterialIndexResult,
+    MaterialSearchHit, MaterialSummary, ModelDiscoveryResult, ProviderSaveInput,
+    ProviderTestResult, RoleProfileCopyInput, RoleProfileSaveInput, VoiceRouteSaveInput,
+    VoiceRouteTestResult,
 };
 
 use serde::{Serialize, Serializer, ser::SerializeMap};
@@ -34,6 +34,13 @@ pub struct FoundationStatus {
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
 pub struct MicPcmAcceptance {
+    pub accepted: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct VideoFrameAcceptance {
     pub accepted: bool,
 }
 
@@ -124,12 +131,8 @@ impl From<crate::sessions::SessionRecord> for SessionSummary {
 #[ts(tag = "kind", rename_all = "camelCase")]
 #[allow(clippy::large_enum_variant)]
 pub enum SessionStartResult {
-    Started {
-        session: SessionSummary,
-    },
-    Blocked {
-        issues: Vec<PreflightIssue>,
-    },
+    Started { session: SessionSummary },
+    Blocked { issues: Vec<PreflightIssue> },
 }
 
 /// Live runtime snapshot. Frontend must drop events or snapshots whose `seq`
@@ -146,6 +149,9 @@ pub struct RuntimeStatus {
     pub last_error_code: Option<String>,
     #[ts(type = "number")]
     pub revision: u64,
+    /// 实时语音 WS 链路状态：idle（无实时路线）/ connected / reconnecting /
+    /// failed / unknown（会话锁被占用暂时不可读）。
+    pub realtime_status: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
@@ -190,6 +196,7 @@ pub struct SessionTurnView {
     pub assistant_text: String,
     pub materials_used: bool,
     pub citations: Vec<SessionCitationView>,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
@@ -201,6 +208,8 @@ pub struct SessionDetail {
 }
 
 /// Transcript event. Frontend must drop this payload when `seq` is stale.
+/// `done=false` 为流式增量快照（文本为已生成前缀，轮次尚未落库），
+/// `done=true` 表示该轮已落库，前端此时才应拉取会话详情刷新列表。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
@@ -208,9 +217,11 @@ pub struct SessionTranscriptEvent {
     #[ts(type = "number")]
     pub seq: u64,
     pub text: String,
+    pub done: bool,
 }
 
 /// Reply event. Frontend must drop this payload when `seq` is stale.
+/// `done` 语义与 `SessionTranscriptEvent` 一致。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
@@ -218,6 +229,28 @@ pub struct SessionReplyEvent {
     #[ts(type = "number")]
     pub seq: u64,
     pub text: String,
+    pub done: bool,
+}
+
+/// Realtime WebAudio playback delta. PCM 只经本机 Tauri 事件传输，不入库，
+/// 也不进入公开 bindings（公开契约禁止暴露 PCM）；前端用本地接口类型接收。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionAudioEvent {
+    pub seq: u64,
+    pub pcm_base64: String,
+    pub sample_rate: u32,
+}
+
+/// WebAudio 播放队列控制事件。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct SessionPlaybackControlEvent {
+    #[ts(type = "number")]
+    pub seq: u64,
+    /// 目前只有 `clear`：清空前端播放队列。
+    pub action: String,
 }
 
 /// Peak-only level event. Never includes PCM. Frontend must drop stale `seq`.
@@ -307,6 +340,7 @@ fn generated_bindings() -> String {
         PublicError::decl(&config),
         FoundationStatus::decl(&config),
         MicPcmAcceptance::decl(&config),
+        VideoFrameAcceptance::decl(&config),
         SecretStatus::decl(&config),
         DiagnosticsExportResult::decl(&config),
         StartupState::decl(&config),
@@ -367,6 +401,7 @@ fn generated_bindings() -> String {
         SessionDetail::decl(&config),
         SessionTranscriptEvent::decl(&config),
         SessionReplyEvent::decl(&config),
+        SessionPlaybackControlEvent::decl(&config),
         AudioLevelEvent::decl(&config),
         AgentCommandInput::decl(&config),
         AgentCommandResult::decl(&config),
@@ -480,6 +515,7 @@ mod tests {
             "SessionCitationView",
             "SessionTranscriptEvent",
             "SessionReplyEvent",
+            "SessionPlaybackControlEvent",
             "AudioLevelEvent",
             "AgentCommandInput",
             "AgentCommandResult",

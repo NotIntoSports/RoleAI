@@ -1,6 +1,43 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { CHUNK_TARGET_MS, MicChunkBatcher, encodePcm16 } from "./mic-recorder";
+import { CHUNK_TARGET_MS, MicChunkBatcher, MicStreamer, encodePcm16 } from "./mic-recorder";
+
+describe("MicStreamer with a shared AudioContext", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("starts on the shared context and leaves it open on stop", async () => {
+    const track = { stop: vi.fn() };
+    const stream = { getTracks: () => [track] };
+    vi.stubGlobal("navigator", {
+      mediaDevices: { getUserMedia: vi.fn(async () => stream) },
+    });
+    vi.stubGlobal("URL", { createObjectURL: () => "blob:worklet", revokeObjectURL: () => {} });
+    vi.stubGlobal("Blob", class {});
+    vi.stubGlobal("AudioWorkletNode", class {
+      port: { onmessage: ((event: MessageEvent) => void) | null } = { onmessage: null };
+      connect() {}
+      disconnect() {}
+    });
+    const node = { connect: vi.fn(), disconnect: vi.fn(), gain: { value: 1 } };
+    const context = {
+      state: "running",
+      sampleRate: 48_000,
+      destination: {},
+      resume: vi.fn(async () => {}),
+      close: vi.fn(async () => {}),
+      audioWorklet: { addModule: vi.fn(async () => {}) },
+      createMediaStreamSource: vi.fn(() => node),
+      createGain: vi.fn(() => node),
+    } as unknown as AudioContext;
+
+    const streamer = new MicStreamer({ onChunk: () => {}, onError: () => {} }, context);
+    await expect(streamer.start()).resolves.toBeUndefined();
+    streamer.stop();
+
+    expect(track.stop).toHaveBeenCalled();
+    expect(context.close).not.toHaveBeenCalled();
+  });
+});
 
 describe("encodePcm16", () => {
   it("converts float samples to little-endian int16 and clamps overflow", () => {
