@@ -39,3 +39,13 @@ jobs:
       - run: npm run test:tauri-ui
       - run: node --test tests/tauri/*.test.mjs
       - run: npm run test:tauri
+
+  cargo-deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # 供应链检查：许可证、RustSec 漏洞公告、重复依赖、来源白名单（src-tauri/deny.toml）。
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: src-tauri/Cargo.toml
+          command: check
