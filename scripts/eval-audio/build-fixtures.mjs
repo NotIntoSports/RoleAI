@@ -293,9 +293,8 @@ function buildEcho(seed) {
     const delaySamples = Math.floor((0.05 + rng() * 0.15) * TARGET_RATE);
     const gainDb = -(10 + rng() * 15);
     const gain = 10 ** (gainDb / 20);
-    // 先把"用户回答"铺在时间轴上，再把回声叠加到同一段：
-    // 播报先响起，用户在其后开口，回声（播报延迟衰减）与用户语音重叠。
-    append(builder, questionClip); // 占位：播报本身的干信号（模拟本地听到的播报）
+    // 麦克风路径只包含：用户语音 + 播报的延迟衰减泄漏（回声）。
+    // 播报干信号不属于麦克风输入，不进入混音。
     const answerStart = builder.length + Math.floor((0.15 + rng() * 0.2) * TARGET_RATE);
     const answerEnd = answerStart + answerClip.length;
     if (answerEnd > builder.length) append(builder, answerClip);
@@ -336,7 +335,9 @@ function buildBargeIn(seed) {
     const questionClip = synthAt48k(PLAYBACK_SENTENCES[round % PLAYBACK_SENTENCES.length]);
     const answerClip = synthAt48k(ANSWER_SENTENCES[(round * 5 + 1) % ANSWER_SENTENCES.length]);
     const playbackStart = builder.length + Math.floor((0.4 + rng() * 0.4) * TARGET_RATE);
-    append(builder, questionClip);
+    // 播报经 AEC/房间衰减后仍被麦克风拾到（-12dB）：打断检测的常态输入背景。
+    const playbackBleed = questionClip.map((value) => value * 0.25);
+    append(builder, playbackBleed);
     // 用户在播报中段真实开口 → 应触发打断。
     const onset = playbackStart + Math.floor(questionClip.length * (0.35 + rng() * 0.25));
     const tail = builder.length - onset;
