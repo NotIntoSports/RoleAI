@@ -567,8 +567,16 @@ fn is_current_or_recent_echo(
     if crate::services::echo_guard::is_echo(user_text, recent_assistant) {
         return true;
     }
-    if !current.guard || !current.responding || !current.played_audio {
+    if !current.responding || !current.played_audio {
         return false;
+    }
+    // WebAudio 全双工上行常开：播报中的当轮回声转写对不上历史缓存（当轮
+    // 文本尚未入缓存），必须直接比对在途 assistant 文本——模型正念到的话
+    // 被麦克风回收，是「复述自己」症状的主源头。不启用 Native 的
+    // 「短句一律按回声」兜底：上行常开时真实插话会从中途到达，不能按
+    // 时长一刀切；且 echo_guard 对 <6 字的短句本就不判，真人确认词安全。
+    if !current.guard {
+        return crate::services::echo_guard::is_echo(user_text, &[current.assistant.to_string()]);
     }
     let user = crate::services::echo_guard::normalize(user_text);
     let spoken = crate::services::echo_guard::normalize(current.assistant);
@@ -741,6 +749,13 @@ fn run_pump(
                 }
             }
             Ok(PumpCommand::LocalBargeIn) => {
+                tracing::debug!(
+                    target: "realtime_pump",
+                    responding = turn.responding,
+                    uplink_open,
+                    ?playback_mode,
+                    "本地 barge_in（采集侧打断监听触发）"
+                );
                 // 本地打断：语义同服务端 speech_started——响应在途才清空取消。
                 if turn.responding {
                     let _ = playback.clear();
@@ -816,6 +831,13 @@ fn run_pump(
                 turn.timeline
                     .speech_started_ms
                     .get_or_insert_with(|| since_start().unwrap_or(0));
+                tracing::debug!(
+                    target: "realtime_pump",
+                    responding = turn.responding,
+                    played_audio = turn.played_audio,
+                    speech_started_ms = turn.timeline.speech_started_ms,
+                    "服务端 speech_started（服务端 VAD 听到用户开口）"
+                );
                 // 服务端 VAD 听见用户开口：若一轮响应在途，立即清空播放 + 取消生成
                 // （生成期插话服务端也会自动取消，客户端取消是确定性兜底）。
                 if turn.responding {
@@ -848,6 +870,12 @@ fn run_pump(
                     &current_turn_echo(&turn, post_playback_echo_until, playback_mode),
                 ) {
                     emit(&PumpLive::User(turn.user_text.clone()));
+                } else {
+                    tracing::debug!(
+                        target: "realtime_pump",
+                        text = %turn.user_text,
+                        "partial 用户转写判定为回声，不上屏"
+                    );
                 }
             }
             Some(ActorEvent::UserTranscriptCompleted { text, .. }) => {
@@ -863,6 +891,12 @@ fn run_pump(
                     recent_assistant.make_contiguous(),
                     &current_turn_echo(&turn, post_playback_echo_until, playback_mode),
                 ) {
+                    tracing::debug!(
+                        target: "realtime_pump",
+                        responding = turn.responding,
+                        text = %text,
+                        "用户转写定稿判定为回声：整轮丢弃并清服务端缓冲"
+                    );
                     // 回声轮：AI 播报声被麦克风回收成「用户发言」。取消在途响应、
                     // 清服务端缓冲，整轮丢弃——绝不 emit/成轮/落库，否则
                     // 「自己回答自己」的循环被固化为正式对话历史。
@@ -882,6 +916,12 @@ fn run_pump(
                     continue;
                 }
                 turn.user_text = text;
+                tracing::debug!(
+                    target: "realtime_pump",
+                    responding = turn.responding,
+                    text = %turn.user_text,
+                    "用户转写定稿（非回声，进入对话流）"
+                );
                 emit(&PumpLive::User(turn.user_text.clone()));
                 if !config.auto_respond {
                     // 会议助手点名门控：服务端 create_response=false，应答由泵决定。
@@ -1014,6 +1054,24 @@ fn run_pump(
                         recent_assistant.make_contiguous(),
                         &current_turn_echo(&turn, post_playback_echo_until, playback_mode),
                     );
+                tracing::debug!(
+                    target: "realtime_pump",
+                    cancelled,
+                    was_playing,
+                    responding = turn.responding,
+                    user_echo,
+                    echo_dropped = turn.echo_dropped,
+                    interrupted = turn.interrupted,
+                    user_text = %turn.user_text,
+                    assistant_chars = turn.assistant_text.chars().count(),
+                    speech_started_ms = turn.timeline.speech_started_ms,
+                    first_audio_ms = turn.timeline.first_audio_ms,
+                    response_done_ms = turn.timeline.response_done_ms,
+                    aec_residual_correlation = ?turn.aec_residual_correlation,
+                    aec_residual_max = ?turn.aec_residual_max,
+                    ?playback_mode,
+                    "响应结束（轮次定稿诊断）"
+                );
                 // 先截获本轮播报文本：下面 mem::take 进 CompletedTurn 后就取不到了。
                 let assistant_spoken = turn.assistant_text.clone();
                 let playback_diagnostics = playback.diagnostics();
@@ -1071,7 +1129,7 @@ fn run_pump(
                 } else if playback_mode == RealtimePlaybackMode::WebAudio {
                     // 前端 500ms jitter buffer 会让最后一个 delta 晚于 done 出声。
                     // 上行保持全双工开放；文本短片段兜底窗口覆盖尾音。
-                    post_playback_echo_until = Some(Instant::now() + Duration::from_millis(4_500));
+                    post_playback_echo_until = Some(Instant::now() + Duration::from_millis(6_000));
                 } else if was_playing {
                     // Rust 侧写入完成 ≠ 出声结束（sidecar 有播放缓冲）：
                     // 发 drain 并保持闸门关闭，等「已播净」回执后由循环头开门。
@@ -2605,6 +2663,53 @@ mod pump_tests {
                 true,
                 Some(Instant::now() - Duration::from_millis(500)),
             ),
+        ));
+    }
+
+    /// WebAudio 播报中的当轮回声：上行常开，在途回答被麦克风回收转写后
+    /// 必须判回声（历史缓存里还没有当轮文本，只能对在途 assistant 比对）。
+    #[test]
+    fn webaudio_current_turn_echo_is_detected_against_inflight_answer() {
+        fn webaudio(assistant: &str) -> CurrentTurnEcho<'_> {
+            CurrentTurnEcho {
+                assistant,
+                responding: true,
+                played_audio: true,
+                first_audio_at: Some(Instant::now()),
+                post_playback_until: None,
+                guard: false,
+            }
+        }
+        // 当轮播报被整体回收转写（同形/中文数字变体）。
+        assert!(is_current_or_recent_echo(
+            "国际现货黄金大约是四二八五美元每盎司",
+            &[],
+            &webaudio("国际现货黄金大约是4285美元每盎司，短线波动加剧。"),
+        ));
+        // 播报的截断片段（只回收半句）。
+        assert!(is_current_or_recent_echo(
+            "四二八五美元每盎司",
+            &[],
+            &webaudio("国际现货黄金大约是4285美元每盎司，短线波动加剧。"),
+        ));
+        // 播报中的真实插话：与在途回答无相似度，不得吞。
+        assert!(!is_current_or_recent_echo(
+            "等一下，先停一下",
+            &[],
+            &webaudio("国际现货黄金大约是4285美元每盎司，短线波动加剧。"),
+        ));
+        // 未出声（无播放）时不判：播报前到达的转写是真人语音。
+        assert!(!is_current_or_recent_echo(
+            "国际现货黄金大约是四二八五美元每盎司",
+            &[],
+            &CurrentTurnEcho {
+                assistant: "国际现货黄金大约是4285美元每盎司，短线波动加剧。",
+                responding: true,
+                played_audio: false,
+                first_audio_at: None,
+                post_playback_until: None,
+                guard: false,
+            },
         ));
     }
 

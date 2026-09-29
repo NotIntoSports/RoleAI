@@ -95,6 +95,13 @@ export function useSessionEvents({
   const applyPlaybackControl = useCallback((payload: LocalSessionPlaybackControlEvent) => {
     if (payload.seq <= playbackSeq.current) return;
     playbackSeq.current = payload.seq;
+    // 打断链路前端侧定位：Clear 是否到达、播放器实例是否在、清空调用是否执行。
+    console.debug(
+      "[playback-control]",
+      payload.action,
+      "seq=" + payload.seq,
+      "player=" + Boolean(webAudioPlayerRef.current),
+    );
     webAudioPlayerRef.current?.clear();
   }, [webAudioPlayerRef]);
 
