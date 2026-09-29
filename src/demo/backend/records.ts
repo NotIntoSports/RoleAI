@@ -54,12 +54,12 @@ function downloadMarkdown(fileName: string, content: string): void {
   }
 }
 
-/** B05 实时会话：创建一条进行中的会话。 */
+/** B05 实时会话：创建一条进行中的会话（status 为工作台的活跃相位）。 */
 export function createLiveSession(roleProfileId: string, transportMode: string): SessionSummary {
   const now = new Date().toISOString();
   const session: SessionSummary = {
     id: demoId("session"),
-    status: "active",
+    status: "listening",
     roleProfileId,
     voiceRouteId: getState().activeVoiceRouteId ?? "route-demo-realtime",
     transportMode,
@@ -74,16 +74,21 @@ export function createLiveSession(roleProfileId: string, transportMode: string):
   return session;
 }
 
-/** B05 实时会话：把一轮问答落库。 */
-export function appendLiveTurn(sessionId: string, userText: string, assistantText: string): SessionTurnView {
+/** B05 实时会话：把一轮问答落库（可带资料引用）。 */
+export function appendLiveTurn(
+  sessionId: string,
+  userText: string,
+  assistantText: string,
+  extras?: { materialsUsed?: boolean; citations?: SessionTurnView["citations"] },
+): SessionTurnView {
   const now = new Date().toISOString();
   const turn: SessionTurnView = {
     id: demoId("turn"),
     turnIndex: (getState().sessionTurns[sessionId]?.length ?? 0) + 1,
     userText,
     assistantText,
-    materialsUsed: false,
-    citations: [],
+    materialsUsed: extras?.materialsUsed ?? false,
+    citations: extras?.citations ?? [],
     createdAt: now,
   };
   updateState((s) => {
@@ -92,6 +97,49 @@ export function appendLiveTurn(sessionId: string, userText: string, assistantTex
     if (index !== -1) s.sessions[index] = { ...s.sessions[index], updatedAt: now };
   });
   return turn;
+}
+
+/** B05 实时会话：回填最近一条等待回答的轮的助手文本（流式 done 时调用）。 */
+export function updateLiveTurnAssistant(
+  sessionId: string,
+  userText: string,
+  assistantText: string,
+  extras?: { materialsUsed?: boolean; citations?: SessionTurnView["citations"] },
+): void {
+  const now = new Date().toISOString();
+  updateState((s) => {
+    const turns = s.sessionTurns[sessionId] ?? [];
+    // 手写倒序查找（lib 是 ES2022，没有 findLastIndex）。
+    let index = -1;
+    for (let i = turns.length - 1; i >= 0; i -= 1) {
+      if (turns[i].userText === userText) {
+        index = i;
+        break;
+      }
+    }
+    if (index === -1) {
+      s.sessionTurns[sessionId] = [
+        ...turns,
+        {
+          id: demoId("turn"),
+          turnIndex: turns.length + 1,
+          userText,
+          assistantText,
+          materialsUsed: extras?.materialsUsed ?? false,
+          citations: extras?.citations ?? [],
+          createdAt: now,
+        },
+      ];
+      return;
+    }
+    const updated: SessionTurnView = {
+      ...turns[index],
+      assistantText,
+      materialsUsed: turns[index].materialsUsed || Boolean(extras?.materialsUsed),
+      citations: turns[index].citations.length ? turns[index].citations : extras?.citations ?? [],
+    };
+    s.sessionTurns[sessionId] = turns.map((turn, i) => (i === index ? updated : turn));
+  });
 }
 
 /** B05 实时会话：结束会话。 */

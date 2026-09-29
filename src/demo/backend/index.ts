@@ -15,6 +15,7 @@ import type {
 } from "../../generated/bindings";
 
 import { handleConfigCommand } from "./config";
+import { handleLiveSessionCommand, liveRuntimeStatus } from "./live-commands";
 import { handleMaterialCommand } from "./materials";
 import { handleProviderCommand } from "./providers";
 import { handleRecordCommand } from "./records";
@@ -107,12 +108,19 @@ export function handleDemoInvoke(cmd: string, payload?: DemoPayload): unknown {
       ? (payload as Record<string, unknown>)
       : {};
   switch (cmd) {
-    case "runtime_get_status":
+    case "runtime_get_status": {
+      const live = liveRuntimeStatus();
+      if (live) return ok(live);
       return latency(10, 50).then(() => ok(idleRuntime()));
+    }
     case "legacy_import_source":
       return latency(200, 500).then(() => ok({ sessions: 0, turns: 0 } satisfies LegacySessionImport));
-    default:
+    default: {
+      // 实时会话命令优先于记录/资料等静态领域。
+      const liveResult = handleLiveSessionCommand(cmd, args);
+      if (liveResult !== undefined) return liveResult;
       return dispatch(cmd, args);
+    }
   }
 }
 
