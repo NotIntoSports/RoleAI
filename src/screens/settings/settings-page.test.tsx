@@ -12,6 +12,7 @@ vi.mock("../../api/commands", () => ({
   copyRoleProfile: vi.fn(),
   activateRoleProfile: vi.fn(),
   deleteRoleProfile: vi.fn(),
+  getDiagnosticsLatencySummary: vi.fn(),
 }));
 
 describe("SettingsPage", () => {
@@ -87,6 +88,19 @@ describe("SettingsPage", () => {
     render(<SettingsPage />);
     fireEvent.click(screen.getByRole("button", { name: "角色" }));
     expect(await screen.findByRole("heading", { name: "角色" })).toBeTruthy();
+  });
+
+  it("loads the latency summary only after the diagnostics category is opened", async () => {
+    vi.mocked(commands.getDiagnosticsLatencySummary).mockResolvedValue({
+      ok: true,
+      data: { sessionsScanned: 0, routes: [] },
+    });
+    render(<SettingsPage />);
+    expect(commands.getDiagnosticsLatencySummary).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "诊断" }));
+    expect(await screen.findByRole("heading", { name: "诊断延迟" })).toBeTruthy();
+    expect(commands.getDiagnosticsLatencySummary).toHaveBeenCalledWith(20);
+    expect(await screen.findByText("暂无线路延迟样本。")).toBeTruthy();
   });
 
   it("includes the legacy session import panel", async () => {

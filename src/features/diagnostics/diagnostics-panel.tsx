@@ -2,17 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { EmptyState } from "../../components/empty-state";
 import { ErrorNotice } from "../../components/error-notice";
+import type { DiagnosticsLatencySummary, RouteLatencySummary } from "../../generated/bindings";
 
-// 与 bindings.ts 中同名类型一致，联调时改为 import。
-export type RouteLatencySummary = {
-  routeId: string;
-  routeLabel: string;
-  samples: number;
-  p50Ms: number | null;
-  p95Ms: number | null;
-  ingressDroppedTotal: number;
-};
-export type DiagnosticsLatencySummary = { sessionsScanned: number; routes: RouteLatencySummary[] };
+export type { DiagnosticsLatencySummary, RouteLatencySummary };
 
 // 面板每次拉取的会话扫描上限；与后端 getDiagnosticsLatencySummary 的 limit 参数对应，联调时可调整。
 const DEFAULT_LIMIT = 20;
