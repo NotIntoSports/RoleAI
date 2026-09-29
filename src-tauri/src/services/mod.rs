@@ -9,6 +9,16 @@ mod providers;
 mod realtime_pump;
 mod roles;
 pub(crate) mod sessions;
+
+/// 基准支撑（C32）：把 crate 内部热路径以最小面暴露给 `src-tauri/benches/`。
+/// 仅 benches/*.rs 允许使用；不为基准把内部 API 公开成正式接口（手册 C31）。
+#[doc(hidden)]
+pub mod bench_support {
+    pub use super::echo_guard::{
+        gate_drain_deadline_from_bytes, gate_timers_expired, is_echo, normalize,
+    };
+}
+
 pub(crate) use realtime_pump::{PlaybackControl, PumpLive, RealtimePlaybackMode};
 pub use sessions::MeetingCapture;
 pub(crate) use sessions::{RealtimePumpDeps, active_session_role_scenario, e2e_instructions};
