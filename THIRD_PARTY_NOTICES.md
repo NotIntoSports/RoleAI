@@ -33,8 +33,16 @@ The source repository and Windows distribution use third-party components. Their
 | docx-rs | MIT | https://github.com/bokuweb/docx-rs |
 | windows-sys | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs |
 | NAudio.Wasapi | MIT | https://github.com/naudio/NAudio |
+| silero-vad-rust | MIT (ships the bundled Silero VAD ONNX model) | https://github.com/sheldonix/silero-vad-rust |
+| Silero VAD ONNX model (bundled by silero-vad-rust) | MIT | https://github.com/snakers4/silero-vad |
+| ort | MIT OR Apache-2.0 (statically links ONNX Runtime) | https://github.com/pykeio/ort |
+| ONNX Runtime | MIT | https://github.com/microsoft/onnxruntime |
+| rustfft | MIT OR Apache-2.0 | https://github.com/ejmahler/RustFFT |
+| obws | MIT | https://forge.dnaka91.rocks/dnaka91/obws |
+| tauri-plugin-global-shortcut | Apache-2.0 OR MIT | https://github.com/tauri-apps/plugins-workspace |
+| smart-turn v3 model, smart-turn-v3.2-cpu.onnx (bundled at resources/models/) | BSD-2-Clause | https://github.com/pipecat-ai/smart-turn |
 
-Licenses above are taken from the locked crate / npm / NuGet metadata for the versions this repository depends on. Transitive crates keep their own licenses.
+Licenses above are taken from the locked crate / npm / NuGet metadata for the versions this repository depends on; bundled model asset licenses are taken from the upstream repository LICENSE files. Transitive crates keep their own licenses.
 
 Portable OBS and VB-CABLE are not packaged or started by the current Tauri build. Path and probe code can use a local copy under `resources/prerequisites` if you place one there; that leftover is not a managed OBS / virtual-cam product path.
 
@@ -83,3 +91,33 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## smart-turn v3 model license (BSD-2-Clause)
+
+The bundled smart-turn-v3.2-cpu.onnx model is from the pipecat-ai/smart-turn
+project and is distributed under the following license:
+
+BSD 2-Clause License
+
+Copyright (c) 2024–2025, Daily
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
