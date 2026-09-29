@@ -4,13 +4,32 @@
 import { fileURLToPath } from "node:url";
 
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 
 const demoBase = process.env.DEMO_BASE ?? "/RoleAI/demo/";
 
+/** dev 模式把文档请求改写到 demo.html（vite dev 默认只会回 index.html）。 */
+function demoHtmlEntry(): Plugin {
+  return {
+    name: "demo-html-entry",
+    apply: "serve",
+    configureServer(server) {
+      server.middlewares.use((req, _res, next) => {
+        const raw = (req.url ?? "/").split("?")[0];
+        const withoutBase = raw.startsWith(demoBase) ? raw.slice(demoBase.length - 1) : raw;
+        if (withoutBase === "/" || withoutBase === "/index.html") {
+          // vite 的 base 中间件在后面运行：这里必须保留 base 前缀。
+          req.url = `${demoBase}demo.html`;
+        }
+        next();
+      });
+    },
+  };
+}
+
 export default defineConfig({
   base: demoBase,
-  plugins: [react()],
+  plugins: [react(), demoHtmlEntry()],
   clearScreen: false,
   publicDir: false,
   server: {

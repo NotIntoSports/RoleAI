@@ -48,3 +48,5 @@ resources/prerequisites/*
 !resources/prerequisites/.gitkeep
 .codex-tmp/
 .local-archive/
+test-results/
+playwright-report/
