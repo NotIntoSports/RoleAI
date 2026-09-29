@@ -277,7 +277,8 @@ export function WorkspaceSession({
                 setTranscript("");
                 setReply("");
               }
-              setUnusedMaterials(!last.materialsUsed);
+              // 仅转写轮（有用户文本、无回答）：不算「未使用资料」。
+              setUnusedMaterials(!last.materialsUsed && !(last.userText && !last.assistantText));
               setWebSources(last.webSources ?? []);
               setWebDegraded(last.webDegraded ?? false);
               const pending = last.playbackStatus === "pending_confirmation" && last.userConfirmed !== true
@@ -307,6 +308,8 @@ export function WorkspaceSession({
     && (transcript === "" || lastTurn.userText.startsWith(transcript))
     && (reply === "" || lastTurn.assistantText.startsWith(reply));
   const historyTurns = lastTurnIsLive ? turns.slice(0, -1) : turns;
+  // 最后一轮「有用户文本、没有回答」：发言尚未获回答（如仅转写轮），按钮高亮引导追答。
+  const assistantPending = !!lastTurn?.userText && !lastTurn?.assistantText;
 
   useEffect(() => {
     void (async () => {
@@ -355,7 +358,7 @@ export function WorkspaceSession({
   const roleName = config?.roleProfiles.find((role) => role.id === roleProfileId)?.name ?? "RoleAI";
   const showBargeHint = active && phase === "speaking" && allowBargeIn && mode === "ai_active";
   const selectedRoleScenario = roleScenario(config, roleProfileId);
-  const { realtimeStatus, setRealtimeStatus, resetStreamSeq } = useSessionEvents({
+  const { realtimeStatus, setRealtimeStatus, resetStreamSeq, triggerAssistant } = useSessionEvents({
     listen,
     refresh,
     applyStatus,
@@ -529,6 +532,8 @@ export function WorkspaceSession({
         allowWebSearch={allowWebSearch}
         allowBargeIn={allowBargeIn}
         setAllowBargeIn={setAllowBargeIn}
+        onTriggerAssistant={triggerAssistant}
+        assistantPending={assistantPending}
       />
       <PreflightIssues issues={issues} />
       {webDegraded && <p className="services-message">联网搜索未成功，本次回答未联网，请勿作为最新信息使用。</p>}
@@ -555,6 +560,8 @@ export function WorkspaceSession({
         onConfirmCandidate={confirmCandidateAnswer}
         busy={busy}
         unusedMaterials={unusedMaterials}
+        showTranscriptOnlyNotes={inputSource === "meeting" && selectedRoleScenario === "meetingAssistant"}
+        onTriggerAssistant={triggerAssistant}
         onCopy={copyText}
         onAdjustConfiguration={() => {
           setConfigurationOpen(true);

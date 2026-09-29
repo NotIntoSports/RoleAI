@@ -74,6 +74,9 @@ interface SessionToolbarProps {
   allowWebSearch: boolean;
   allowBargeIn: boolean;
   setAllowBargeIn: (allow: boolean) => void;
+  onTriggerAssistant: () => void;
+  /** 最后一轮有用户文本、没有回答：存在可追答的发言，按钮加 data-pending 高亮。 */
+  assistantPending: boolean;
 }
 
 export function SessionToolbar({
@@ -111,7 +114,10 @@ export function SessionToolbar({
   allowWebSearch,
   allowBargeIn,
   setAllowBargeIn,
+  onTriggerAssistant,
+  assistantPending,
 }: SessionToolbarProps) {
+  const meetingGating = active && inputSource === "meeting" && selectedRoleScenario === "meetingAssistant";
   return (
     <header className="session-toolbar">
       <div className="session-toolbar-meta">
@@ -122,7 +128,15 @@ export function SessionToolbar({
         {realtimeStatus === "reconnecting" && <span className="status-badge" data-active={active}>语音重连中…</span>}
         {realtimeStatus === "failed" && <span className="status-badge" data-active={false}>语音连接失败</span>}
         <span className="session-mode">{MODE_LABELS[mode] ?? mode}</span>
+        {/* 会话配置 fieldset 在会话进行中整体禁用，按钮必须放外面才可点。 */}
+        {meetingGating && (
+          <button type="button" className="button-primary" data-pending={assistantPending} disabled={busy} onClick={onTriggerAssistant}>让助手回答</button>
+        )}
       </div>
+      {/* 门控常驻提示：放在「会话配置」折叠区之外，会话进行中始终可见。 */}
+      {meetingGating && (
+        <p className="session-gating-hint">会议助手模式：普通讨论只转写，说出“会议助手”或点「让助手回答」才会回答。</p>
+      )}
       <div className="session-config-heading">
         <span className="session-config-summary">{inputSource === "meeting" ? "会议音频" : "本机麦克风"} · {config?.speech.voiceRoutes.find((route) => route.id === voiceRouteId)?.name ?? "尚未选择语音线路"}</span>
         <button type="button" className="button-ghost" aria-expanded={configurationOpen} aria-controls="session-configuration" onClick={() => setConfigurationOpen(!configurationOpen)}><Wrench size={15} aria-hidden="true" />会话配置<ChevronDown size={14} aria-hidden="true" /></button>

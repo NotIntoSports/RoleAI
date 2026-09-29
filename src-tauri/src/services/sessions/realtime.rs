@@ -74,6 +74,7 @@ impl<S: PlaybackSink> SessionService<S> {
                 suppress_echo: Some(Box::new(move |duration| {
                     echo_suppress.suppress_for(duration);
                 })),
+                respond_start_timeout: crate::services::realtime_pump::RESPOND_START_TIMEOUT,
             },
             live_sink,
         );
@@ -121,6 +122,35 @@ impl<S: PlaybackSink> SessionService<S> {
         self.realtime_shared
             .as_ref()
             .and_then(|shared| shared.take_completed())
+    }
+
+    /// 泵是否在跑（端到端流式路线装配成功）。
+    pub fn realtime_pump_running(&self) -> bool {
+        self.realtime_pump.is_some()
+    }
+
+    /// 是否存在可强制回答的仅转写发言（热键/按钮的 NOTHING_TO_ANSWER 判定）。
+    pub fn realtime_has_transcript_only(&self) -> bool {
+        self.realtime_shared
+            .as_ref()
+            .is_some_and(|shared| {
+                shared
+                    .last_transcript_only
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .is_some()
+            })
+    }
+
+    /// 强制会议助手回答最近一条仅转写发言（Ctrl+Alt+A / 「让助手回答」）。
+    /// 回答由泵异步生成，前端就绪轮询落库；返回 false 表示无泵（级联路线
+    /// 或未装配），调用方应回退级联 forced 分支。
+    pub fn trigger_realtime_assistant(&self) -> bool {
+        let Some(pump) = self.realtime_pump.as_ref() else {
+            return false;
+        };
+        pump.send(crate::services::realtime_pump::PumpCommand::ForceRespond);
+        true
     }
 
     /// 取走泵的终局错误（一次）。

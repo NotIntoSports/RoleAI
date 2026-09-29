@@ -53,6 +53,19 @@ export function useSessionEvents({
   const hotkeyInFlight = useRef(false);
   const [realtimeStatus, setRealtimeStatus] = useState("idle");
 
+  // 快捷键与「让助手回答」按钮共用的触发逻辑：hotkeyInFlight 防重复触发。
+  const triggerAssistant = useCallback(() => {
+    if (hotkeyInFlight.current) return;
+    hotkeyInFlight.current = true;
+    void api.triggerMeetingAssistant()
+      .then((result) => {
+        if (!result.ok) setMessage(errorText(result.error));
+        else return refresh();
+      })
+      .catch(() => setMessage("快捷提问失败，请回到工作台重试。"))
+      .finally(() => { hotkeyInFlight.current = false; });
+  }, [refresh, setMessage]);
+
   const applyTranscript = useCallback((payload: SessionTranscriptEvent) => {
     if (payload.seq > transcriptSeq.current) {
       transcriptSeq.current = payload.seq;
@@ -146,15 +159,7 @@ export function useSessionEvents({
     void (async () => {
       try {
         unlisten = await Promise.resolve(listen("session:assistant_hotkey:v1", () => {
-          if (disposed || hotkeyInFlight.current) return;
-          hotkeyInFlight.current = true;
-          void api.triggerMeetingAssistant()
-            .then((result) => {
-              if (!result.ok) setMessage(errorText(result.error));
-              else return refresh();
-            })
-            .catch(() => setMessage("快捷提问失败，请回到工作台重试。"))
-            .finally(() => { hotkeyInFlight.current = false; });
+          if (!disposed) triggerAssistant();
         }));
       } catch {
         if (!disposed) setMessage("全局快捷键事件不可用；仍可在工作台点击提问。");
@@ -164,7 +169,7 @@ export function useSessionEvents({
       disposed = true;
       unlisten();
     };
-  }, [active, inputSource, selectedRoleScenario, refresh, listen, setMessage]);
+  }, [active, inputSource, selectedRoleScenario, triggerAssistant, listen, setMessage]);
 
   // 新会话从零计流式字幕 seq：上一会话的 partial 用过大号 seq，
   // 不重置会把本会话开头的字幕事件整体门控丢弃。
@@ -174,5 +179,5 @@ export function useSessionEvents({
     playbackSeq.current = 0;
   }, []);
 
-  return { realtimeStatus, setRealtimeStatus, resetStreamSeq };
+  return { realtimeStatus, setRealtimeStatus, resetStreamSeq, triggerAssistant };
 }

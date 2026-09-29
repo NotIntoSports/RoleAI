@@ -209,6 +209,8 @@ impl<S: PlaybackSink> SessionService<S> {
         };
         let mut pump_playback_status: Option<&'static str> = None;
         let mut pump_turn_meta = serde_json::Value::Null;
+        // 看门狗放弃的轮次：落库后把 REALTIME_NO_RESPONSE 透给 runtime status。
+        let mut pump_response_failed = false;
         let turn = if transcript_only {
             CascadeTurn {
                 user_text: transcribed_meeting_text.unwrap_or_default(),
@@ -268,12 +270,23 @@ impl<S: PlaybackSink> SessionService<S> {
                 "timeline": completed.timeline,
                 "finalizeLagMs": completed.completed_at.elapsed().as_millis() as u64,
             });
+            if completed.forced {
+                // 热键/按钮强制回答的轮次：覆盖默认的 voice 触发来源。
+                pump_turn_meta["triggerSource"] = serde_json::json!("hotkey");
+            }
+            if completed.response_failed {
+                // 回答始终未开始（看门狗放弃）：turn_meta 留痕并上报错误码。
+                pump_turn_meta["responseFailed"] = serde_json::json!(true);
+                pump_response_failed = true;
+            }
             pump_playback_status = if completed.interrupted {
                 Some("interrupted")
             } else if completed.transcript_only {
                 Some("text_only")
             } else if completed.held {
                 None // 候选闸门：由 candidate 分支标注 pending_confirmation
+            } else if completed.response_failed {
+                Some("failed")
             } else if completed.playback_write_failed || !completed.playback_alive {
                 Some("failed")
             } else if completed.audio_bytes == 0 {
@@ -368,6 +381,11 @@ impl<S: PlaybackSink> SessionService<S> {
         self.revision += 1;
         self.unused_materials = !turn.materials_used;
         self.last_error_code = None;
+        if pump_response_failed {
+            // 端到端服务端始终没有开始响应（看门狗放弃）：错误码经 runtime
+            // status 通道透出，前端映射为「助手这次没有响应」提示。
+            self.last_error_code = Some("REALTIME_NO_RESPONSE".into());
+        }
         if self.realtime_pump.is_some() {
             let mut updated_history: Vec<(String, String)> = history
                 .iter()

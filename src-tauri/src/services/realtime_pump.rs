@@ -21,6 +21,12 @@ use crate::audio::playback::PlaybackDiagnostics;
 
 use super::echo_guard::{GATE_DRAIN_FALLBACK_TAIL, gate_drain_deadline_from_bytes, gate_timers_expired};
 
+/// 回答开始看门狗：`RespondText` 发出后迟迟收不到 `response.created` 时，
+/// 第一次超时清服务端输入缓冲并重发一次；再超时放弃本轮（response_failed
+/// 成轮）。实测 Qwen-Omni 偶发吞掉 item.create+response.create 后沉默 60-90s，
+/// 服务端 `RESPONSE_TIMEOUT` 只从 response.created 起算，罩不住这一段。
+pub const RESPOND_START_TIMEOUT: Duration = Duration::from_secs(8);
+
 /// 流式播放抽象：生产实现是常驻 AudioBridge `StreamPlayback`；测试用内存替身。
 pub trait PlaybackStream: Send + Sync {
     fn write(&self, pcm: &[u8]) -> Result<(), &'static str>;
@@ -115,6 +121,8 @@ pub struct CompletedTurn {
     pub held: bool,
     /// 本轮收到的助手 PCM 字节数；区分服务端没给音频与播放链路无声。
     pub audio_bytes: usize,
+    /// 本轮回答由热键/按钮强制触发（未点名的仅转写发言被追答）。
+    pub forced: bool,
     /// 播放写入失败（sidecar 死亡/管道断开）时保留诊断信号。
     pub playback_write_failed: bool,
     /// response.done 时流式播放 sidecar 是否仍存活。
@@ -138,12 +146,17 @@ pub struct CompletedTurn {
     pub echo_dropped: bool,
     /// 截至本轮完成时，泵累计丢弃的回声轮数。
     pub echo_dropped_total: u64,
+    /// 回答请求发出后始终未开始（看门狗放弃）：用户文本保留、回答为空。
+    pub response_failed: bool,
 }
 
 /// 泵与 SessionService 之间的共享状态。
 #[derive(Default)]
 pub struct PumpShared {
     completed: Mutex<VecDeque<CompletedTurn>>,
+    /// 最近一条未点名的仅转写文本：热键/按钮强制回答（ForceRespond）的候选
+    /// 素材。生成仅转写轮时写入，任一真实响应开始时清空（素材已被消费）。
+    pub last_transcript_only: Mutex<Option<String>>,
     /// AI 播报中（UI 阶段显示用）。
     pub speaking: AtomicBool,
     /// 连接重连中（UI 提示用）。
@@ -239,6 +252,9 @@ pub enum PumpCommand {
     Shutdown,
     /// 更新上下文回放历史（每轮落库后同步，供重连回放）。
     SetHistory(Vec<(String, String)>),
+    /// 热键/按钮强制回答：对当前在途用户转写、或最近一条未点名的仅转写
+    /// 发言发起应答。回答进行中收到时忽略。
+    ForceRespond,
 }
 
 pub struct RealtimePump {
@@ -258,6 +274,8 @@ pub struct PumpConfig {
     /// 播报回声抑制续窗：每次音频落设备后以「delta 时长 + 尾窗」调用；
     /// None 表示无麦克风抑制需求（纯文字会话）。
     pub suppress_echo: Option<Box<dyn Fn(std::time::Duration) + Send + Sync>>,
+    /// 回答开始看门狗超时；生产默认 `RESPOND_START_TIMEOUT`，测试调短。
+    pub respond_start_timeout: Duration,
 }
 
 impl RealtimePump {
@@ -420,9 +438,21 @@ struct TurnAccumulator {
     playback_write_failed: bool,
     interrupted: bool,
     transcript_only: bool,
+    /// 本轮应答由 ForceRespond 触发（写入 CompletedTurn.forced 供 turn_meta 标注）。
+    forced: bool,
     /// 本轮被文本回声过滤判定为回声（AI 播报声被麦克风回收）：done 到达时
     /// 不成轮不落库，否则自问自答循环会被固化进历史。
     echo_dropped: bool,
+    /// 正在应答的那句话的转写 item_id（点名=定稿 item；ForceRespond=在途
+    /// delta item；文本来自 last_transcript_only 记 None）。回答期间据以
+    /// 区分「同一句话的定稿」与「新的一句话」。
+    answer_item_id: Option<String>,
+    /// 最近一次用户转写 delta 的 item_id（ForceRespond 判定回答素材归属）。
+    last_user_item_id: Option<String>,
+    /// 回答开始看门狗：RespondText 发出时刻；收到 ResponseStarted 即清空。
+    respond_requested_at: Option<Instant>,
+    /// 看门狗重试次数：0=未重试（首次超时重发），1=已重试（再超时放弃）。
+    respond_attempts: u8,
 }
 
 impl TurnAccumulator {
@@ -450,7 +480,12 @@ impl TurnAccumulator {
             playback_write_failed: false,
             interrupted: false,
             transcript_only: false,
+            forced: false,
             echo_dropped: false,
+            answer_item_id: None,
+            last_user_item_id: None,
+            respond_requested_at: None,
+            respond_attempts: 0,
         }
     }
 
@@ -517,6 +552,7 @@ fn flush_in_flight_turn(
             interrupted: responding || turn.interrupted,
             transcript_only: !responding,
             held: false,
+            forced: turn.forced,
             audio_bytes: turn.audio_bytes,
             playback_write_failed: turn.playback_write_failed,
             playback_alive: playback.is_alive(),
@@ -536,6 +572,7 @@ fn flush_in_flight_turn(
             playback_last_event: diagnostics.last_event,
             echo_dropped: turn.echo_dropped,
             echo_dropped_total: shared.echo_dropped_total(),
+            response_failed: false,
             timeline: turn.timeline.clone(),
             completed_at: Instant::now(),
         });
@@ -649,6 +686,10 @@ fn run_pump(
     let mut turn = TurnAccumulator::new();
     // 重连前已定稿、但响应尚未开始的用户文本；Connected 后用文本轮恢复应答。
     let mut pending_recovered_text: Option<String> = None;
+    // 门控模式回答在途期间收到的新点名：当前回答结束后自动发起
+    // （最多保留最新 1 条，新点名覆盖旧点名）。
+    let mut pending_mention: Option<String> = None;
+    let respond_start_timeout = config.respond_start_timeout;
     let mut held_audio: Vec<u8> = Vec::new();
     const HELD_CAP_BYTES: usize = 60 * 48_000; // 60s@24k 上限，溢出即弃并停止扣留
     // 回声闸门（仅 Native/会议桥接路径）：播报/播净期间关闭——麦克风不认证上行
@@ -783,6 +824,57 @@ fn run_pump(
             Ok(PumpCommand::SetHistory(history)) => {
                 session.send(ActorCommand::SetHistory(history));
             }
+            Ok(PumpCommand::ForceRespond) => {
+                // 热键/按钮强制回答：正在回答时忽略；否则取当前在途的用户
+                // 转写，没有就取最近一条仅转写发言，以文本轮发起应答（与
+                // 重连恢复的文本应答同路）。语义上等于用户点名。
+                if turn.responding {
+                    tracing::debug!(
+                        target: "realtime_pump",
+                        "强制回答被忽略：响应已在途"
+                    );
+                } else {
+                    let text = (!turn.user_text.is_empty())
+                        .then(|| turn.user_text.clone())
+                        .or_else(|| {
+                            shared
+                                .last_transcript_only
+                                .lock()
+                                .unwrap_or_else(|p| p.into_inner())
+                                .clone()
+                        });
+                    if let Some(text) = text {
+                        tracing::debug!(
+                            target: "realtime_pump",
+                            text = %text,
+                            "强制回答：对仅转写发言发起应答"
+                        );
+                        shared
+                            .last_transcript_only
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner())
+                            .take();
+                        // 文本取自在途转写 delta 时记录其 item_id：同一句话的
+                        // 定稿 completed 晚到时据以识别，不被当作新发言；取自
+                        // last_transcript_only 时记 None（原 item 已成轮）。
+                        let answer_item_id = if turn.user_text.is_empty() {
+                            None
+                        } else {
+                            turn.last_user_item_id.clone()
+                        };
+                        turn.user_text = text.clone();
+                        turn.answer_item_id = answer_item_id;
+                        turn.forced = true;
+                        turn.responding = true;
+                        turn.response_closed = false;
+                        turn.echo_dropped = false;
+                        turn.respond_requested_at = Some(Instant::now());
+                        turn.respond_attempts = 0;
+                        emit(&PumpLive::User(text));
+                        session.send(ActorCommand::RespondText(turn.user_text.clone()));
+                    }
+                }
+            }
             Err(mpsc::TryRecvError::Empty) => {}
         }
         // 3) Actor 事件。
@@ -795,6 +887,8 @@ fn run_pump(
                     turn.user_text = text.clone();
                     turn.responding = true;
                     turn.response_closed = false;
+                    turn.respond_requested_at = Some(Instant::now());
+                    turn.respond_attempts = 0;
                     emit(&PumpLive::User(text.clone()));
                     session.send(ActorCommand::RespondText(text));
                 }
@@ -841,13 +935,23 @@ fn run_pump(
                 // 服务端 VAD 听见用户开口：若一轮响应在途，立即清空播放 + 取消生成
                 // （生成期插话服务端也会自动取消，客户端取消是确定性兜底）。
                 if turn.responding {
-                    let _ = playback.clear();
-                    session.send(ActorCommand::CancelResponse);
-                    emit(&PumpLive::PlaybackControl(PlaybackControl::Clear));
-                    turn.interrupted = true;
-                    shared.speaking.store(false, Ordering::SeqCst);
-                    emit(&PumpLive::Speaking(false));
-                    shared.interrupted_total.fetch_add(1, Ordering::Relaxed);
+                    if !config.auto_respond && !turn.played_audio {
+                        // 门控模式（会议助手 + 会议桥接）回答还没出声：别人插话、
+                        // 环境噪声或用户自己接着说都会触发 speech_started，此时
+                        // 取消会让点名/强制回答永远出不了声。只记日志不打断。
+                        tracing::debug!(
+                            target: "realtime_pump",
+                            "门控模式：回答未出声，忽略服务端 speech_started"
+                        );
+                    } else {
+                        let _ = playback.clear();
+                        session.send(ActorCommand::CancelResponse);
+                        emit(&PumpLive::PlaybackControl(PlaybackControl::Clear));
+                        turn.interrupted = true;
+                        shared.speaking.store(false, Ordering::SeqCst);
+                        emit(&PumpLive::Speaking(false));
+                        shared.interrupted_total.fetch_add(1, Ordering::Relaxed);
+                    }
                 }
             }
             Some(ActorEvent::SpeechStopped) => {
@@ -860,25 +964,54 @@ fn run_pump(
                 turn.timeline.response_created_ms = since_start();
                 turn.responding = true;
                 turn.response_closed = false;
+                // 服务端已确认响应开始：回答开始看门狗解除。
+                turn.respond_requested_at = None;
+                // 真实响应开始：强制回答的候选素材视为已消费，避免响应失败
+                // 前素材残留导致重复追答同一句。
+                shared
+                    .last_transcript_only
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .take();
             }
-            Some(ActorEvent::UserTranscriptDelta { text, .. }) => {
-                turn.user_text = text;
-                // 回声转写的 partial 快照也不上屏：定稿判定回声时屏幕不应闪现过。
-                if !is_current_or_recent_echo(
-                    &turn.user_text,
-                    recent_assistant.make_contiguous(),
-                    &current_turn_echo(&turn, post_playback_echo_until, playback_mode),
-                ) {
-                    emit(&PumpLive::User(turn.user_text.clone()));
+            Some(ActorEvent::UserTranscriptDelta { item_id, text }) => {
+                // 门控模式回答在途：另一句话的 partial 只上屏，不得覆盖正在
+                // 回答的用户文本（其定稿 completed 会按新发言单独成轮）。
+                let same_answer = turn.answer_item_id.as_deref() == Some(item_id.as_str());
+                if !config.auto_respond && turn.responding && !same_answer {
+                    if !is_current_or_recent_echo(
+                        &text,
+                        recent_assistant.make_contiguous(),
+                        &current_turn_echo(&turn, post_playback_echo_until, playback_mode),
+                    ) {
+                        emit(&PumpLive::User(text));
+                    } else {
+                        tracing::debug!(
+                            target: "realtime_pump",
+                            text = %text,
+                            "partial 用户转写判定为回声，不上屏"
+                        );
+                    }
                 } else {
-                    tracing::debug!(
-                        target: "realtime_pump",
-                        text = %turn.user_text,
-                        "partial 用户转写判定为回声，不上屏"
-                    );
+                    turn.last_user_item_id = Some(item_id);
+                    turn.user_text = text;
+                    // 回声转写的 partial 快照也不上屏：定稿判定回声时屏幕不应闪现过。
+                    if !is_current_or_recent_echo(
+                        &turn.user_text,
+                        recent_assistant.make_contiguous(),
+                        &current_turn_echo(&turn, post_playback_echo_until, playback_mode),
+                    ) {
+                        emit(&PumpLive::User(turn.user_text.clone()));
+                    } else {
+                        tracing::debug!(
+                            target: "realtime_pump",
+                            text = %turn.user_text,
+                            "partial 用户转写判定为回声，不上屏"
+                        );
+                    }
                 }
             }
-            Some(ActorEvent::UserTranscriptCompleted { text, .. }) => {
+            Some(ActorEvent::UserTranscriptCompleted { item_id, text }) => {
                 turn.timeline.transcript_done_ms = since_start();
                 // 新一条用户发言定稿：先清掉上一轮回声丢弃的残留标记。
                 turn.echo_dropped = false;
@@ -915,35 +1048,51 @@ fn run_pump(
                     turn.interrupted = true;
                     continue;
                 }
-                turn.user_text = text;
-                tracing::debug!(
-                    target: "realtime_pump",
-                    responding = turn.responding,
-                    text = %turn.user_text,
-                    "用户转写定稿（非回声，进入对话流）"
-                );
-                emit(&PumpLive::User(turn.user_text.clone()));
-                if !config.auto_respond {
-                    // 会议助手点名门控：服务端 create_response=false，应答由泵决定。
-                    let mentioned = crate::services::sessions::meeting_assistant_was_mentioned(
-                        &turn.user_text,
-                        &config.role_name,
-                    );
-                    if mentioned {
-                        let prompt = turn.user_text.clone();
-                        session.send(ActorCommand::RespondText(prompt));
-                        turn.responding = true;
+                // 门控模式回答在途：区分「同一句话的定稿」与「新的一句话」，
+                // 后者不得覆盖正在回答的用户文本（等待期吞话的根源）。
+                if !config.auto_respond && turn.responding {
+                    if turn.answer_item_id.as_deref() == Some(item_id.as_str()) {
+                        // 同一句话的定稿：只用完整文本更新在途回答。
+                        turn.user_text = text;
+                        tracing::debug!(
+                            target: "realtime_pump",
+                            item_id = %item_id,
+                            text = %turn.user_text,
+                            "回答中的同句转写定稿：更新在途回答文本"
+                        );
+                        emit(&PumpLive::User(turn.user_text.clone()));
                     } else {
-                        // 未点名：立即成轮（create_response=false 不会有 response.done）。
-                        turn.transcript_only = true;
+                        // 新的一句话：立即成仅转写轮并留作追答素材；若点名则
+                        // 排队，当前回答结束后自动发起（保留最新 1 条）。
+                        tracing::debug!(
+                            target: "realtime_pump",
+                            item_id = %item_id,
+                            text = %text,
+                            "回答在途收到新发言：仅转写成轮，不覆盖在途回答"
+                        );
+                        emit(&PumpLive::User(text.clone()));
+                        let mentioned = crate::services::sessions::meeting_assistant_was_mentioned(
+                            &text,
+                            &config.role_name,
+                        );
+                        if mentioned {
+                            pending_mention = Some(text.clone());
+                        }
                         let diagnostics = playback.diagnostics();
-                        let completed = CompletedTurn {
-                            user_text: std::mem::take(&mut turn.user_text),
+                        let transcript_timeline = TurnTimeline {
+                            transcript_done_ms: turn.timeline.transcript_done_ms,
+                            ..TurnTimeline::default()
+                        };
+                        let new_text = text.clone();
+                        shared.push_turn(CompletedTurn {
+                            user_text: text,
                             assistant_text: String::new(),
                             first_audio_ms: None,
                             interrupted: false,
                             transcript_only: true,
                             held: false,
+                            forced: false,
+                            response_failed: false,
                             audio_bytes: 0,
                             playback_write_failed: false,
                             playback_alive: playback.is_alive(),
@@ -961,6 +1110,80 @@ fn run_pump(
                             playback_last_event: diagnostics.last_event,
                             echo_dropped: false,
                             echo_dropped_total: shared.echo_dropped_total(),
+                            timeline: transcript_timeline,
+                            completed_at: Instant::now(),
+                        });
+                        *shared
+                            .last_transcript_only
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner()) = Some(new_text);
+                    }
+                    continue;
+                }
+                turn.user_text = text;
+                tracing::debug!(
+                    target: "realtime_pump",
+                    responding = turn.responding,
+                    text = %turn.user_text,
+                    "用户转写定稿（非回声，进入对话流）"
+                );
+                emit(&PumpLive::User(turn.user_text.clone()));
+                if !config.auto_respond && !turn.responding {
+                    // 会议助手点名门控：服务端 create_response=false，应答由泵决定。
+                    // 响应在途时（点名/强制回答的文本轮已发出）不再重复触发，
+                    // 也不得把在途响应替换成仅转写轮——该 completed 只是同一句
+                    // 话的转写定稿，晚于 ForceRespond 到达。
+                    let mentioned = crate::services::sessions::meeting_assistant_was_mentioned(
+                        &turn.user_text,
+                        &config.role_name,
+                    );
+                    if mentioned {
+                        shared
+                            .last_transcript_only
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner())
+                            .take();
+                        let prompt = turn.user_text.clone();
+                        turn.answer_item_id = Some(item_id);
+                        turn.respond_requested_at = Some(Instant::now());
+                        turn.respond_attempts = 0;
+                        session.send(ActorCommand::RespondText(prompt));
+                        turn.responding = true;
+                    } else {
+                        // 未点名：立即成轮（create_response=false 不会有 response.done），
+                        // 文本留给热键强制回答。
+                        *shared
+                            .last_transcript_only
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner()) = Some(turn.user_text.clone());
+                        turn.transcript_only = true;
+                        let diagnostics = playback.diagnostics();
+                        let completed = CompletedTurn {
+                            user_text: std::mem::take(&mut turn.user_text),
+                            assistant_text: String::new(),
+                            first_audio_ms: None,
+                            interrupted: false,
+                            transcript_only: true,
+                            held: false,
+                            forced: false,
+                            audio_bytes: 0,
+                            playback_write_failed: false,
+                            playback_alive: playback.is_alive(),
+                            audio_delta_count: 0,
+                            audio_delta_max_gap_ms: None,
+                            audio_delta_gaps_over_150_ms: 0,
+                            audio_delta_gaps_over_500_ms: 0,
+                            aec_residual_correlation: None,
+                            aec_residual_max: None,
+                            aec_residual_over_threshold: 0,
+                            playback_mode,
+                            playback_generation: Some(diagnostics.generation),
+                            playback_restarts: Some(diagnostics.restarts),
+                            playback_restarted_during_turn: false,
+                            playback_last_event: diagnostics.last_event,
+                            echo_dropped: false,
+                            echo_dropped_total: shared.echo_dropped_total(),
+                            response_failed: false,
                             timeline: turn.timeline.clone(),
                             completed_at: Instant::now(),
                         };
@@ -1087,6 +1310,7 @@ fn run_pump(
                         interrupted: turn.interrupted,
                         transcript_only: turn.transcript_only,
                         held: config.hold_playback && !held_audio.is_empty(),
+                        forced: turn.forced,
                         audio_bytes: turn.audio_bytes,
                         playback_write_failed: turn.playback_write_failed,
                         playback_alive: playback.is_alive(),
@@ -1106,6 +1330,7 @@ fn run_pump(
                         playback_last_event: playback_diagnostics.last_event,
                         echo_dropped: turn.echo_dropped,
                         echo_dropped_total: shared.echo_dropped_total(),
+                        response_failed: false,
                         timeline: turn.timeline.clone(),
                         completed_at: Instant::now(),
                     };
@@ -1140,8 +1365,94 @@ fn run_pump(
                     uplink_open = true;
                     gate_closed_at = None;
                 }
+                // 当前回答结束：发起回答期间排队的新点名（若有）。
+                if let Some(text) = pending_mention.take() {
+                    tracing::debug!(
+                        target: "realtime_pump",
+                        text = %text,
+                        "回答结束：发起排队中的点名应答"
+                    );
+                    turn.user_text = text.clone();
+                    turn.responding = true;
+                    turn.echo_dropped = false;
+                    turn.respond_requested_at = Some(Instant::now());
+                    turn.respond_attempts = 0;
+                    emit(&PumpLive::User(text));
+                    session.send(ActorCommand::RespondText(turn.user_text.clone()));
+                }
             }
             None => {}
+        }
+        // 4) 回答开始看门狗：RespondText 已发出但迟迟没有 response.created
+        // （实测 Qwen-Omni 偶发吞掉请求后沉默至断链）。第一次超时清服务端
+        // 输入缓冲并重发一次；再超时放弃本轮——落 response_failed 轮、文本
+        // 还给「让助手回答」候选，绝不让泵永久卡在「回答中」。
+        if let Some(requested_at) = turn.respond_requested_at
+            && requested_at.elapsed() >= respond_start_timeout
+        {
+            if turn.respond_attempts == 0 {
+                tracing::warn!(
+                    target: "realtime_pump",
+                    user_chars = turn.user_text.chars().count(),
+                    responding = turn.responding,
+                    waited_ms = requested_at.elapsed().as_millis() as u64,
+                    "回答开始超时：清服务端输入缓冲后重发一次应答请求"
+                );
+                session.send(ActorCommand::ClearInputBuffer);
+                session.send(ActorCommand::RespondText(turn.user_text.clone()));
+                turn.respond_attempts += 1;
+                turn.respond_requested_at = Some(Instant::now());
+            } else {
+                tracing::warn!(
+                    target: "realtime_pump",
+                    user_chars = turn.user_text.chars().count(),
+                    forced = turn.forced,
+                    waited_ms = requested_at.elapsed().as_millis() as u64,
+                    "回答开始二次超时：放弃本轮，保留用户文本供再次追答"
+                );
+                let user_text = std::mem::take(&mut turn.user_text);
+                let diagnostics = playback.diagnostics();
+                shared.push_turn(CompletedTurn {
+                    user_text: user_text.clone(),
+                    assistant_text: std::mem::take(&mut turn.assistant_text),
+                    first_audio_ms: None,
+                    interrupted: false,
+                    transcript_only: false,
+                    held: false,
+                    forced: turn.forced,
+                    response_failed: true,
+                    audio_bytes: 0,
+                    playback_write_failed: turn.playback_write_failed,
+                    playback_alive: playback.is_alive(),
+                    audio_delta_count: 0,
+                    audio_delta_max_gap_ms: None,
+                    audio_delta_gaps_over_150_ms: 0,
+                    audio_delta_gaps_over_500_ms: 0,
+                    aec_residual_correlation: None,
+                    aec_residual_max: None,
+                    aec_residual_over_threshold: 0,
+                    playback_mode,
+                    playback_generation: Some(diagnostics.generation),
+                    playback_restarts: Some(diagnostics.restarts),
+                    playback_restarted_during_turn: false,
+                    playback_last_event: diagnostics.last_event,
+                    echo_dropped: false,
+                    echo_dropped_total: shared.echo_dropped_total(),
+                    timeline: std::mem::take(&mut turn.timeline),
+                    completed_at: Instant::now(),
+                });
+                // 响应从未真正开始（已开始则看门狗早已解除）：掐掉服务端可能
+                // 仍在途的幽灵响应，防止它晚到后以空用户文本成轮播放。
+                session.send(ActorCommand::CancelResponse);
+                turn = TurnAccumulator::new();
+                shared.speaking.store(false, Ordering::SeqCst);
+                emit(&PumpLive::Speaking(false));
+                // 文本还给「让助手回答」候选：用户可直接再点一次按钮。
+                *shared
+                    .last_transcript_only
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner()) = Some(user_text);
+            }
         }
     }
 }
@@ -1302,6 +1613,25 @@ mod pump_tests {
         hold_playback: bool,
         live_sink: Option<Box<dyn Fn(PumpLive) + Send + Sync>>,
     ) -> PumpFixture {
+        spawn_pump_with(
+            listener_port,
+            auto_respond,
+            role_name,
+            hold_playback,
+            RESPOND_START_TIMEOUT,
+            live_sink,
+        )
+    }
+
+    /// 看门狗测试用：可指定回答开始超时（调短到几百毫秒，避免测试变慢）。
+    fn spawn_pump_with(
+        listener_port: u16,
+        auto_respond: bool,
+        role_name: &str,
+        hold_playback: bool,
+        respond_start_timeout: Duration,
+        live_sink: Option<Box<dyn Fn(PumpLive) + Send + Sync>>,
+    ) -> PumpFixture {
         let session = RealtimeSession::start_with_profile(
             RealtimeCapabilityProfile::openai_compatible(realtime_dialect(
                 "http://127.0.0.1/api-ws/v1/realtime",
@@ -1333,6 +1663,7 @@ mod pump_tests {
                 hold_playback,
                 playback_mode: RealtimePlaybackMode::Native,
                 suppress_echo: None,
+                respond_start_timeout,
             },
             live_sink,
         );
@@ -1494,6 +1825,738 @@ mod pump_tests {
         assert_eq!(read_frame(&mut ws)["type"], "response.create");
     }
 
+    /// 强制回答：仅转写轮之后收到 ForceRespond → 以该句文本发起应答，
+    /// 完成轮 assistant_text 非空且 forced=true；候选素材随之清空。
+    #[test]
+    fn forced_respond_answers_latest_transcript_only_turn() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let fixture = spawn_pump(port, false, "会议助手", false);
+        let (_, mut ws) = accept_session(&listener);
+
+        // 未点名发言：只落转写轮。
+        ws.send(Message::Text(
+            r#"{"type":"conversation.item.input_audio_transcription.completed","item_id":"a","transcript":"你听得见我说话吗"}"#
+                .into(),
+        ))
+        .unwrap();
+        wait_for(
+            || fixture.pump.shared.completed_count() == 1,
+            "transcript-only turn",
+        );
+        let transcript_turn = fixture.pump.shared.take_completed().unwrap();
+        assert!(transcript_turn.transcript_only && !transcript_turn.forced);
+        assert!(
+            fixture
+                .pump
+                .shared
+                .last_transcript_only
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .is_some(),
+            "transcript-only text must be kept as force-respond candidate"
+        );
+
+        // 热键强制回答 → item.create（原文）+ response.create。
+        fixture.pump.send(PumpCommand::ForceRespond);
+        let item = read_frame(&mut ws);
+        assert_eq!(item["type"], "conversation.item.create");
+        assert_eq!(
+            item["item"]["content"][0]["text"],
+            "你听得见我说话吗"
+        );
+        assert_eq!(read_frame(&mut ws)["type"], "response.create");
+
+        // 服务端完成应答：成轮 assistant_text 非空、forced=true。
+        for event in [
+            r#"{"type":"response.created"}"#.to_string(),
+            format!(
+                r#"{{"type":"response.audio.delta","delta":"{}"}}"#,
+                STANDARD.encode([1u8, 2])
+            ),
+            r#"{"type":"response.audio_transcript.delta","delta":"听得见"}"#.to_string(),
+            r#"{"type":"response.done","response":{"status":"completed"}}"#.to_string(),
+        ] {
+            ws.send(Message::Text(event.into())).unwrap();
+        }
+        wait_for(
+            || fixture.pump.shared.completed_count() == 1,
+            "forced answer turn",
+        );
+        let turn = fixture.pump.shared.take_completed().unwrap();
+        assert_eq!(turn.user_text, "你听得见我说话吗");
+        assert_eq!(turn.assistant_text, "听得见");
+        assert!(turn.forced && !turn.transcript_only);
+        assert!(
+            fixture
+                .pump
+                .shared
+                .last_transcript_only
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .is_none(),
+            "candidate must be consumed once the forced answer starts"
+        );
+        drop(fixture.pump);
+    }
+
+    /// 强制回答去重：回答在途时收到 ForceRespond 必须忽略——不得向服务端
+    /// 重复发送 item.create/response.create。
+    #[test]
+    fn forced_respond_is_ignored_while_responding() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let fixture = spawn_pump(port, false, "会议助手", false);
+        let (_, mut ws) = accept_session(&listener);
+
+        // 点名触发正常回答。
+        ws.send(Message::Text(
+            r#"{"type":"conversation.item.input_audio_transcription.completed","item_id":"a","transcript":"会议助手，你好"}"#
+                .into(),
+        ))
+        .unwrap();
+        assert_eq!(read_frame(&mut ws)["type"], "conversation.item.create");
+        assert_eq!(read_frame(&mut ws)["type"], "response.create");
+
+        // 响应在途（created 已到）：ForceRespond 必须被忽略。
+        ws.send(Message::Text(r#"{"type":"response.created"}"#.into()))
+            .unwrap();
+        fixture.pump.send(PumpCommand::ForceRespond);
+        assert_no_frame(&mut ws, Duration::from_millis(400));
+
+        // 正常完成：forced 不得误标。
+        ws.send(Message::Text(
+            r#"{"type":"response.done","response":{"status":"completed"}}"#.into(),
+        ))
+        .unwrap();
+        wait_for(
+            || fixture.pump.shared.completed_count() == 1,
+            "mentioned turn",
+        );
+        let turn = fixture.pump.shared.take_completed().unwrap();
+        assert!(!turn.forced);
+        drop(fixture.pump);
+    }
+
+    /// 回答开始看门狗：点名后服务端对 RespondText 不回任何响应 → 第一次超时
+    /// 清服务端输入缓冲并重发一次；再超时放弃本轮（response_failed 成轮、
+    /// 用户文本回到「让助手回答」候选），之后 ForceRespond 能重新发起请求。
+    #[test]
+    fn respond_timeout_retries_then_marks_turn_failed() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let fixture = spawn_pump_with(
+            port,
+            false,
+            "会议助手",
+            false,
+            Duration::from_millis(300),
+            None,
+        );
+        let (_, mut ws) = accept_session(&listener);
+
+        // 点名 → item.create + response.create 发出，服务端全程沉默。
+        ws.send(Message::Text(
+            r#"{"type":"conversation.item.input_audio_transcription.completed","item_id":"a","transcript":"会议助手，帮我记一下时间"}"#
+                .into(),
+        ))
+        .unwrap();
+        assert_eq!(read_frame(&mut ws)["type"], "conversation.item.create");
+        assert_eq!(read_frame(&mut ws)["type"], "response.create");
+
+        // 第一次超时：清服务端输入缓冲 + 重发同一次应答请求。
+        assert_eq!(read_frame(&mut ws)["type"], "input_audio_buffer.clear");
+        assert_eq!(read_frame(&mut ws)["type"], "conversation.item.create");
+        assert_eq!(read_frame(&mut ws)["type"], "response.create");
+
+        // 第二次超时：放弃（掐掉幽灵响应）→ response_failed 完成轮 + 候选恢复。
+        assert_eq!(read_frame(&mut ws)["type"], "response.cancel");
+        wait_for(
+            || fixture.pump.shared.completed_count() == 1,
+            "response-failed turn",
+        );
+        let turn = fixture.pump.shared.take_completed().unwrap();
+        assert!(
+            turn.response_failed,
+            "看门狗放弃的轮必须标记 response_failed"
+        );
+        assert!(!turn.transcript_only);
+        assert!(turn.assistant_text.is_empty());
+        assert_eq!(turn.user_text, "会议助手，帮我记一下时间");
+        assert_eq!(
+            fixture
+                .pump
+                .shared
+                .last_transcript_only
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .as_deref(),
+            Some("会议助手，帮我记一下时间"),
+            "失败文本必须回到「让助手回答」候选"
+        );
+
+        // 之后 ForceRespond 能再次发起请求（泵没有卡在「回答中」）。
+        fixture.pump.send(PumpCommand::ForceRespond);
+        assert_eq!(read_frame(&mut ws)["type"], "conversation.item.create");
+        assert_eq!(read_frame(&mut ws)["type"], "response.create");
+        drop(fixture.pump);
+    }
+
+    /// 看门狗放弃后 responding 不再永久为 true：下一句未点名的话能正常
+    /// 生成仅转写轮（点名的回答请求卡死不再吞掉后续发言）。
+    #[test]
+    fn respond_timeout_recovers_gating_for_next_utterance() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let fixture = spawn_pump_with(
+            port,
+            false,
+            "会议助手",
+            false,
+            Duration::from_millis(300),
+            None,
+        );
+        let (_, mut ws) = accept_session(&listener);
+
+        // 点名触发回答，服务端沉默到看门狗放弃。
+        ws.send(Message::Text(
+            r#"{"type":"conversation.item.input_audio_transcription.completed","item_id":"a","transcript":"会议助手，你好"}"#
+                .into(),
+        ))
+        .unwrap();
+        assert_eq!(read_frame(&mut ws)["type"], "conversation.item.create");
+        assert_eq!(read_frame(&mut ws)["type"], "response.create");
+        assert_eq!(read_frame(&mut ws)["type"], "input_audio_buffer.clear");
+        assert_eq!(read_frame(&mut ws)["type"], "conversation.item.create");
+        assert_eq!(read_frame(&mut ws)["type"], "response.create");
+        assert_eq!(read_frame(&mut ws)["type"], "response.cancel");
+        wait_for(
+            || fixture.pump.shared.completed_count() == 1,
+            "response-failed turn",
+        );
+        assert!(
+            fixture
+                .pump
+                .shared
+                .take_completed()
+                .unwrap()
+                .response_failed
+        );
+
+        // 下一句未点名发言：正常生成仅转写轮。
+        ws.send(Message::Text(
+            r#"{"type":"conversation.item.input_audio_transcription.completed","item_id":"b","transcript":"这个方案大家怎么看"}"#
+                .into(),
+        ))
+        .unwrap();
+        wait_for(
+            || fixture.pump.shared.completed_count() == 1,
+            "transcript-only turn after watchdog give-up",
+        );
+        let turn = fixture.pump.shared.take_completed().unwrap();
+        assert!(turn.transcript_only);
+        assert_eq!(turn.user_text, "这个方案大家怎么看");
+        drop(fixture.pump);
+    }
+
+    /// 门控模式：回答还没出声（未收到音频）时服务端 VAD 触发 speech_started，
+    /// 不得取消回答；回答照常完成。auto_respond 路径由
+    /// `barge_in_clears_playback_and_cancels_response` 覆盖，行为不变。
+    #[test]
+    fn gated_speech_started_before_audio_keeps_response_alive() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let fixture = spawn_pump(port, false, "会议助手", false);
+        let (_, mut ws) = accept_session(&listener);
+
+        // 点名 → 应答请求发出（created 尚未到达，更没有音频）。
+        ws.send(Message::Text(
+            r#"{"type":"conversation.item.input_audio_transcription.completed","item_id":"a","transcript":"会议助手，今天几号"}"#
+                .into(),
+        ))
+        .unwrap();
+        assert_eq!(read_frame(&mut ws)["type"], "conversation.item.create");
+        assert_eq!(read_frame(&mut ws)["type"], "response.create");
+
+        // 别人插话/环境噪声触发服务端 VAD：门控模式不得 response.cancel。
+        ws.send(Message::Text(
+            r#"{"type":"input_audio_buffer.speech_started"}"#.into(),
+        ))
+        .unwrap();
+        assert_no_frame(&mut ws, Duration::from_millis(400));
+
+        // 回答照常完成，未被取消。
+        for event in [
+            r#"{"type":"response.created"}"#.to_string(),
+            format!(
+                r#"{{"type":"response.audio.delta","delta":"{}"}}"#,
+                STANDARD.encode([1u8, 2])
+            ),
+            r#"{"type":"response.audio_transcript.delta","delta":"今天是十月一号"}"#.to_string(),
+            r#"{"type":"response.done","response":{"status":"completed"}}"#.to_string(),
+        ] {
+            ws.send(Message::Text(event.into())).unwrap();
+        }
+        wait_for(
+            || fixture.pump.shared.completed_count() == 1,
+            "surviving answer turn",
+        );
+        let turn = fixture.pump.shared.take_completed().unwrap();
+        assert!(!turn.interrupted, "回答不得被出声前的 VAD 打断标记");
+        assert_eq!(turn.assistant_text, "今天是十月一号");
+        assert_eq!(turn.user_text, "会议助手，今天几号");
+        drop(fixture.pump);
+    }
+
+    /// 等待回答期间另一人发言（不同 item_id、未点名）：立即成仅转写轮，
+    /// 不覆盖正在回答的用户文本；回答完成后原句照常落库。
+    #[test]
+    fn concurrent_utterance_becomes_transcript_only_while_responding() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let fixture = spawn_pump(port, false, "会议助手", false);
+        let (_, mut ws) = accept_session(&listener);
+
+        // 点名 → 应答在途。
+        ws.send(Message::Text(
+            r#"{"type":"conversation.item.input_audio_transcription.completed","item_id":"a","transcript":"会议助手，今天几号"}"#
+                .into(),
+        ))
+        .unwrap();
+        assert_eq!(read_frame(&mut ws)["type"], "conversation.item.create");
+        assert_eq!(read_frame(&mut ws)["type"], "response.create");
+        ws.send(Message::Text(r#"{"type":"response.created"}"#.into()))
+            .unwrap();
+
+        // 另一人说了一句未点名的话（不同 item_id）：立即成仅转写轮。
+        ws.send(Message::Text(
+            r#"{"type":"conversation.item.input_audio_transcription.completed","item_id":"b","transcript":"顺便说一下下午三点开会"}"#
+                .into(),
+        ))
+        .unwrap();
+        wait_for(
+            || fixture.pump.shared.completed_count() == 1,
+            "concurrent transcript-only turn",
+        );
+        let transcript_turn = fixture.pump.shared.take_completed().unwrap();
+        assert!(transcript_turn.transcript_only);
+        assert_eq!(transcript_turn.user_text, "顺便说一下下午三点开会");
+        assert_eq!(
+            fixture
+                .pump
+                .shared
+                .last_transcript_only
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .as_deref(),
+            Some("顺便说一下下午三点开会"),
+            "并发发言必须成为可追答素材"
+        );
+
+        // 回答完成：user_text 保持原句，未被并发发言覆盖。
+        for event in [
+            format!(
+                r#"{{"type":"response.audio.delta","delta":"{}"}}"#,
+                STANDARD.encode([1u8, 2])
+            ),
+            r#"{"type":"response.audio_transcript.delta","delta":"今天是十月一号"}"#.to_string(),
+            r#"{"type":"response.done","response":{"status":"completed"}}"#.to_string(),
+        ] {
+            ws.send(Message::Text(event.into())).unwrap();
+        }
+        wait_for(|| fixture.pump.shared.completed_count() == 1, "answer turn");
+        let answer_turn = fixture.pump.shared.take_completed().unwrap();
+        assert!(!answer_turn.transcript_only);
+        assert_eq!(answer_turn.user_text, "会议助手，今天几号");
+        assert_eq!(answer_turn.assistant_text, "今天是十月一号");
+        drop(fixture.pump);
+    }
+
+    /// 等待回答期间点名（不同 item_id）：先成仅转写轮并排队，当前回答结束
+    /// 后自动发起排队中的点名应答，无需用户再点按钮。
+    #[test]
+    fn mention_during_response_is_queued_until_done() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let fixture = spawn_pump(port, false, "会议助手", false);
+        let (_, mut ws) = accept_session(&listener);
+
+        // 第一句点名 → 应答在途。
+        ws.send(Message::Text(
+            r#"{"type":"conversation.item.input_audio_transcription.completed","item_id":"a","transcript":"会议助手，今天几号"}"#
+                .into(),
+        ))
+        .unwrap();
+        assert_eq!(read_frame(&mut ws)["type"], "conversation.item.create");
+        assert_eq!(read_frame(&mut ws)["type"], "response.create");
+        ws.send(Message::Text(r#"{"type":"response.created"}"#.into()))
+            .unwrap();
+
+        // 回答进行中又一句点名：立即成仅转写轮，请求排队不并发。
+        ws.send(Message::Text(
+            r#"{"type":"conversation.item.input_audio_transcription.completed","item_id":"b","transcript":"会议助手，再帮我记一下时间"}"#
+                .into(),
+        ))
+        .unwrap();
+        wait_for(
+            || fixture.pump.shared.completed_count() == 1,
+            "queued mention transcript-only turn",
+        );
+        let transcript_turn = fixture.pump.shared.take_completed().unwrap();
+        assert!(transcript_turn.transcript_only);
+        assert_eq!(transcript_turn.user_text, "会议助手，再帮我记一下时间");
+        assert_no_frame(&mut ws, Duration::from_millis(300));
+
+        // 当前回答结束：第一轮回答先成轮，排队中的点名自动发起。
+        ws.send(Message::Text(
+            r#"{"type":"response.done","response":{"status":"completed"}}"#.into(),
+        ))
+        .unwrap();
+        wait_for(
+            || fixture.pump.shared.completed_count() == 1,
+            "first answer turn",
+        );
+        let first_answer = fixture.pump.shared.take_completed().unwrap();
+        assert_eq!(first_answer.user_text, "会议助手，今天几号");
+        assert_eq!(read_frame(&mut ws)["type"], "conversation.item.create");
+        assert_eq!(read_frame(&mut ws)["type"], "response.create");
+
+        // 排队应答正常完成成轮。
+        for event in [
+            r#"{"type":"response.created"}"#.to_string(),
+            r#"{"type":"response.audio_transcript.delta","delta":"记好了"}"#.to_string(),
+            r#"{"type":"response.done","response":{"status":"completed"}}"#.to_string(),
+        ] {
+            ws.send(Message::Text(event.into())).unwrap();
+        }
+        wait_for(
+            || fixture.pump.shared.completed_count() == 1,
+            "queued answer turn",
+        );
+        let turn = fixture.pump.shared.take_completed().unwrap();
+        assert!(!turn.transcript_only);
+        assert_eq!(turn.user_text, "会议助手，再帮我记一下时间");
+        assert_eq!(turn.assistant_text, "记好了");
+        drop(fixture.pump);
+    }
+
+    /// 真实供应商强制回答冒烟（默认 #[ignore]，消耗配额）：以 create_response=false
+    /// 连真实端到端线路，上行人声触发仅转写轮，再 ForceRespond 验证
+    /// conversation.item.create + response.create 被服务端接受并返回音频回答——
+    /// 这是「让助手回答」链路在 Qwen-Omni 上的关键未验证段。
+    /// REALTIME_SMOKE_CONFIG=<导出的 config json>
+    /// REALTIME_SMOKE_ROUTE=<e2e 线路 id>
+    /// REALTIME_SMOKE_WAV=<16k mono wav（必须是人声，静音不会触发转写）>
+    /// cargo test --lib live_forced_respond_transcript_only -- --ignored --nocapture
+    #[test]
+    #[ignore = "Uses the saved Windows credential and consumes provider quota; set REALTIME_SMOKE_* explicitly"]
+    #[cfg(windows)]
+    fn live_forced_respond_transcript_only() {
+        use crate::secrets::{SecretService, WindowsSecretStore};
+        use std::sync::Arc;
+
+        let path = std::env::var("REALTIME_SMOKE_CONFIG").expect("explicit config path required");
+        let config: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let route_id = std::env::var("REALTIME_SMOKE_ROUTE").expect("route id required");
+        let route = config["speech"]["voiceRoutes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"].as_str() == Some(route_id.as_str()))
+            .expect("selected route must exist")
+            .clone();
+        assert_eq!(
+            route["mode"].as_str(),
+            Some("e2e"),
+            "forced-respond live smoke only applies to the e2e route"
+        );
+        let provider = config["models"]["providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == route["e2eProviderId"])
+            .unwrap()
+            .clone();
+        let secrets = SecretService::new("default", Arc::new(WindowsSecretStore::new())).unwrap();
+        let credential = secrets
+            .read(provider["credential"]["reference"].as_str().unwrap())
+            .unwrap()
+            .expect("saved credential must exist");
+        let voice = route["voiceId"].as_str().unwrap_or("").to_owned();
+
+        // 读取 wav data 块作为 16k mono PCM（必须是人声，例如「你听得见我说话吗」）。
+        let wav_path = std::env::var("REALTIME_SMOKE_WAV").expect("speech wav required");
+        let bytes = std::fs::read(&wav_path).unwrap();
+        let pcm16k = {
+            assert!(bytes.len() >= 12 && &bytes[0..4] == b"RIFF", "expect wav");
+            let mut offset = 12usize;
+            loop {
+                assert!(offset + 8 <= bytes.len(), "no data chunk");
+                let id = &bytes[offset..offset + 4];
+                let size =
+                    u32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().unwrap()) as usize;
+                if id == b"data" {
+                    break bytes[offset + 8..(offset + 8 + size).min(bytes.len())].to_vec();
+                }
+                offset += 8 + size + (size & 1);
+            }
+        };
+        // AppendAudio 契约是采集环 48kHz；先补齐到采集率让 Actor 降回 16k，复刻真实链路。
+        let pcm = crate::audio::pcm::resample_pcm16_mono(
+            &pcm16k,
+            16_000,
+            crate::audio::pcm::CAPTURE_SAMPLE_RATE,
+        );
+        println!("live forced: pcm_bytes={} (16k source)", pcm.len());
+
+        let session = RealtimeSession::start(RealtimeSessionConfig {
+            endpoint: ProviderEndpoint {
+                provider_id: provider["id"].as_str().unwrap().to_owned(),
+                base_url: provider["baseUrl"].as_str().unwrap().to_owned(),
+            },
+            credential: Some(credential.as_str().to_owned()),
+            model_id: route["e2eModelId"].as_str().unwrap_or("").to_owned(),
+            voice,
+            instructions: "你是会议助手。普通讨论只听不答；被点名或被要求回答时用中文简短回答。".into(),
+            history: vec![],
+            auto_respond: false, // 会议助手点名门控：create_response=false
+            enable_search: false,
+        })
+        .unwrap();
+        let (tap_tx, tap_rx) = mpsc::sync_channel::<Vec<u8>>(64);
+        let sink: Arc<MemSink> = Arc::new(MemSink::default());
+        let pump = RealtimePump::start(
+            session,
+            tap_rx,
+            Arc::clone(&sink) as Arc<dyn PlaybackStream>,
+            PumpConfig {
+                auto_respond: false,
+                role_name: "会议助手".into(),
+                hold_playback: false,
+                playback_mode: RealtimePlaybackMode::Native,
+                suppress_echo: None,
+                respond_start_timeout: RESPOND_START_TIMEOUT,
+            },
+            None,
+        );
+
+        let started = Instant::now();
+        // 上行语音（100ms/帧按墙钟节奏）→ 静音尾窗 → CommitTurn（采集侧分段检测的应用同款时序）。
+        // 默认 commit 后停止推流（已验证可用）；REALTIME_SMOKE_TRAILING=1 复刻
+        // 应用真实状态——采集不停、静音持续上行，用于复现 response.create 沉默。
+        let trailing = std::env::var("REALTIME_SMOKE_TRAILING").is_ok();
+        let mut sent = 0usize;
+        let mut silence_frames = 0usize;
+        let mut last_push = Instant::now();
+        let mut committed = false;
+        let transcript_deadline = Instant::now() + Duration::from_secs(60);
+        let mut transcript_turn = None;
+        while Instant::now() < transcript_deadline {
+            if (trailing || !committed) && last_push.elapsed() >= Duration::from_millis(100) {
+                let chunk = if sent < pcm.len() {
+                    let end = (sent + 3200).min(pcm.len());
+                    pcm[sent..end].to_vec()
+                } else {
+                    silence_frames += 1;
+                    // 语音送完后补 700ms 静音再提交一次（真实分段器在句尾静音后判停）。
+                    if silence_frames == 7 {
+                        pump.send(PumpCommand::CommitTurn);
+                        committed = true;
+                        println!("live forced: commit at {:?}", started.elapsed());
+                        continue;
+                    }
+                    vec![0u8; 3200]
+                };
+                sent += chunk.len();
+                let _ = tap_tx.try_send(chunk);
+                last_push = Instant::now();
+            }
+            if let Some(completed) = pump.shared.take_completed() {
+                transcript_turn = Some(completed);
+                break;
+            }
+        }
+        let transcript_turn = transcript_turn
+            .unwrap_or_else(|| panic!("live forced: transcript-only turn never completed"));
+        println!(
+            "live forced: transcript_only turn at {:?} user=\"{}\"",
+            started.elapsed(),
+            transcript_turn.user_text
+        );
+        assert!(
+            transcript_turn.transcript_only && !transcript_turn.forced,
+            "unmentioned speech must complete as transcript-only"
+        );
+
+        // 强制回答：期望 item.create + response.create 被真实服务端接受并成轮。
+        pump.send(PumpCommand::ForceRespond);
+        println!("live forced: ForceRespond sent at {:?}", started.elapsed());
+        let answer_deadline = Instant::now() + Duration::from_secs(90);
+        let answer = loop {
+            if Instant::now() > answer_deadline {
+                panic!("live forced: forced answer never completed");
+            }
+            if let Some(completed) = pump.shared.take_completed() {
+                break completed;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        println!(
+            "live forced: answer at {:?} user=\"{}\" assistant=\"{}\" audio_bytes={} forced={} transcript_only={}",
+            started.elapsed(),
+            answer.user_text,
+            answer.assistant_text,
+            answer.audio_bytes,
+            answer.forced,
+            answer.transcript_only
+        );
+        assert!(answer.forced, "turn must be marked forced");
+        assert!(!answer.transcript_only);
+        assert!(!answer.assistant_text.is_empty(), "assistant text required");
+        assert!(answer.audio_bytes > 0, "assistant audio required");
+        drop(pump);
+    }
+
+    /// 点名应答 + 采集持续推流（应用真实时序）冒烟（默认 #[ignore]）：commit 后
+    /// 采集不停、静音持续上行（真实麦克风/会议桥就是这么跑的），验证点名触发的
+    /// RespondText 在「服务端缓冲有未提交尾流」时是否仍能拿到回答。
+    /// REALTIME_SMOKE_CONFIG / REALTIME_SMOKE_ROUTE / REALTIME_SMOKE_WAV 同上。
+    #[test]
+    #[ignore = "Uses the saved Windows credential and consumes provider quota; set REALTIME_SMOKE_* explicitly"]
+    #[cfg(windows)]
+    fn live_mention_respond_with_trailing_capture() {
+        use crate::secrets::{SecretService, WindowsSecretStore};
+        use std::sync::Arc;
+
+        let path = std::env::var("REALTIME_SMOKE_CONFIG").expect("explicit config path required");
+        let config: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let route_id = std::env::var("REALTIME_SMOKE_ROUTE").expect("route id required");
+        let route = config["speech"]["voiceRoutes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"].as_str() == Some(route_id.as_str()))
+            .expect("selected route must exist")
+            .clone();
+        let provider = config["models"]["providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == route["e2eProviderId"])
+            .unwrap()
+            .clone();
+        let secrets = SecretService::new("default", Arc::new(WindowsSecretStore::new())).unwrap();
+        let credential = secrets
+            .read(provider["credential"]["reference"].as_str().unwrap())
+            .unwrap()
+            .expect("saved credential must exist");
+
+        let wav_path = std::env::var("REALTIME_SMOKE_WAV").expect("speech wav required");
+        let bytes = std::fs::read(&wav_path).unwrap();
+        let pcm16k = {
+            assert!(bytes.len() >= 12 && &bytes[0..4] == b"RIFF", "expect wav");
+            let mut offset = 12usize;
+            loop {
+                assert!(offset + 8 <= bytes.len(), "no data chunk");
+                let id = &bytes[offset..offset + 4];
+                let size =
+                    u32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().unwrap()) as usize;
+                if id == b"data" {
+                    break bytes[offset + 8..(offset + 8 + size).min(bytes.len())].to_vec();
+                }
+                offset += 8 + size + (size & 1);
+            }
+        };
+        let pcm = crate::audio::pcm::resample_pcm16_mono(
+            &pcm16k,
+            16_000,
+            crate::audio::pcm::CAPTURE_SAMPLE_RATE,
+        );
+
+        let session = RealtimeSession::start(RealtimeSessionConfig {
+            endpoint: ProviderEndpoint {
+                provider_id: provider["id"].as_str().unwrap().to_owned(),
+                base_url: provider["baseUrl"].as_str().unwrap().to_owned(),
+            },
+            credential: Some(credential.as_str().to_owned()),
+            model_id: route["e2eModelId"].as_str().unwrap_or("").to_owned(),
+            voice: route["voiceId"].as_str().unwrap_or("").to_owned(),
+            instructions: "你是会议助手。普通讨论只听不答；被点名或被要求回答时用中文简短回答。".into(),
+            history: vec![],
+            auto_respond: false,
+            enable_search: false,
+        })
+        .unwrap();
+        let (tap_tx, tap_rx) = mpsc::sync_channel::<Vec<u8>>(64);
+        let sink: Arc<MemSink> = Arc::new(MemSink::default());
+        let pump = RealtimePump::start(
+            session,
+            tap_rx,
+            Arc::clone(&sink) as Arc<dyn PlaybackStream>,
+            PumpConfig {
+                auto_respond: false,
+                role_name: "会议助手".into(),
+                hold_playback: false,
+                playback_mode: RealtimePlaybackMode::Native,
+                suppress_echo: None,
+                respond_start_timeout: RESPOND_START_TIMEOUT,
+            },
+            None,
+        );
+
+        let started = Instant::now();
+        // 应用真实时序：语音 → 700ms 静音 → CommitTurn → 采集不停，静音一直上行。
+        let mut sent = 0usize;
+        let mut silence_frames = 0usize;
+        let mut last_push = Instant::now();
+        let mut committed = false;
+        let deadline = Instant::now() + Duration::from_secs(75);
+        let mut turn = None;
+        while Instant::now() < deadline {
+            if last_push.elapsed() >= Duration::from_millis(100) {
+                let chunk = if sent < pcm.len() {
+                    let end = (sent + 3200).min(pcm.len());
+                    pcm[sent..end].to_vec()
+                } else {
+                    silence_frames += 1;
+                    if silence_frames == 7 && !committed {
+                        pump.send(PumpCommand::CommitTurn);
+                        committed = true;
+                        println!("mention trailing: commit at {:?}", started.elapsed());
+                    }
+                    vec![0u8; 3200]
+                };
+                sent += chunk.len();
+                let _ = tap_tx.try_send(chunk);
+                last_push = Instant::now();
+            }
+            if let Some(completed) = pump.shared.take_completed() {
+                turn = Some(completed);
+                break;
+            }
+        }
+        let turn = turn.unwrap_or_else(|| panic!("mention trailing: turn never completed"));
+        println!(
+            "mention trailing: turn at {:?} user=\"{}\" assistant=\"{}\" audio_bytes={} forced={} transcript_only={}",
+            started.elapsed(),
+            turn.user_text,
+            turn.assistant_text,
+            turn.audio_bytes,
+            turn.forced,
+            turn.transcript_only
+        );
+        if turn.assistant_text.is_empty() {
+            println!(
+                "mention trailing: NO ANSWER — RespondText stalled with trailing capture (root cause reproduces for the mention path)"
+            );
+        } else {
+            println!("mention trailing: answered while trailing capture was flowing");
+        }
+        drop(pump);
+    }
+
     /// 候选模式：delta 扣住不播，确认后放行。
     #[test]
     fn candidate_hold_defers_playback_until_flush() {
@@ -1556,6 +2619,7 @@ mod pump_tests {
                 hold_playback: false,
                 playback_mode: RealtimePlaybackMode::Native,
                 suppress_echo: None,
+                respond_start_timeout: RESPOND_START_TIMEOUT,
             },
             Some(Box::new(move |event| {
                 let live_for_sink = live_for_closure.clone();
@@ -1835,6 +2899,7 @@ mod pump_tests {
                 hold_playback: false,
                 playback_mode: RealtimePlaybackMode::Native,
                 suppress_echo: None,
+                respond_start_timeout: RESPOND_START_TIMEOUT,
             },
             None,
         );
@@ -1920,6 +2985,7 @@ mod pump_tests {
                 hold_playback: false,
                 playback_mode: RealtimePlaybackMode::Native,
                 suppress_echo: None,
+                respond_start_timeout: RESPOND_START_TIMEOUT,
             },
             None,
         );
@@ -2006,6 +3072,7 @@ mod pump_tests {
                 hold_playback: false,
                 playback_mode: RealtimePlaybackMode::Native,
                 suppress_echo: None,
+                respond_start_timeout: RESPOND_START_TIMEOUT,
             },
             None,
         );
@@ -2089,6 +3156,7 @@ mod pump_tests {
                 hold_playback: false,
                 playback_mode: RealtimePlaybackMode::Native,
                 suppress_echo: None,
+                respond_start_timeout: RESPOND_START_TIMEOUT,
             },
             None,
         );
@@ -2250,6 +3318,7 @@ mod pump_tests {
                 hold_playback: false,
                 playback_mode: RealtimePlaybackMode::Native,
                 suppress_echo: None,
+                respond_start_timeout: RESPOND_START_TIMEOUT,
             },
             None,
         );
@@ -2331,6 +3400,7 @@ mod pump_tests {
                 hold_playback: false,
                 playback_mode: RealtimePlaybackMode::Native,
                 suppress_echo: None,
+                respond_start_timeout: RESPOND_START_TIMEOUT,
             },
             None,
         );
@@ -2795,6 +3865,7 @@ mod pump_tests {
                 hold_playback: false,
                 playback_mode: RealtimePlaybackMode::WebAudio,
                 suppress_echo: None,
+                respond_start_timeout: RESPOND_START_TIMEOUT,
             },
             Some(Box::new(move |event| {
                 if let PumpLive::AssistantAudio(pcm) = event {
@@ -2863,6 +3934,7 @@ mod pump_tests {
                 hold_playback: false,
                 playback_mode: RealtimePlaybackMode::WebAudio,
                 suppress_echo: None,
+                respond_start_timeout: RESPOND_START_TIMEOUT,
             },
             Some(Box::new(move |event| {
                 if let PumpLive::PlaybackControl(control) = event {
@@ -2929,6 +4001,7 @@ mod pump_tests {
                 hold_playback: false,
                 playback_mode: RealtimePlaybackMode::WebAudio,
                 suppress_echo: None,
+                respond_start_timeout: RESPOND_START_TIMEOUT,
             },
             None,
         );
@@ -3070,6 +4143,7 @@ mod pump_tests {
                 hold_playback: false,
                 playback_mode: RealtimePlaybackMode::Native,
                 suppress_echo: None,
+                respond_start_timeout: RESPOND_START_TIMEOUT,
             },
             None,
         );
@@ -3210,6 +4284,7 @@ mod pump_tests {
                 hold_playback: false,
                 playback_mode: RealtimePlaybackMode::Native,
                 suppress_echo: None,
+                respond_start_timeout: RESPOND_START_TIMEOUT,
             },
             None,
         );

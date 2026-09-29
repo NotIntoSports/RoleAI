@@ -27,6 +27,8 @@ export const errorText = (error: { code: string; message: string; field?: string
     REALTIME_TIMEOUT: "实时语音请求超时，输入已保留，请重试。",
     REALTIME_SESSION_UPDATE_TIMEOUT: "实时语音服务未及时确认会话，输入已保留，请重试。",
     SESSION_CANCELLED: "已取消本次发送，输入已保留。",
+    NOTHING_TO_ANSWER: "还没有可回答的发言。说完一句后再按「让助手回答」或 Ctrl+Alt+A。",
+    REALTIME_NO_RESPONSE: "助手这次没有响应，请再点一次「让助手回答」。",
     MEETING_PROCESS_NOT_AVAILABLE: "所选会议已退出或不再可用，请刷新会议进程。",
     SESSION_SIDECAR_INVALID_PID: "请选择有效的会议进程。",
     SESSION_SIDECAR_SPAWN_FAILED: "音频组件启动失败，请检查安装后重试。",

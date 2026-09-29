@@ -18,6 +18,10 @@ interface TranscriptPanelProps {
   onConfirmCandidate: (event: FormEvent) => void;
   busy: boolean;
   unusedMaterials: boolean;
+  /** 会议助手 + 会议音频：有用户文本、无回答的历史轮标注「未点名，仅转写」。 */
+  showTranscriptOnlyNotes: boolean;
+  /** 最后一轮仅转写标注旁的追答入口（与工具栏「让助手回答」同一路径）。 */
+  onTriggerAssistant: () => void;
   onCopy: (text: string) => void;
   onAdjustConfiguration: () => void;
 }
@@ -36,11 +40,16 @@ export function TranscriptPanel({
   onConfirmCandidate,
   busy,
   unusedMaterials,
+  showTranscriptOnlyNotes,
+  onTriggerAssistant,
   onCopy,
   onAdjustConfiguration,
 }: TranscriptPanelProps) {
   const conversationRef = useRef<HTMLDivElement | null>(null);
   const conversationBottomRef = useRef<HTMLDivElement | null>(null);
+  // 仅最后一轮仅转写轮旁提供追答：更早的转写轮的应答素材已被后续轮消费，
+  // 后端会返回 NOTHING_TO_ANSWER，按钮只挂在仍然可追答的那一轮上。
+  const lastTurn = turns[turns.length - 1];
   useEffect(() => {
     const container = conversationRef.current;
     const bottom = conversationBottomRef.current;
@@ -68,6 +77,14 @@ export function TranscriptPanel({
                 <article className="session-bubble session-bubble-user" aria-label={`用户转写 · 第 ${item.turnIndex + 1} 轮`}>
                   <p>{item.userText}</p>
                 </article>
+              )}
+              {item.userText && !item.assistantText && showTranscriptOnlyNotes && (
+                <p className="session-transcript-note" aria-label={`未点名仅转写 · 第 ${item.turnIndex + 1} 轮`}>
+                  未点名，仅转写
+                  {active && item === lastTurn && (
+                    <button type="button" className="session-transcript-followup" disabled={busy} onClick={onTriggerAssistant}>让助手回答</button>
+                  )}
+                </p>
               )}
               {item.assistantText && (
                 <article className="session-bubble session-bubble-assistant" aria-label={`AI 回复 · 第 ${item.turnIndex + 1} 轮`}>

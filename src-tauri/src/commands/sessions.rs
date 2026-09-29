@@ -25,6 +25,7 @@ fn session_service_error<T: ts_rs::TS>(error: SessionServiceError) -> CommandRes
         "SESSION_NOT_FOUND" => "Session not found",
         "SESSION_STATE_INVALID" => "Session state is invalid",
         "SESSION_TRANSPORT_INVALID" => "Unsupported session transport",
+        "NOTHING_TO_ANSWER" => "No speech is awaiting an answer",
         _ => "Session operation failed",
     };
     let mut public = PublicError::new(code, message, false);
@@ -759,6 +760,23 @@ pub(super) fn session_finalize_utterance_cmd(
     )
 }
 
+/// 取当前会话最后一轮的视图（finalize 与强制回答共用返回结构）。
+fn last_session_turn_view(
+    sessions: &crate::services::SessionService,
+    database: &crate::database::Database,
+) -> CommandResult<SessionTurnView> {
+    let Some(session_id) = sessions.session_id() else {
+        return session_service_error(SessionServiceError::NotFound);
+    };
+    match session_detail(&SessionStore::new(database), session_id) {
+        Ok(detail) => match detail.turns.into_iter().last() {
+            Some(turn) => CommandResult::Ok { data: turn },
+            None => session_service_error(SessionServiceError::StateInvalid),
+        },
+        Err(error) => session_service_error(error),
+    }
+}
+
 pub(super) fn session_finalize_utterance_cmd_inner(
     state: &AppState,
     probes: &SessionProbes<'_>,
@@ -790,23 +808,27 @@ pub(super) fn session_finalize_utterance_cmd_inner(
         }
     };
     let finalized = if force_meeting_assistant {
+        // 端到端路线 + 会议桥接 + 泵在跑：级联 forced 分支取不到轮次（应答
+        // 由泵的点名门控决定），改为让泵对最近一条仅转写发言发起回答。回答
+        // 异步生成、由前端就绪轮询落库，这里立即返回最后一轮视图，不持
+        // sessions 锁等待——阻塞等待会占住锁并拖死就绪轮询。
+        let via_pump = active_voice_route(&config)
+            .is_some_and(|route| route.mode == crate::config::VoiceRouteMode::E2e)
+            && sessions.realtime_pump_running()
+            && sessions.capture().is_meeting_bridge();
+        if via_pump {
+            if !sessions.realtime_has_transcript_only() {
+                return session_service_error(SessionServiceError::NothingToAnswer);
+            }
+            sessions.trigger_realtime_assistant();
+            return last_session_turn_view(&sessions, database);
+        }
         sessions.finalize_utterance_forced_with_hooks(database, &config, probes, credentials, hooks)
     } else {
         sessions.finalize_utterance_with_hooks(database, &config, probes, credentials, text, hooks)
     };
     match finalized {
-        Ok(Some(_)) => {
-            let Some(session_id) = sessions.session_id() else {
-                return session_service_error(SessionServiceError::NotFound);
-            };
-            match session_detail(&SessionStore::new(database), session_id) {
-                Ok(detail) => match detail.turns.into_iter().last() {
-                    Some(turn) => CommandResult::Ok { data: turn },
-                    None => session_service_error(SessionServiceError::StateInvalid),
-                },
-                Err(error) => session_service_error(error),
-            }
-        }
+        Ok(Some(_)) => last_session_turn_view(&sessions, database),
         Ok(None) => session_service_error(SessionServiceError::StateInvalid),
         Err(error) => session_service_error(error),
     }

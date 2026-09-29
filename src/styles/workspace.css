@@ -355,6 +355,39 @@
   text-align: center;
 }
 
+/* 会议助手未点名轮的「仅转写」标注：紧跟用户气泡、左对齐弱化显示。 */
+.session-transcript-note {
+  margin: 2px 0 6px 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* 标注旁的追答入口：小号描边文字按钮，与工具栏「让助手回答」同一路径。 */
+.session-transcript-note .session-transcript-followup {
+  margin-left: 8px;
+  padding: 1px 8px;
+  font-size: 12px;
+  color: var(--accent-strong);
+  background: transparent;
+}
+
+/* 门控常驻提示：工具栏下方、「会话配置」折叠区之外，会话进行中始终可见。 */
+.session-gating-hint {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* 存在可追答的仅转写发言（assistantPending）时按钮高亮，引导点击。 */
+.session-toolbar button[data-pending="true"] {
+  box-shadow: 0 0 0 2px var(--accent-strong-soft);
+  animation: assistant-pending-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes assistant-pending-pulse {
+  50% { box-shadow: 0 0 0 4px var(--accent-strong-soft); }
+}
+
 .session-footer {
   display: flex;
   flex-direction: column;

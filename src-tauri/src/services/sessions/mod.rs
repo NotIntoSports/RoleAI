@@ -41,6 +41,8 @@ pub enum SessionServiceError {
     AlreadyActive,
     NotFound,
     StateInvalid,
+    /// 强制回答时没有可回答的仅转写发言。
+    NothingToAnswer,
     TransportInvalid,
     SidecarFailed,
     Cascade(CascadeError),
@@ -57,6 +59,7 @@ impl SessionServiceError {
             Self::AlreadyActive => "SESSION_ALREADY_ACTIVE",
             Self::NotFound => "SESSION_NOT_FOUND",
             Self::StateInvalid => "SESSION_STATE_INVALID",
+            Self::NothingToAnswer => "NOTHING_TO_ANSWER",
             Self::TransportInvalid => "SESSION_TRANSPORT_INVALID",
             Self::SidecarFailed => "SESSION_SIDECAR_FAILED",
             Self::Cascade(error) => error.code(),
@@ -1020,13 +1023,15 @@ fn transcribe_meeting_pcm(
     }
 }
 
+/// 点名判定：文本与角色名先统一规范化（去空白与中英文标点、英文转小写、
+/// 全角折半角），「会议 助手，你好」「AI 助手?」这类口语转写也算点名，
+/// 而「你听得见我说话吗」不算。规范化复用回声判定同款实现，两侧行为一致。
 pub(crate) fn meeting_assistant_was_mentioned(text: &str, role_name: &str) -> bool {
-    let normalized = text.to_ascii_lowercase();
-    let name = role_name.trim().to_ascii_lowercase();
+    let normalized = crate::services::echo_guard::normalize(text);
+    let name = crate::services::echo_guard::normalize(role_name);
     (!name.is_empty() && normalized.contains(&name))
         || normalized.contains("会议助手")
         || normalized.contains("ai助手")
-        || normalized.contains("ai 助手")
 }
 
 fn with_default_voice(config: &PublicConfig) -> PublicConfig {
@@ -3184,5 +3189,18 @@ mod tests {
         assert!(!should_compress(19, 3));
         assert!(should_compress(20, 3));
         assert!(!should_compress(3, 3));
+    }
+
+    #[test]
+    fn meeting_mention_tolerates_spaces_and_punctuation() {
+        use super::meeting_assistant_was_mentioned;
+        // 空格 + 中文标点打断角色名：规范化后仍算点名。
+        assert!(meeting_assistant_was_mentioned("会议 助手，你好", "会议助手"));
+        // 英文问号 + 空格分隔的「AI 助手」也算点名。
+        assert!(meeting_assistant_was_mentioned("AI 助手?", "会议助手"));
+        assert!(meeting_assistant_was_mentioned("嘿，会议助手帮我记一下", "会议助手"));
+        // 普通讨论不含点名关键词。
+        assert!(!meeting_assistant_was_mentioned("你听得见我说话吗", "会议助手"));
+        assert!(!meeting_assistant_was_mentioned("这个方案大家怎么看", "会议助手"));
     }
 }

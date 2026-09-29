@@ -4,7 +4,7 @@
   "normalization": "crlf-to-lf",
   "files": {
     "src-tauri/capabilities/main.json": "d6d5c5024ed6ba3b71c3f33a2a17c1dc10e25c2e359f8a7548c8531a95e90de7",
-    "src-tauri/src/lib.rs": "0de8239d1295682a18b0590ce286f3732b872c5dce3479090abb4656b75ecd18",
+    "src-tauri/src/lib.rs": "8574b56014212d01aeb42b127e0e10db6aafecdba107e842b960b0065cedf318",
     "src-tauri/src/contracts.rs": "5fafd5a66852cd7dca78d1b7b597af1d9767044a66a9be48bd25e88703bd2a82",
     "src-tauri/src/commands/mod.rs": "6099091e6d886e2633ff567fb9f6877d9c6777980d7c1d4a15d79b0c579562b4",
     "src-tauri/tauri.conf.json": "7cbaa279bb71a156cfb3563d2a935fbf859a21728ec11e6e886b5e0aaae6c219",
@@ -14,7 +14,7 @@
     "src-tauri/tests/security_contract.rs": "22e42bfb76980bd585e6b012585207d39a1a8848b707336b0ebbc14f7dfb7ea3",
     "src-tauri/src/commands/config.rs": "e8e3c9cd8ed5e76d7961b927415d9cd01b17cd545adf23693f1ada015b57d203",
     "src-tauri/src/commands/materials.rs": "0f3ada37cc9ec6c404e278836bc6e9e973a1d5a914cbdce0b1fa8a2b0ddfc5e2",
-    "src-tauri/src/commands/sessions.rs": "0c17cd046fe2eb1fdafb43f41d3b6cc6359fbec81e38ac84015db48f99cf2f55",
+    "src-tauri/src/commands/sessions.rs": "2996da564882e4f9bbd4918142b652368742c30c7b206441e30eea22ef9cdb32",
     "src-tauri/src/commands/livestream.rs": "083acc0c6f46231113f0eda1f532016f9d9a8c3f8278fdea1f31098c052695e4",
     "src-tauri/src/commands/obs.rs": "42cc148ed5b6d8a78506a40ea2a272400112abfb586a397488b78a4df0dbf43b",
     "src-tauri/src/commands/voice.rs": "1c5d8fc589feeea832d21621526992e3854e341285add22a8dc8b390dcf48ba0",

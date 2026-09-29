@@ -1209,6 +1209,156 @@ mod connection_tests {
         eprintln!("audio probe result: {result:?}");
     }
 
+    /// 强制回答诊断（仅转写追答链路）：复刻泵的真实时序——append 全部语音 →
+    /// commit → 等转写 completed → conversation.item.create(原文) + response.create，
+    /// 逐帧打印服务端返回，定位「强制回答后服务端沉默/断链」发生在哪一步。
+    /// 运行：REALTIME_SMOKE_CONFIG=<config> REALTIME_SMOKE_ROUTE=<route id>
+    /// REALTIME_SMOKE_WAV=<16k mono wav>
+    #[test]
+    #[ignore = "Uses the saved Windows credential and consumes provider quota; set REALTIME_SMOKE_* explicitly"]
+    #[cfg(windows)]
+    fn live_dashscope_forced_respond_after_commit_probe() {
+        use crate::secrets::{SecretService, WindowsSecretStore};
+        use std::sync::Arc;
+
+        let path = std::env::var("REALTIME_SMOKE_CONFIG").expect("explicit config path required");
+        let config: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let route_id = std::env::var("REALTIME_SMOKE_ROUTE").expect("route id required");
+        let route = config["speech"]["voiceRoutes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"].as_str() == Some(route_id.as_str()))
+            .expect("selected route must exist")
+            .clone();
+        let provider = config["models"]["providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == route["e2eProviderId"])
+            .unwrap()
+            .clone();
+        let secrets = SecretService::new("default", Arc::new(WindowsSecretStore::new())).unwrap();
+        let credential = secrets
+            .read(provider["credential"]["reference"].as_str().unwrap())
+            .unwrap()
+            .expect("saved credential must exist");
+        let endpoint = ProviderEndpoint {
+            provider_id: provider["id"].as_str().unwrap().to_owned(),
+            base_url: provider["baseUrl"].as_str().unwrap().to_owned(),
+        };
+        let url = realtime_url(
+            &endpoint.base_url,
+            route["e2eModelId"].as_str().unwrap_or(""),
+        )
+        .unwrap();
+        let dialect = realtime_dialect(&endpoint.base_url);
+        let wav_path = std::env::var("REALTIME_SMOKE_WAV").expect("speech wav required");
+        let bytes = std::fs::read(&wav_path).unwrap();
+        let pcm = {
+            assert!(bytes.len() >= 12 && &bytes[0..4] == b"RIFF", "expect wav");
+            let mut offset = 12usize;
+            loop {
+                assert!(offset + 8 <= bytes.len(), "no data chunk");
+                let id = &bytes[offset..offset + 4];
+                let size =
+                    u32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().unwrap()) as usize;
+                if id == b"data" {
+                    break bytes[offset + 8..(offset + 8 + size).min(bytes.len())].to_vec();
+                }
+                offset += 8 + size + (size & 1);
+            }
+        };
+        let item_text =
+            std::env::var("REALTIME_PROBE_ITEM").unwrap_or_else(|_| "你听得见我说话吗".to_owned());
+        let voice = route["voiceId"].as_str().unwrap_or("").to_owned();
+        let update = session_update_event(
+            &voice,
+            "你是会议助手。普通讨论只听不答；被点名或被要求回答时用中文简短回答。",
+            &dialect,
+        );
+        let cancel = AtomicBool::new(false);
+        let result = with_realtime_socket(&url, Some(credential.as_str()), &cancel, |socket| {
+            send_text(socket, &update.to_string())?;
+            wait_session_updated(socket, SESSION_UPDATED_TIMEOUT)?;
+            eprintln!("forced probe: session updated");
+            let chunk = dialect.input_rate as usize / 5; // 200ms 一块，贴近真实上行
+            for piece in pcm.chunks(chunk) {
+                send_text(socket, &append_audio_event(piece))?;
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            // 700ms 静音尾窗（与泵测试/真实分段器一致）再提交。
+            for _ in 0..7 {
+                send_text(socket, &append_audio_event(&[0u8; 3200]))?;
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            send_text(socket, r#"{"type":"input_audio_buffer.commit"}"#)?;
+            eprintln!("forced probe: committed, waiting for transcription");
+            // 等转写 completed（同泵流程：转写定稿后泵才发 ForceRespond）。
+            // delta 与 completed 之间服务端常有数秒空窗，Timeout 必须继续轮询；
+            // 服务端转写流本身偶发停滞（实测卡在半句），超时后仍继续观测 respond 段。
+            let mut transcript = String::new();
+            let mut got_completed = false;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while !got_completed {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                if remaining.is_zero() {
+                    eprintln!("forced probe: transcription incomplete after 30s, responding anyway");
+                    break;
+                }
+                let text = match socket.recv_text(remaining.min(std::time::Duration::from_secs(5))) {
+                    Ok(text) => text,
+                    Err(RealtimeError::Timeout) => continue,
+                    Err(error) => return Err(error),
+                };
+                eprintln!("forced probe <- {}", text.get(..300).unwrap_or(&text));
+                let Ok(value) = serde_json::from_str::<Value>(&text) else {
+                    continue;
+                };
+                match value["type"].as_str().unwrap_or("") {
+                    "conversation.item.input_audio_transcription.completed" => {
+                        transcript = value["transcript"].as_str().unwrap_or("").to_owned();
+                        got_completed = true;
+                    }
+                    "error" => panic!("forced probe: server error before respond: {text}"),
+                    _ => {}
+                }
+            }
+            eprintln!("forced probe: transcript=\"{transcript}\" -> item.create + response.create");
+            eprintln!("forced probe: transcript=\"{transcript}\" -> item.create + response.create");
+            send_text(socket, &conversation_text_event(&item_text))?;
+            send_text(socket, &response_create_event(true))?;
+            // 观测服务端对强制回答的反应：response.done / error / 沉默断链。
+            let respond_deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+            loop {
+                let remaining = respond_deadline
+                    .saturating_duration_since(std::time::Instant::now());
+                if remaining.is_zero() {
+                    eprintln!("forced probe: 60s with no response.done — server stalled");
+                    return Ok(());
+                }
+                match socket.recv_text(remaining.min(std::time::Duration::from_secs(5))) {
+                    Ok(text) => {
+                        eprintln!("forced probe <- {}", text.get(..300).unwrap_or(&text));
+                        if text.contains("\"response.done\"") {
+                            eprintln!("forced probe: response.done received");
+                            return Ok(());
+                        }
+                        if text.contains("\"type\":\"error\"") {
+                            eprintln!("forced probe: server error event");
+                            return Ok(());
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!("forced probe: recv error after respond: {error:?}");
+                        return Err(error);
+                    }
+                }
+            }
+        });
+        eprintln!("forced probe result: {result:?}");
+    }
+
     /// 应用同路径音频轮诊断：直接调 transcribe_turn（session.update→append→commit→collect_turn），
     /// 打印最终 Err 的真实错误码，与手拼探针的帧级观测互为对照。
     /// 运行：REALTIME_SMOKE_CONFIG=<config> REALTIME_SMOKE_ROUTE=<route id>
