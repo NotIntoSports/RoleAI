@@ -11,7 +11,12 @@
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "test:tauri": "cargo test --manifest-path src-tauri/Cargo.toml && npm run test:tauri-ui && node --test tests/tauri/*.test.mjs && npm run build:tauri-ui",
-    "test:tauri-package": "node scripts/test-tauri-package.mjs"
+    "test:tauri-package": "node scripts/test-tauri-package.mjs",
+    "dev:demo": "vite --config vite.demo.config.ts",
+    "build:demo": "tsc -p tsconfig.tauri.json && vite build --config vite.demo.config.ts",
+    "test:e2e:demo": "playwright test --config playwright.config.ts",
+    "screenshots": "node scripts/screenshots.mjs",
+    "demo:video": "node scripts/demo-video.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "2.11.1",
@@ -22,6 +27,7 @@
     "zod": "^3.25.0"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "@tauri-apps/cli": "2.11.4",
     "@testing-library/jest-dom": "7.0.1",
     "@testing-library/react": "16.3.3",

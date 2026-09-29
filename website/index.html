@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="description" content="RoleAI 是一款 Windows 桌面 AI 角色交互助手：设定角色身份、开场白和表达风格，结合本地资料进行实时语音对话。在线演示无需安装。" />
+    <title>RoleAI — 让 AI 以你设定的角色，参与实时交流</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="container topbar">
+      <a class="brand" href="./"><span class="brand-mark" aria-hidden="true">✦</span>RoleAI</a>
+      <span class="badges">
+        <img src="https://img.shields.io/github/stars/NotIntoSports/RoleAI?style=social" alt="GitHub Stars" width="90" height="20" loading="lazy" />
+        <img src="https://img.shields.io/github/license/NotIntoSports/RoleAI" alt="License" width="92" height="20" loading="lazy" />
+      </span>
+    </header>
+
+    <main>
+      <section class="container hero" aria-labelledby="hero-heading">
+        <h1 id="hero-heading">RoleAI</h1>
+        <p class="tagline">让 AI 以你设定的角色，参与实时交流。</p>
+        <p class="description">
+          Windows 桌面 AI 角色交互助手：设定角色身份、开场白和表达风格，选择模型与语音服务，
+          结合导入的资料进行语音对话。可用于面试问答、会议辅助和直播讲解，并提供会话记录与直播讲稿管理。
+        </p>
+        <div class="actions">
+          <a class="button button-primary" href="./demo/">在线体验演示版</a>
+          <a class="button" href="https://github.com/NotIntoSports/RoleAI/releases">下载 Windows 版</a>
+          <a class="button" href="https://github.com/NotIntoSports/RoleAI/tree/main/guide">阅读文档</a>
+        </div>
+        <img
+          class="hero-shot"
+          src="./assets/screenshots/workspace-dark.png"
+          alt="RoleAI 工作台：严苛面试官角色进行实时对话，字幕与 AI 回答逐字显示"
+          width="1440"
+          height="900"
+        />
+        <p class="notice">
+          当前版本是 Windows x64 内部试用版。使用前须告知对方 AI 参与和记录方式，并由人工复核；
+          不得用于隐蔽冒充或未经复核的自动决策。在线演示版的所有数据均为虚构，未连接任何 AI 服务。
+        </p>
+      </section>
+
+      <section class="container" aria-labelledby="features-heading">
+        <h2 id="features-heading">三个核心能力</h2>
+        <p class="section-lead">围绕“实时交流”设计的完整闭环，从对话到记录一目了然。</p>
+        <ul class="features">
+          <li>
+            <h3>实时语音对话</h3>
+            <p>说话字幕逐字上屏，AI 回答流式显示；播放中可以随时打断，暂停、接管、纠正都有对应控制。</p>
+          </li>
+          <li>
+            <h3>角色与资料驱动</h3>
+            <p>内置严苛面试官、表达教练、会议助手、直播讲解员等角色；导入资料后回答可以检索并标注引用。</p>
+          </li>
+          <li>
+            <h3>本机优先</h3>
+            <p>角色配置、资料和会话记录保存在本机，密钥存入 Windows 凭据管理器；记录支持导出 Markdown。</p>
+          </li>
+        </ul>
+      </section>
+
+      <section class="container" aria-labelledby="gallery-heading">
+        <h2 id="gallery-heading">界面一览</h2>
+        <p class="section-lead">以下截图由 Playwright 自动生成，与界面同步更新。</p>
+        <div class="gallery">
+          <figure>
+            <img src="./assets/screenshots/interview-live.png" alt="严苛面试官正在追问缓存方案细节" width="1440" height="900" loading="lazy" />
+            <figcaption>模拟面试：严苛面试官连续追问</figcaption>
+          </figure>
+          <figure>
+            <img src="./assets/screenshots/materials.png" alt="资料库页面展示资料列表与关键词检索结果" width="1440" height="900" loading="lazy" />
+            <figcaption>资料库：导入、检索并引用</figcaption>
+          </figure>
+          <figure>
+            <img src="./assets/screenshots/records.png" alt="会话记录详情页展示多轮问答" width="1440" height="900" loading="lazy" />
+            <figcaption>会话记录：回看与导出</figcaption>
+          </figure>
+          <figure>
+            <img src="./assets/screenshots/services.png" alt="服务配置页展示供应商连接测试结果，密钥为脱敏状态" width="1440" height="900" loading="lazy" />
+            <figcaption>服务配置：连接测试与脱敏密钥</figcaption>
+          </figure>
+          <figure>
+            <img src="./assets/screenshots/livestream.png" alt="虚拟直播页面展示依据产品资料生成的分段讲稿" width="1440" height="900" loading="lazy" />
+            <figcaption>虚拟直播：分段讲稿可控播报</figcaption>
+          </figure>
+          <figure>
+            <img src="./assets/screenshots/diagnostics.png" alt="诊断页展示语音线路延迟统计表" width="1440" height="900" loading="lazy" />
+            <figcaption>延迟诊断：P50/P95 一目了然</figcaption>
+          </figure>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="container">
+        <span>RoleAI · Windows 桌面客户端</span>
+        <span>
+          <a href="https://github.com/NotIntoSports/RoleAI">GitHub 仓库</a> ·
+          <a href="https://github.com/NotIntoSports/RoleAI/tree/main/guide">文档</a> ·
+          <a href="./demo/">在线演示</a> ·
+          <a href="./en/">English</a>
+        </span>
+      </div>
+    </footer>
+  </body>
+</html>

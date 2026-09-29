@@ -2,6 +2,7 @@ node_modules/
 src-tauri/target/
 src-tauri/gen/
 dist-tauri-ui/
+dist-demo/
 config/local.json
 config/*.local.json
 config/*.backup.json
@@ -47,3 +48,8 @@ resources/prerequisites/*
 !resources/prerequisites/.gitkeep
 .codex-tmp/
 .local-archive/
+test-results/
+playwright-report/
+
+# 演示视频为可再生成产物（npm run demo:video），不入库
+.github/assets/demo/

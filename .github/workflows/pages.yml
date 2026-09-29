@@ -1,0 +1,60 @@
+# GitHub Pages：落地页（website/）+ 在线演示（dist-demo）。
+# 发布由用户在仓库 Settings → Pages → Source 选 “GitHub Actions” 后生效；本工作流只在 main 更新时运行。
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build demo (base=/RoleAI/demo/)
+        run: npm run build:demo
+        env:
+          DEMO_BASE: /RoleAI/demo/
+      - name: Assemble site
+        run: |
+          mkdir -p site/assets/screenshots site/demo
+          cp -r website/. site/
+          cp -r .github/assets/screenshots/. site/assets/screenshots/
+          cp -r dist-demo/. site/demo/
+          # dist-demo 的入口是 demo.html（base=/RoleAI/demo/），Pages 目录访问需要 index.html。
+          cp dist-demo/demo.html site/demo/index.html
+      - name: Configure Pages
+        uses: actions/configure-pages@v6
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
