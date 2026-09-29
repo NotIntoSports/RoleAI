@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Camera, Mic, MicOff, Pause, Play, Plus, ScreenShare, Send, Square, X } from "lucide-react";
+import { Camera, Check, ChevronDown, Mic, MicOff, Pause, Play, Plus, ScreenShare, Send, Square, X } from "lucide-react";
 
 import * as api from "../../api/commands";
 import "../../styles/workspace.css";
@@ -200,6 +200,21 @@ export function WorkspaceSession({
   const statusSeq = useRef(0);
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef<HTMLDetailsElement | null>(null);
+  const [roleMenuOpen, setRoleMenuOpen] = useState(false);
+  const roleMenuRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!roleMenuOpen) return;
+    const closeOnOutside = (event: PointerEvent) => {
+      if (roleMenuRef.current && !roleMenuRef.current.contains(event.target as Node)) setRoleMenuOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") setRoleMenuOpen(false); };
+    document.addEventListener("pointerdown", closeOnOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [roleMenuOpen]);
   useEffect(() => {
     if (!moreOpen) return;
     const closeOnOutside = (event: PointerEvent) => {
@@ -478,8 +493,6 @@ export function WorkspaceSession({
         phase={phase}
         mode={mode}
         realtimeStatus={realtimeStatus}
-        roleProfileId={roleProfileId}
-        setRoleProfileId={setRoleProfileId}
         setAllowWebSearch={setAllowWebSearch}
         inputSource={inputSource}
         setInputSource={setInputSource}
@@ -601,9 +614,44 @@ export function WorkspaceSession({
                   onReport={() => void submitReport()}
                 />
               </details>
-              <span className="composer-role-chip" title={`当前角色：${roleName}`}>
-                <span className="composer-role-dot" aria-hidden="true" />{roleName}
-              </span>
+              <div className="composer-role-chip" ref={roleMenuRef}>
+                <button
+                  type="button"
+                  className="composer-role-trigger"
+                  title="切换角色"
+                  aria-label="角色"
+                  aria-haspopup="listbox"
+                  aria-expanded={roleMenuOpen}
+                  disabled={busy || active || !config}
+                  onClick={() => setRoleMenuOpen(!roleMenuOpen)}
+                >
+                  <span className="composer-role-dot" aria-hidden="true" />
+                  <span className="composer-role-name">{roleName}</span>
+                  <ChevronDown size={13} aria-hidden="true" />
+                </button>
+                {roleMenuOpen && config && (
+                  <ul className="composer-role-menu" role="listbox" aria-label="切换角色">
+                    {config.roleProfiles.filter((role) => role.configVersion > 0).map((role) => (
+                      <li key={role.id}>
+                        <button
+                          type="button"
+                          role="option"
+                          aria-selected={role.id === roleProfileId}
+                          data-selected={role.id === roleProfileId}
+                          onClick={() => {
+                            setRoleProfileId(role.id);
+                            setAllowWebSearch(roleScenario(config, role.id) === "meetingAssistant");
+                            setRoleMenuOpen(false);
+                          }}
+                        >
+                          <span className="composer-role-option-name">{role.name}</span>
+                          {role.id === roleProfileId && <Check size={14} aria-hidden="true" />}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
               <button
                 type="button"
                 className="composer-mic"

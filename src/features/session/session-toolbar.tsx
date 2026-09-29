@@ -1,6 +1,5 @@
 import { ChevronDown, Wrench } from "lucide-react";
 
-import { roleScenario } from "./workspace-format";
 import type {
   AudioOutputDevice,
   MeetingProcess,
@@ -47,8 +46,6 @@ interface SessionToolbarProps {
   phase: string;
   mode: string;
   realtimeStatus: string;
-  roleProfileId: string;
-  setRoleProfileId: (id: string) => void;
   setAllowWebSearch: (allow: boolean) => void;
   inputSource: string;
   setInputSource: (source: string) => void;
@@ -86,8 +83,6 @@ export function SessionToolbar({
   phase,
   mode,
   realtimeStatus,
-  roleProfileId,
-  setRoleProfileId,
   setAllowWebSearch,
   inputSource,
   setInputSource,
@@ -121,10 +116,6 @@ export function SessionToolbar({
     <header className="session-toolbar">
       <div className="session-toolbar-meta">
         <h2 id="workspace-session-heading">当前会话</h2>
-        {config && <label className="session-role">角色<select disabled={busy || active} value={roleProfileId} onChange={(event) => { const next = event.target.value; setRoleProfileId(next); setAllowWebSearch(roleScenario(config, next) === "meetingAssistant"); }}>
-            <option value="">请选择角色</option>
-            {config.roleProfiles.filter((role) => role.configVersion > 0).map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}
-          </select></label>}
         <span className="status-badge" data-active={active}>
           {PHASE_LABELS[phase] ?? phase}
         </span>

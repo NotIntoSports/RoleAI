@@ -403,7 +403,7 @@ describe("WorkspaceSession", () => {
   it("keeps role and controls visible while configured options collapse without losing values", async () => {
     vi.mocked(commands.getConfigPublic).mockResolvedValue({ ok: true, data: configuredSession() });
     render(<WorkspaceSession />);
-    await screen.findByRole("combobox", { name: "角色" });
+    await screen.findByRole("button", { name: "角色" });
     const toggle = screen.getByRole("button", { name: "会话配置" });
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     expect(screen.getByLabelText("输入来源")).not.toBeVisible();
@@ -419,7 +419,7 @@ describe("WorkspaceSession", () => {
     config.speech.activeVoiceRouteId = null;
     vi.mocked(commands.getConfigPublic).mockResolvedValue({ ok: true, data: config });
     render(<WorkspaceSession />);
-    await screen.findByRole("combobox", { name: "角色" });
+    await screen.findByRole("button", { name: "角色" });
     const toggle = screen.getByRole("button", { name: "会话配置" });
     expect(toggle).toHaveAttribute("aria-expanded", "true");
     fireEvent.click(toggle);
@@ -432,15 +432,36 @@ describe("WorkspaceSession", () => {
     vi.mocked(commands.getConfigPublic).mockResolvedValue({ ok: true, data: configuredSession() });
     vi.mocked(commands.startSession).mockResolvedValueOnce({ ok: false, error: { code: "REALTIME_UNAUTHORIZED", message: "unauthorized", retryable: false, requestId: "test" } });
     render(<WorkspaceSession />);
-    await screen.findByRole("combobox", { name: "角色" });
+    await screen.findByRole("button", { name: "角色" });
     fireEvent.click(screen.getByRole("button", { name: "开始会话" }));
     await screen.findByText(/实时语音鉴权失败/);
     expect(screen.getByRole("button", { name: "会话配置" })).toHaveAttribute("aria-expanded", "true");
     vi.mocked(commands.getRuntimeStatus).mockResolvedValue({ ok: true, data: status({ phase: "listening", seq: 2 }) });
     fireEvent.click(screen.getByRole("button", { name: "开始会话" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "停止" })).toBeEnabled());
-    expect(screen.getByLabelText("角色")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "角色" })).toBeDisabled();
     expect(screen.getByLabelText("输入来源")).toBeDisabled();
+  });
+
+  it("switches role from the composer chip and keeps it locked while active", async () => {
+    const config = configuredSession();
+    config.roleProfiles.push({ id: "role-2", name: "面试官", systemPrompt: "interview", openingMessage: "", styleInstructions: "", active: true, configVersion: 1 });
+    vi.mocked(commands.getConfigPublic).mockResolvedValue({ ok: true, data: config });
+    render(<WorkspaceSession />);
+    const roleTrigger = await screen.findByRole("button", { name: "角色" });
+    expect(roleTrigger).toHaveTextContent("会议助手");
+    expect(screen.queryByRole("combobox", { name: "输入来源" })).toBeNull();
+    fireEvent.click(roleTrigger);
+    const options = await screen.findAllByRole("option", { name: /面试官/ });
+    fireEvent.click(options[0]);
+    expect(screen.queryByRole("listbox", { name: "切换角色" })).toBeNull();
+    expect(screen.getByRole("button", { name: "角色" })).toHaveTextContent("面试官");
+
+    vi.mocked(commands.startSession).mockResolvedValueOnce({ ok: true, data: { kind: "started", session: summary() } });
+    vi.mocked(commands.getRuntimeStatus).mockResolvedValue({ ok: true, data: status({ phase: "listening", seq: 2 }) });
+    fireEvent.click(screen.getByRole("button", { name: "开始会话" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "停止" })).toBeEnabled());
+    expect(screen.getByRole("button", { name: "角色" })).toBeDisabled();
   });
 
   it("shows 本轮未使用资料 after finalize when materials_used is false", async () => {
@@ -583,21 +604,21 @@ describe("WorkspaceSession", () => {
     expect(document.body.textContent).not.toMatch(/未开始/);
 
     act(() => {
-      listeners.transcript?.({ seq: 4, text: "新转写", done: true });
+      listeners.transcript?.({ seq: 4, text: "新转写", done: false });
     });
     expect(document.body.textContent).toContain("新转写");
     act(() => {
-      listeners.transcript?.({ seq: 1, text: "旧转写", done: true });
+      listeners.transcript?.({ seq: 1, text: "旧转写", done: false });
     });
     expect(document.body.textContent).toContain("新转写");
     expect(document.body.textContent).not.toContain("旧转写");
 
     act(() => {
-      listeners.reply?.({ seq: 5, text: "新回复", done: true });
+      listeners.reply?.({ seq: 5, text: "新回复", done: false });
     });
     expect(document.body.textContent).toContain("新回复");
     act(() => {
-      listeners.reply?.({ seq: 2, text: "旧回复", done: true });
+      listeners.reply?.({ seq: 2, text: "旧回复", done: false });
     });
     expect(document.body.textContent).toContain("新回复");
     expect(document.body.textContent).not.toContain("旧回复");
@@ -646,6 +667,55 @@ describe("WorkspaceSession", () => {
     await waitFor(() =>
       expect(vi.mocked(commands.getSession).mock.calls.length).toBeGreaterThan(initialFetches),
     );
+  });
+
+  it("clears live transcript bubbles immediately when the turn is persisted", async () => {
+    const listeners: {
+      transcript?: (payload: SessionTranscriptEvent) => void;
+      reply?: (payload: SessionReplyEvent) => void;
+    } = {};
+    const listen = vi.fn(async (event: string, handler: (payload: never) => void) => {
+      if (event === "session:transcript:v1") {
+        listeners.transcript = handler as (payload: SessionTranscriptEvent) => void;
+      }
+      if (event === "session:reply:v1") listeners.reply = handler as (payload: SessionReplyEvent) => void;
+      return () => {};
+    });
+    let storedTurns: SessionTurnView[] = [];
+    vi.mocked(commands.getSession).mockImplementation(async () => ({
+      ok: true,
+      data: detail({ turns: storedTurns }),
+    }));
+    vi.mocked(commands.startSession).mockResolvedValue({
+      ok: true,
+      data: { kind: "started", session: summary({ id: "sess-live-clear" }) },
+    });
+
+    render(<WorkspaceSession listen={listen} />);
+    fireEvent.click(await screen.findByRole("button", { name: "开始会话" }));
+    await waitFor(() => expect(commands.startSession).toHaveBeenCalledTimes(1));
+
+    // 流式阶段：live 气泡显示用户转写与回复。
+    act(() => {
+      listeners.transcript?.({ seq: 3, text: "问题原文", done: false });
+      listeners.reply?.({ seq: 4, text: "回答前半", done: false });
+    });
+    expect(screen.getByLabelText("用户转写").textContent).toBe("问题原文");
+    expect(screen.getByLabelText("AI 回复").textContent).toContain("回答前半");
+
+    // 落库收尾：live 气泡立即归零（history 尚未刷新的窗口期也不残留旧字幕），
+    // 随后 refresh 把落库轮次并入 history 列表（restoreLive=false 不回填 live）。
+    storedTurns = [
+      turn({ id: "turn-live", turnIndex: 0, userText: "问题原文", assistantText: "回答前半加后半" }),
+    ];
+    await act(async () => {
+      listeners.reply?.({ seq: 5, text: "回答前半加后半", done: true });
+    });
+    await waitFor(() =>
+      expect(screen.getByLabelText("AI 回复 · 第 1 轮").textContent).toContain("回答前半加后半"),
+    );
+    expect(screen.queryByLabelText("用户转写")).toBeNull();
+    expect(screen.getAllByLabelText(/AI 回复/)).toHaveLength(1);
   });
 
   it("shows IPC failures and never uses fetch or meeting-bridge copy", async () => {
@@ -1381,7 +1451,8 @@ describe("WorkspaceSession", () => {
     });
     expect(screen.getAllByLabelText("AI 回复")).toHaveLength(1);
 
-    // done=true 后落库文本以会话详情为准：仍只有一条，且不残留 partial 旧快照。
+    // done=true 后落库文本以会话详情为准：live 清空、history 呈现落库全文，
+    // 不残留 partial 旧快照。
     storedTurns = [
       turn({ id: "turn-9", turnIndex: 0, userText: "第三轮问题", assistantText: "第三轮回答的前半，以及补充的后半。", materialsUsed: false }),
     ];
@@ -1392,8 +1463,10 @@ describe("WorkspaceSession", () => {
     await waitFor(() =>
       expect(vi.mocked(commands.getSession).mock.calls.length).toBeGreaterThan(fetchesAfterStart),
     );
-    expect(screen.getAllByLabelText("AI 回复")).toHaveLength(1);
-    expect(screen.getByLabelText("AI 回复").textContent).toContain("以及补充的后半。");
+    await waitFor(() =>
+      expect(screen.getByLabelText("AI 回复 · 第 1 轮").textContent).toContain("以及补充的后半。"),
+    );
+    expect(screen.getAllByLabelText(/AI 回复/)).toHaveLength(1);
     expect(screen.queryByText("第三轮回答的前半")).toBeNull();
   });
 
@@ -1451,14 +1524,15 @@ describe("WorkspaceSession", () => {
     await waitFor(() =>
       expect(vi.mocked(commands.getSession).mock.calls.length).toBeGreaterThan(fetchesAfterStart),
     );
-    expect(screen.getByLabelText("AI 回复").textContent).toContain("回答前半与后半全文");
+    // done 清空 live 后，该轮由 history 呈现（AI 回复 · 第 1 轮）。
+    expect(screen.getByLabelText("AI 回复 · 第 1 轮").textContent).toContain("回答前半与后半全文");
 
     // 迟到的旧轮 partial（seq 更小）不得回退已显示内容。
     act(() => {
       bus.reply({ seq: 4294967297, text: "回答前半", done: false });
     });
-    expect(screen.getAllByLabelText("AI 回复")).toHaveLength(1);
-    expect(screen.getByLabelText("AI 回复").textContent).toContain("回答前半与后半全文");
+    expect(screen.getAllByLabelText(/AI 回复/)).toHaveLength(1);
+    expect(screen.getByLabelText("AI 回复 · 第 1 轮").textContent).toContain("回答前半与后半全文");
     expect(screen.queryByText("回答前半")).toBeNull();
   });
 });
