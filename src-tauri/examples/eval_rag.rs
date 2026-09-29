@@ -109,7 +109,6 @@ fn normalize_text(text: &str) -> String {
         .join("")
 }
 
-#[allow(clippy::needless_range_loop)]
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let questions_path = fixture_path("questions.jsonl");
     let raw = fs::read_to_string(&questions_path)?;
@@ -139,7 +138,6 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let modes = ["keyword", "vector", "hybrid"];
     let mut results = serde_json::Map::new();
     for mode in modes {
-        let mut chunk_recall = [0usize; 5]; // @1 @2 @3 (index4 unused placeholder for @5)
         let mut chunk_hits_at = [0usize; 3];
         let mut doc_hits_at = [0usize; 3];
         let mut mrr_chunk = 0f64;
@@ -185,7 +183,6 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             if doc_rank != 0 {
                 mrr_doc += 1.0 / doc_rank as f64;
             }
-            let _ = (&mut chunk_recall, docs.len());
         }
 
         results.insert(
