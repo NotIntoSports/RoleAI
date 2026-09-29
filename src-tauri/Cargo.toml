@@ -1,7 +1,7 @@
 [package]
 name = "role-ai-desktop"
 version = "0.1.0"
-description = "Local-first RoleAI desktop application"
+description = "本地优先的 Windows 实时语音 AI 角色助手：Rust + Tauri 全双工语音管线，支持模拟面试训练、会议助手与直播讲解"
 authors = ["RoleAI contributors"]
 edition = "2024"
 rust-version = "1.96"
