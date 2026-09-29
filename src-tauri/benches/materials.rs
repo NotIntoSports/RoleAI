@@ -4,17 +4,19 @@
 //! 向量用确定性伪随机生成（LCG 哈希替身，不调用 Embedding 服务）；
 //! 数据库为 tempfile 内一次性文件，跑完即弃。
 
-use criterion::{criterion_group, criterion_main, Criterion, Throughput};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::time::Duration;
 
 use ai_virtual_assistant_desktop_lib::database::Database;
-use ai_virtual_assistant_desktop_lib::materials::chunk::{chunk_text, CHUNKER_VERSION};
+use ai_virtual_assistant_desktop_lib::materials::chunk::{CHUNKER_VERSION, chunk_text};
 use ai_virtual_assistant_desktop_lib::materials::hybrid::{
-    index_chunks, search_hybrid, EmbeddingSpace,
+    EmbeddingSpace, index_chunks, search_hybrid,
 };
 use ai_virtual_assistant_desktop_lib::materials::store::{MaterialStore, NewMaterial};
-use ai_virtual_assistant_desktop_lib::providers::{EmbeddingError, EmbeddingProbe, ProviderEndpoint};
+use ai_virtual_assistant_desktop_lib::providers::{
+    EmbeddingError, EmbeddingProbe, ProviderEndpoint,
+};
 
 /// 确定性 LCG（Numerical Recipes 参数），跨运行可复现。
 struct Lcg(u64);
@@ -89,7 +91,10 @@ fn build_corpus(documents: usize, seed: u64) -> BenchCorpus {
             })
             .expect("insert material");
     }
-    BenchCorpus { _directory: directory, database }
+    BenchCorpus {
+        _directory: directory,
+        database,
+    }
 }
 
 /// 确定性向量替身：输入字节 Buller 哈希 → LCG 填充，不访问网络。
@@ -148,19 +153,37 @@ fn bench_hybrid(c: &mut Criterion) {
         let chunks = corpus
             .database
             .with_connection(|c| {
-                c.query_row("SELECT COUNT(*) FROM material_chunks", [], |r| r.get::<_, i64>(0))
+                c.query_row("SELECT COUNT(*) FROM material_chunks", [], |r| {
+                    r.get::<_, i64>(0)
+                })
             })
             .expect("count chunks");
         let label = format!("{}_chunks", chunks);
 
         // 索引本身也计入基准：探测为本地哈希替身，衡量 SQL + 写路径。
         group.bench_function(format!("index_chunks/{label}"), |b| {
-            b.iter(|| index_chunks(black_box(&corpus.database), black_box(&space), black_box(&probe)).expect("index"))
+            b.iter(|| {
+                index_chunks(
+                    black_box(&corpus.database),
+                    black_box(&space),
+                    black_box(&probe),
+                )
+                .expect("index")
+            })
         });
 
         let query = "连接池 扩容 语音链路";
         let query_vector = probe
-            .embed(&ProviderEndpoint { provider_id: "bench".into(), base_url: String::new() }, None, "lcg-64", 64, query)
+            .embed(
+                &ProviderEndpoint {
+                    provider_id: "bench".into(),
+                    base_url: String::new(),
+                },
+                None,
+                "lcg-64",
+                64,
+                query,
+            )
             .expect("embed query");
         group.throughput(Throughput::Elements(chunks as u64));
         group.bench_function(format!("search_hybrid_vector/{label}"), |b| {
@@ -176,8 +199,13 @@ fn bench_hybrid(c: &mut Criterion) {
         });
         group.bench_function(format!("search_keyword/{label}"), |b| {
             b.iter(|| {
-                search_hybrid(black_box(&corpus.database), black_box(query), black_box(None), black_box(Some(5)))
-                    .expect("search")
+                search_hybrid(
+                    black_box(&corpus.database),
+                    black_box(query),
+                    black_box(None),
+                    black_box(Some(5)),
+                )
+                .expect("search")
             })
         });
         let _ = query_rng.next_usize(1);

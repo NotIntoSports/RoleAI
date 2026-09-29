@@ -5,16 +5,22 @@
 //! 口径：除非另注，单次迭代 = 一个实时采集块（3072 字节 = 32ms@48kHz 16-bit 单声道）
 //! 或一次模型推理。
 
-use criterion::{criterion_group, criterion_main, Criterion, Throughput};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::path::Path;
 use std::time::Duration;
 
 use ai_virtual_assistant_desktop_lib::audio::barge_in::BargeInMonitor;
-use ai_virtual_assistant_desktop_lib::audio::pcm::{resample_pcm16_mono, PcmRing, RING_CAPACITY_BYTES};
+use ai_virtual_assistant_desktop_lib::audio::pcm::{
+    PcmRing, RING_CAPACITY_BYTES, resample_pcm16_mono,
+};
 use ai_virtual_assistant_desktop_lib::audio::segmenter::{SpeechSegmenter, UtteranceSegmenter};
-use ai_virtual_assistant_desktop_lib::audio::smart_turn::{SmartTurnAnalyzer, TurnCompletenessDetector};
-use ai_virtual_assistant_desktop_lib::audio::vad::{SileroVad, VadSegmenter, VoiceActivityDetector};
+use ai_virtual_assistant_desktop_lib::audio::smart_turn::{
+    SmartTurnAnalyzer, TurnCompletenessDetector,
+};
+use ai_virtual_assistant_desktop_lib::audio::vad::{
+    SileroVad, VadSegmenter, VoiceActivityDetector,
+};
 use ai_virtual_assistant_desktop_lib::services::bench_support::{
     gate_drain_deadline_from_bytes, gate_timers_expired, is_echo, normalize,
 };
@@ -28,7 +34,10 @@ struct Lcg(u64);
 impl Lcg {
     fn next_f32(&mut self) -> f32 {
         // 数值分析教材级参数（Numerical Recipes）。
-        self.0 = self.0.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
         ((self.0 >> 33) as f32 / (u32::MAX >> 1) as f32) - 1.0
     }
 }
@@ -54,8 +63,7 @@ fn synth_f32_16k(samples: usize, freq_hz: f32, amplitude: f32, seed: u64) -> Vec
     (0..samples)
         .map(|n| {
             let t = n as f32 / 16_000.0;
-            (amplitude * (2.0 * std::f32::consts::PI * freq_hz * t).sin()
-                + 0.02 * rng.next_f32())
+            (amplitude * (2.0 * std::f32::consts::PI * freq_hz * t).sin() + 0.02 * rng.next_f32())
                 .clamp(-1.0, 1.0)
         })
         .collect()
@@ -142,7 +150,12 @@ fn bench_echo_guard(c: &mut Criterion) {
         normalize("好的，那么下一轮我会针对索引和查询计划给出具体建议。"),
     ];
     group.bench_function("is_echo_typical_turn", |b| {
-        b.iter(|| is_echo(black_box("我觉得连接池这边可以先保持现状再观察"), black_box(&recent)))
+        b.iter(|| {
+            is_echo(
+                black_box("我觉得连接池这边可以先保持现状再观察"),
+                black_box(&recent),
+            )
+        })
     });
     group.bench_function("normalize_200_chars", |b| {
         let text = "这是一个用来测量回声文本规一化开销的样例。".repeat(8);
