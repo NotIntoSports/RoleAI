@@ -293,6 +293,16 @@ impl AudioCapture {
         self.lock().barge_utterance = Some(pcm);
     }
 
+    /// 测试专用：注入固定概率的 VAD 替身替换 barge 监听器，钉住
+    /// 「AGC 增益后的信号喂监听」这条链路。
+    #[cfg(test)]
+    pub fn stage_barge_monitor_for_tests(
+        &self,
+        detector: Box<dyn crate::audio::vad::VoiceActivityDetector>,
+    ) {
+        self.lock().barge_in = Some(crate::audio::barge_in::BargeInMonitor::with_detector(detector));
+    }
+
     pub fn tap_dropped(&self) -> u64 {
         self.lock()
             .tap_dropped
@@ -522,8 +532,7 @@ fn apply_gain(pcm: &[u8], gain: f32) -> Option<Vec<u8>> {
 /// sidecar 采集线程共用同一条路，保证两种输入源行为一致。
 fn ingest_into_state(state: &mut CaptureState, pcm: &[u8]) {
     state.ring.push(pcm);
-    // AGC：按块峰值自适应增益（平滑防跳变）。barge 打断监听保持原始电平——
-    // 放大后的回声可能误触发打断。
+    // AGC：按块峰值自适应增益（平滑防跳变）。进分段器与 barge 打断监听。
     let chunk_peak = pcm
         .chunks_exact(2)
         .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]).unsigned_abs())
@@ -552,11 +561,15 @@ fn ingest_into_state(state: &mut CaptureState, pcm: &[u8]) {
         segmenter,
         ..
     } = &mut *state;
+    // barge 监听与分段器同吃 AGC 后信号：实测麦克风电平仅 ~4% FS，原始电平
+    // 喂 Silero 达不到 0.5 概率阈值，播报打断永不触发（打不断的主要根因）。
+    // 放大后的回声理论上更易误触发打断，兜底是泵侧只在 turn.responding 时
+    // clear+cancel——误打断的代价（AI 停一下重说）远小于打不断。
     if suppressed
         && let Some(monitor) = barge_in.as_mut()
         && !barge_flag.load(Ordering::SeqCst)
     {
-        monitor.ingest(pcm);
+        monitor.ingest(pcm_for_vad);
         if monitor.triggered() {
             *barge_utterance = monitor.take_staged();
             barge_flag.store(true, Ordering::SeqCst);
@@ -686,6 +699,53 @@ mod tests {
                 Ok(RealtimeCaptureSignal::CommitTurn)
             );
         });
+    }
+
+    /// 打断链路（AGC 馈电核心用例）：实测麦克风电平 ~4% FS（约 1300/32768），
+    /// 原始电平喂 Silero 达不到 0.5 阈值；经 AGC 增益放大后必须能触发打断。
+    /// VAD 替身按「窗口峰值严格超过原始块峰值」判定人声：原始信号增益为 1,
+    /// 峰值恒等于 raw_peak 永远不触发；只有 AGC 增益后的信号（>raw_peak）
+    /// 才会被判人声——钉住监听器吃的是增益后信号而非原始信号。
+    #[test]
+    fn barge_monitor_ingests_agc_gained_signal_not_raw() {
+        struct GainAwareVad {
+            raw_peak: i16,
+        }
+        impl crate::audio::vad::VoiceActivityDetector for GainAwareVad {
+            fn process(&mut self, window: &[f32]) -> f32 {
+                let peak = (window
+                    .iter()
+                    .fold(0.0f32, |max, sample| max.max(sample.abs()))
+                    * 32768.0) as i32;
+                if peak > i32::from(self.raw_peak) + 64 {
+                    0.9
+                } else {
+                    0.0
+                }
+            }
+        }
+
+        let mut capture = AudioCapture::from_injected();
+        // 小电平人声：峰值约 4% FS，连续帧（每帧 20ms@48k = 960 采样）。
+        let quiet_voice = le_i16(&[1300i16; 960]);
+        capture.stage_barge_monitor_for_tests(Box::new(GainAwareVad { raw_peak: 1300 }));
+        // 进入回声抑制窗（播报期间），barge 监听只在此窗工作。
+        capture.suppress_echo_for(std::time::Duration::from_secs(30));
+
+        for _ in 0..14 {
+            capture.push_pcm(&quiet_voice);
+        }
+        assert!(
+            capture
+                .barge_in_flag()
+                .load(std::sync::atomic::Ordering::SeqCst),
+            "AGC-gained quiet voice must trigger barge-in (raw level alone cannot)"
+        );
+        let utterance = capture.take_barge_in_utterance().expect("staged utterance");
+        assert!(
+            utterance.len() >= 8 * 3072,
+            "utterance should cover the triggered windows (gained PCM)"
+        );
     }
 
     /// 打断信号：播报抑制窗内监听器触发（暂存话音）→ BargeIn 信号，

@@ -3,7 +3,7 @@ use crate::audio::pcm::downsample_48k_to_16k;
 use crate::audio::vad::VoiceActivityDetector;
 
 const START_PROB: f32 = 0.5;
-const TRIGGER_WINDOWS: usize = 12; // 连续 ~384ms 人声
+const TRIGGER_WINDOWS: usize = 8; // 连续 ~256ms 人声即触发（插话要跟手）
 const WINDOW_BYTES_48K: usize = 3072;
 
 pub struct BargeInMonitor {
@@ -109,13 +109,13 @@ mod tests {
 
     #[test]
     fn sustained_voice_triggers_and_stages_buffered_speech() {
-        let mut probs = vec![0.9f32; 40]; // 连续语音 ≥12 窗触发
+        let mut probs = vec![0.9f32; 40]; // 连续语音 ≥8 窗触发
         probs.extend(vec![0.0; 40]);
         let mut m = monitor(&probs);
         m.ingest(&frames48(2000, 60)); // 60 帧 ≈ 37 窗语音 → 触发
         assert!(m.triggered());
         let utterance = m.take_staged().expect("staged");
-        assert!(utterance.len() >= 12 * 3072);
+        assert!(utterance.len() >= 8 * 3072);
         assert!(m.take_staged().is_none()); // 已取走
     }
 

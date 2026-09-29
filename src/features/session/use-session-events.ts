@@ -58,18 +58,28 @@ export function useSessionEvents({
       transcriptSeq.current = payload.seq;
       setTranscript(payload.text);
     }
-    // done=true 表示已落库：流式快照用 2^32 起步的大序号，落库事件用小序号，
-    // 按序号门控会被当旧事件丢掉，所以落库收尾不看序号、总是刷新，文本以库为准。
-    if (payload.done) void refreshRef.current();
-  }, [setTranscript]);
+    // done=true 表示已落库：轮已进入 history（refresh 后以库为准），live 区
+    // 立即归零，不再挂着上一轮字幕等下一轮覆盖。序号门控保持 done 前的
+    // partial 高水位——落库事件的小序号不参与门控，同轮迟到的旧 partial
+    // （seq 更小）仍会被丢弃，新轮 partial（2^32 起步递增）正常放行。
+    if (payload.done) {
+      setTranscript("");
+      setReply("");
+      void refreshRef.current();
+    }
+  }, [setTranscript, setReply]);
 
   const applyReply = useCallback((payload: SessionReplyEvent) => {
     if (payload.seq > replySeq.current) {
       replySeq.current = payload.seq;
       setReply(payload.text);
     }
-    if (payload.done) void refreshRef.current();
-  }, [setReply]);
+    if (payload.done) {
+      setTranscript("");
+      setReply("");
+      void refreshRef.current();
+    }
+  }, [setTranscript, setReply]);
 
   const applyPlaybackAudio = useCallback((payload: LocalSessionAudioEvent) => {
     audioDiagnostics.eventsReceived += 1;

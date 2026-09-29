@@ -16,7 +16,7 @@ import type {
 
 export interface SessionControlsParams {
   finalizeUtterance: (text: string) => Promise<void>;
-  refresh: (id?: string | null) => Promise<void>;
+  refresh: (id?: string | null, restoreLive?: boolean) => Promise<void>;
   config: PublicConfig | null;
   roleProfileId: string;
   voiceRouteId: string;
@@ -190,7 +190,8 @@ export function useSessionControls({
       setReportSummary("");
       setReportDetail("");
       setMessage("");
-      await refresh(result.data.session.id);
+      // 新会话就绪：回填 live 区（开场白/上一现场），与 done 收尾刷新的清空语义区分。
+      await refresh(result.data.session.id, true);
     } catch {
       setConfigurationOpen(true);
       setMessage("IPC_UNAVAILABLE：本地操作失败");

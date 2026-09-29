@@ -249,7 +249,7 @@ export function WorkspaceSession({
   }, []);
 
   const refresh = useCallback(
-    async (id?: string | null) => {
+    async (id?: string | null, restoreLive = false) => {
       const epoch = requestEpoch.current;
       const target = id ?? sessionIdRef.current;
       try {
@@ -267,8 +267,16 @@ export function WorkspaceSession({
             setTurns(detail.data.turns);
             const last = detail.data.turns.at(-1);
             if (last) {
-              setTranscript(last.userText);
-              setReply(last.assistantText);
+              if (restoreLive) {
+                // 页面恢复/初始加载：把最后一轮回填 live 区，重建现场。
+                setTranscript(last.userText);
+                setReply(last.assistantText);
+              } else {
+                // 会话中收尾刷新：轮已进 history，live 区保持空，
+                // 上一轮字幕随 history 呈现，不再挂到下一轮开始。
+                setTranscript("");
+                setReply("");
+              }
               setUnusedMaterials(!last.materialsUsed);
               setWebSources(last.webSources ?? []);
               setWebDegraded(last.webDegraded ?? false);

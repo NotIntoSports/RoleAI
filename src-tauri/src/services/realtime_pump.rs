@@ -643,18 +643,20 @@ fn run_pump(
     let mut pending_recovered_text: Option<String> = None;
     let mut held_audio: Vec<u8> = Vec::new();
     const HELD_CAP_BYTES: usize = 60 * 48_000; // 60s@24k 上限，溢出即弃并停止扣留
-    // 回声闸门：播报/播净期间关闭——①麦克风不认证上行（回声不得进服务端缓冲，
-    // 否则会被转写成下一轮「用户发言」触发复读循环）②持续续本地回声抑制窗
-    // （分段器不产段）。AudioBridge 播放缓冲使 Rust 侧写入时间早于真实出声结束，
-    // 所以开门时机以 sidecar「已播净」回执为准，而非固定窗。
+    // 回声闸门（仅 Native/会议桥接路径）：播报/播净期间关闭——麦克风不认证上行
+    // （回声不得进服务端缓冲），并持续续本地回声抑制窗（分段器不产段）。
+    // WebAudio 模式不关门：WebView AEC 同上下文消除回声，上行保持全双工开放，
+    // 模型服务端 VAD 随时听得见用户（官方同款打断/判句）；渗入的回声转写由
+    // echo_guard 文本过滤兜底。
     let mut uplink_open = true;
     let mut gate_closed_at: Option<Instant> = None;
     // 播净回执丢失时的短兜底：按已写入音频时长续期，避免设备事件偶发
     // 丢失后麦克风被 20 秒安全阀闭锁，后续用户语音整句丢失。
     let mut gate_drain_deadline: Option<Instant> = None;
     /// 本地打断后的上行重开尾窗：clear 生效、设备缓冲排空与混响衰减需要时间，
-    /// 立即开门会让回声尾巴上行进服务端缓冲。
-    const BARGE_REOPEN_TAIL: Duration = Duration::from_millis(800);
+    /// 立即开门会让回声尾巴上行进服务端缓冲。1200ms 覆盖扬声器余音与
+    /// 小房间混响的常见衰减时长，代价只是打断后 ~1s 内不上行。
+    const BARGE_REOPEN_TAIL: Duration = Duration::from_millis(1200);
     /// 最近播报文本缓存容量（回声比对窗口）。
     const ECHO_RECENT_TURNS: usize = 3;
     // 回声比对缓存：每轮播过的 assistant 文本（归一化比对在 echo_guard 内做）。
@@ -671,7 +673,8 @@ fn run_pump(
             let _ = playback.ping();
             last_playback_ping = Instant::now();
         }
-        // 1) 麦克风 tap → 持续上行（闸门关闭期间只排空通道不发送）。
+        // 1) 麦克风 tap → 持续上行（Native 闸门关闭期间只排空通道不发送；
+        // WebAudio 全双工常开，回声转写由 echo_guard 文本过滤兜底）。
         while let Ok(pcm) = mic_tap.try_recv() {
             let residual = aec_monitor.observe_microphone(&pcm);
             if playback_mode == RealtimePlaybackMode::WebAudio
@@ -696,6 +699,9 @@ fn run_pump(
                 || !playback.is_alive()
                 || gate_timers_expired(gate_drain_deadline, gate_closed_at, Instant::now())
             {
+                // 打断/播净重开瞬间清一次服务端输入缓冲：关门期与重开尾窗渗入的
+                // 回声残渣（早于/晚于打断的零星帧）不得混进下一次提交。
+                session.send(ActorCommand::ClearInputBuffer);
                 uplink_open = true;
                 gate_closed_at = None;
                 gate_drain_deadline = None;
@@ -728,8 +734,8 @@ fn run_pump(
                 held_audio.clear();
             }
             Ok(PumpCommand::CommitTurn) => {
-                // 播报/播净期间提交没有意义：闸门关闭，新语音根本没上行过，
-                // 缓冲里只可能是抢跑的回声残渣。丢弃，等播净后由分段器重新判定。
+                // Native 闸门关闭期间提交没有意义：新语音根本没上行过，缓冲里只
+                // 可能是抢跑的回声残渣。WebAudio 全双工上行常开，提交总是有效。
                 if uplink_open {
                     session.send(ActorCommand::CommitTurn);
                 }
@@ -746,14 +752,13 @@ fn run_pump(
                     shared.interrupted_total.fetch_add(1, Ordering::Relaxed);
                 }
                 if !uplink_open {
-                    // 闸门关闭期的打断：服务端缓冲里只可能是关门前的抢跑回声
-                    // （真人的插话正被闸门丢弃中），清空防止混入下一次提交；
-                    // 上行延迟到尾窗后再开（混响衰减），期间帧照旧丢弃。
+                    // Native 闸门关闭期的打断：服务端缓冲里只可能是关门前的抢跑
+                    // 回声，清空防止混入下一次提交；上行延迟到尾窗后再开（混响衰减）。
                     session.send(ActorCommand::ClearInputBuffer);
                     uplink_reopen_at = Some(Instant::now() + BARGE_REOPEN_TAIL);
                 }
-                // 闸门本来就开着时不动它：用户语音可能已在服务端缓冲中，
-                // 既不能 clear 也不需要重开。
+                // WebAudio（闸门常开）不动服务端缓冲：用户语音已在其中，正是
+                // 打断后模型要听的下一句；clear 会把它抹掉。
             }
             Ok(PumpCommand::AppendImage(jpeg_b64)) => {
                 // 视频帧直通实时会话：不经麦克风 tap/回声闸门（画面无回声语义），
@@ -976,10 +981,9 @@ fn run_pump(
                         }
                         if !turn.played_audio {
                             emit(&PumpLive::Speaking(true));
-                            // 关门即作废遗留的播净回执：StreamPlayback 初始标记为
-                            // 「已播净」，上轮的 drained 回执也会残留——不先消费掉，
-                            // 闸门在关闭后第一次循环就被陈旧回执重开，播报期回声
-                            // 全程上行（自问自答循环的根因）。
+                            // Native 专属：关门即作废遗留的播净回执（StreamPlayback
+                            // 初始标记为「已播净」，上轮回执会残留，不消费会被陈旧
+                            // 回执立刻重开闸门）。WebAudio 不关门，无此语义。
                             let _ = playback.take_drained();
                             uplink_reopen_at = None;
                             uplink_open = false;
@@ -1181,6 +1185,15 @@ mod pump_tests {
         }
     }
 
+    /// 消费闸门重开瞬间的 input_audio_buffer.clear 帧（回声残渣清理）。
+    fn expect_gate_reopen_clear(ws: &mut WebSocket<TcpStream>) {
+        let frame = read_frame(ws);
+        assert_eq!(
+            frame["type"], "input_audio_buffer.clear",
+            "gate reopen must clear the server input buffer first"
+        );
+    }
+
     /// 短窗读取一帧；窗口内无帧返回 None（用于竞态友好的探针重试）。
     fn try_read_frame(
         ws: &mut WebSocket<TcpStream>,
@@ -1368,8 +1381,15 @@ mod pump_tests {
             "interrupted turn",
         );
         assert_eq!(fixture.sink.clears(), 1, "必须清空播放");
-        let frame = read_frame(&mut ws);
-        assert_eq!(frame["type"], "response.cancel", "必须发送服务端取消");
+        // 打断时序：speech_started → response.cancel（打断瞬间）；关门后 MemSink
+        // 视为已播净会立即重开并 clear。两帧都到达，顺序以实际为准。
+        let first = read_frame(&mut ws)["type"].clone();
+        let second = read_frame(&mut ws)["type"].clone();
+        assert!(
+            (first == "response.cancel" && second == "input_audio_buffer.clear")
+                || (first == "input_audio_buffer.clear" && second == "response.cancel"),
+            "expected cancel + clear in either order, got {first} then {second}"
+        );
         let turn = fixture.pump.shared.take_completed().unwrap();
         assert!(turn.interrupted);
         assert_eq!(
@@ -1567,6 +1587,9 @@ mod pump_tests {
         wait_for(|| !fixture.sink.written().is_empty(), "audio played");
 
         fixture.pump.send(PumpCommand::LocalBargeIn);
+        // MemSink 无缓冲即视为已播净：关门后下一圈重开先发 clear（回声残渣
+        // 清理），随后才是打断取消。真实设备由播净回执驱动，语义一致。
+        expect_gate_reopen_clear(&mut ws);
         assert_eq!(read_frame(&mut ws)["type"], "response.cancel");
         wait_for(|| fixture.sink.clears() >= 1, "playback cleared");
         drop(fixture.pump);
@@ -1784,6 +1807,7 @@ mod pump_tests {
             r#"{"type":"response.done","response":{"status":"completed"}}"#.into(),
         ))
         .unwrap();
+        expect_gate_reopen_clear(&mut ws);
         let mut frame = None;
         for _ in 0..20 {
             tap_tx.send(vec![3u8; 9600]).unwrap();
@@ -1797,6 +1821,92 @@ mod pump_tests {
         assert_eq!(
             STANDARD.decode(frame["audio"].as_str().unwrap()).unwrap(),
             vec![3u8; 3200]
+        );
+        drop(pump);
+    }
+
+    /// 闸门重开瞬间必须清一次服务端输入缓冲：关门期与重开尾窗渗入的
+    /// 回声残渣不得混进下一次提交。重开后第一帧应为 clear,随后 append 恢复。
+    #[test]
+    fn gate_reopen_clears_server_input_buffer_before_resuming_uplink() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let session = RealtimeSession::start_with_profile(
+            RealtimeCapabilityProfile::openai_compatible(realtime_dialect(
+                "http://127.0.0.1/api-ws/v1/realtime",
+            )),
+            RealtimeSessionConfig {
+                endpoint: ProviderEndpoint {
+                    provider_id: "test".into(),
+                    base_url: format!("http://127.0.0.1:{port}/api-ws/v1/realtime"),
+                },
+                credential: None,
+                model_id: "qwen3.8-omni-flash-realtime".into(),
+                voice: String::new(),
+                instructions: "测试".into(),
+                history: vec![],
+                auto_respond: true,
+                enable_search: false,
+            },
+        )
+        .unwrap();
+        let (tap_tx, tap_rx) = mpsc::sync_channel::<Vec<u8>>(64);
+        let sink = Arc::new(GatedSink::default());
+        let pump = RealtimePump::start(
+            session,
+            tap_rx,
+            Arc::clone(&sink) as Arc<dyn PlaybackStream>,
+            PumpConfig {
+                auto_respond: true,
+                role_name: String::new(),
+                hold_playback: false,
+                playback_mode: RealtimePlaybackMode::Native,
+                suppress_echo: None,
+            },
+            None,
+        );
+        let (_, mut ws) = accept_session(&listener);
+
+        // 播报：created → delta 落设备 → 闸门关闭。
+        ws.send(Message::Text(r#"{"type":"response.created"}"#.into()))
+            .unwrap();
+        ws.send(Message::Text(
+            format!(
+                r#"{{"type":"response.audio.delta","delta":"{}"}}"#,
+                STANDARD.encode([7u8, 8])
+            )
+            .into(),
+        ))
+        .unwrap();
+        wait_for(|| !sink.written.lock().unwrap().is_empty(), "audio written");
+
+        // done → drain → 替身立即回执「已播净」→ 闸门重开。
+        ws.send(Message::Text(
+            r#"{"type":"response.done","response":{"status":"completed"}}"#.into(),
+        ))
+        .unwrap();
+        wait_for(
+            || sink.drain_calls.load(Ordering::SeqCst) >= 1,
+            "drain command",
+        );
+
+        // 重开后第一帧必须是 clear(清回声残渣),其后 append 恢复上行。
+        let frame = read_frame(&mut ws);
+        assert_eq!(
+            frame["type"], "input_audio_buffer.clear",
+            "gate reopen must clear server input buffer first"
+        );
+        let mut resumed = None;
+        for _ in 0..20 {
+            tap_tx.send(vec![3u8; 9600]).unwrap();
+            if let Some(recovered) = try_read_frame(&mut ws, Duration::from_millis(150)) {
+                resumed = Some(recovered);
+                break;
+            }
+        }
+        assert_eq!(
+            resumed.expect("uplink must resume after clear")["type"],
+            "input_audio_buffer.append"
         );
         drop(pump);
     }
@@ -1868,6 +1978,7 @@ mod pump_tests {
         tap_tx.send(vec![2u8; 9600]).unwrap();
         assert_no_frame(&mut ws, Duration::from_millis(300));
         std::thread::sleep(GATE_DRAIN_FALLBACK_TAIL);
+        expect_gate_reopen_clear(&mut ws);
         let mut frame = None;
         for _ in 0..20 {
             tap_tx.send(vec![3u8; 9600]).unwrap();
@@ -1979,6 +2090,9 @@ mod pump_tests {
                 || turn.first_audio_ms.is_some()
                 || turn.interrupted
         );
+
+        // done → drain → 播净重开：先消费重开 clear 帧，再做迟到 delta 断言。
+        expect_gate_reopen_clear(&mut ws);
 
         // done 后迟到 delta：不得再写播放，也不得再成轮。
         let written_after_done = fixture.sink.written().len();
@@ -2106,6 +2220,7 @@ mod pump_tests {
             r#"{"type":"response.done","response":{"status":"completed"}}"#.into(),
         ))
         .unwrap();
+        expect_gate_reopen_clear(&mut ws);
         let mut frame = None;
         for _ in 0..20 {
             tap_tx.send(vec![3u8; 9600]).unwrap();
@@ -2178,7 +2293,7 @@ mod pump_tests {
         pump.send(PumpCommand::CommitTurn);
         assert_no_frame(&mut ws, Duration::from_millis(400));
 
-        // done → drain → 播净回执 → 闸门重开，提交恢复放行。
+        // done → drain → 播净回执 → 闸门重开（先 clear 清残渣），提交恢复放行。
         ws.send(Message::Text(
             r#"{"type":"response.done","response":{"status":"completed"}}"#.into(),
         ))
@@ -2187,6 +2302,7 @@ mod pump_tests {
             || sink.drain_calls.load(Ordering::SeqCst) >= 1,
             "drain receipt",
         );
+        expect_gate_reopen_clear(&mut ws);
         pump.send(PumpCommand::CommitTurn);
         assert_eq!(read_frame(&mut ws)["type"], "input_audio_buffer.commit");
         assert_eq!(read_frame(&mut ws)["type"], "response.create");
@@ -2307,6 +2423,8 @@ mod pump_tests {
         }
         wait_for(|| fixture.pump.shared.completed_count() == 1, "turn 1");
         fixture.pump.shared.take_completed().unwrap();
+        // turn 1 done → drain → 播净重开：先消费重开 clear。
+        expect_gate_reopen_clear(&mut ws);
 
         // 第 2 轮转写 = 第 1 轮播报的回声（ASR 把数字转成中文数字）。
         ws.send(Message::Text(
@@ -2365,8 +2483,14 @@ mod pump_tests {
                 .into(),
         ))
         .unwrap();
-        assert_eq!(read_frame(&mut ws)["type"], "response.cancel");
-        assert_eq!(read_frame(&mut ws)["type"], "input_audio_buffer.clear");
+        // MemSink 无缓冲即已播净：关门后重开 clear 可能先于 cancel 到达，两帧都断言。
+        let first = read_frame(&mut ws)["type"].clone();
+        let second = read_frame(&mut ws)["type"].clone();
+        assert!(
+            (first == "response.cancel" && second == "input_audio_buffer.clear")
+                || (first == "input_audio_buffer.clear" && second == "response.cancel"),
+            "expected cancel + clear in either order, got {first} then {second}"
+        );
         wait_for(|| fixture.sink.clears() >= 1, "playback cleared");
 
         // 取消的响应收尾：echo_dropped 轮不得成轮。
@@ -2374,6 +2498,8 @@ mod pump_tests {
             r#"{"type":"response.done","response":{"status":"cancelled"}}"#.into(),
         ))
         .unwrap();
+        // done(cancelled) 后 was_playing → drain → 播净重开 clear,消费后再断言静默。
+        expect_gate_reopen_clear(&mut ws);
         assert_no_frame(&mut ws, Duration::from_millis(300));
         assert_eq!(fixture.pump.shared.completed_count(), 0);
         drop(fixture.pump);
@@ -2408,8 +2534,14 @@ mod pump_tests {
         ))
         .unwrap();
 
-        assert_eq!(read_frame(&mut ws)["type"], "response.cancel");
-        assert_eq!(read_frame(&mut ws)["type"], "input_audio_buffer.clear");
+        // MemSink 无缓冲即已播净：关门后重开 clear 可能先于 cancel 到达，两帧都断言。
+        let first = read_frame(&mut ws)["type"].clone();
+        let second = read_frame(&mut ws)["type"].clone();
+        assert!(
+            (first == "response.cancel" && second == "input_audio_buffer.clear")
+                || (first == "input_audio_buffer.clear" && second == "response.cancel"),
+            "expected cancel + clear in either order, got {first} then {second}"
+        );
         ws.send(Message::Text(
             r#"{"type":"response.done","response":{"status":"cancelled"}}"#.into(),
         ))
