@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安全漏洞（Security vulnerability）
+    url: https://github.com/NotIntoSports/RoleAI/security/advisories/new
+    about: 请勿在公开 Issue 中报告安全漏洞，也不要贴出 API Key、Token、录音或个人信息。
+  - name: 使用文档
+    url: https://github.com/NotIntoSports/RoleAI/blob/main/guide/README.md
+    about: 配置、故障排查、架构与安全设计说明。

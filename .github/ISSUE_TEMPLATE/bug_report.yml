@@ -1,0 +1,70 @@
+name: Bug 报告
+description: 报告应用缺陷。请先删除日志中的密钥与个人信息再提交。
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提交前请确认：**不要**在 Issue 中贴出 API Key、RTC Token、录音、字幕原文或任何个人信息。
+        安全漏洞请走 [Security Advisory](https://github.com/NotIntoSports/RoleAI/security/advisories/new)，不要在这里公开。
+  - type: input
+    id: app-version
+    attributes:
+      label: 应用版本
+      description: 设置页可见，或安装包文件名中的版本号（如 0.1.0）。
+    validations:
+      required: true
+  - type: dropdown
+    id: run-mode
+    attributes:
+      label: 运行模式
+      options:
+        - 工作台对练（级联线路）
+        - 工作台对练（Realtime 端到端线路）
+        - 会议助手
+        - 虚拟直播
+        - 资料 / 知识库
+        - 设置 / 诊断
+        - 安装 / 启动
+    validations:
+      required: true
+  - type: input
+    id: os-version
+    attributes:
+      label: 系统版本
+      description: 例如 Windows 11 24H2（x64）。请附 WebView2 Runtime 版本（如可知）。
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 从打开应用开始，一步步写清楚怎么触发。
+      placeholder: |
+        1. 打开「服务」页…
+        2. 点击「测试」…
+        3. 出现报错…
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际行为
+      description: 请附界面上的错误码与文案（如有）。
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志或诊断导出
+      description: |
+        设置页可导出脱敏诊断 JSON。`RUST_LOG=debug` 从终端启动可获得更完整日志。
+        **再次提醒：粘贴前删除密钥、邮箱、电话与个人信息。**
+    validations:
+      required: false
