@@ -13,11 +13,11 @@
     "tests/tauri/shell-contract.test.mjs": "7a9e13b97754f371ec3e95d3c01cc888394e007207ea16371768574e09ed452f",
     "src-tauri/tests/security_contract.rs": "22e42bfb76980bd585e6b012585207d39a1a8848b707336b0ebbc14f7dfb7ea3",
     "src-tauri/src/commands/config.rs": "26d3dcc5ed93c6211566883a463759a9da7f4298eb07665bcfc5c0c1a9f7004a",
-    "src-tauri/src/commands/materials.rs": "ffcfd2a87be825510d8ad76f0c16799ea2bf10ea6a01e40f5e227b98eb4f258f",
+    "src-tauri/src/commands/materials.rs": "3eadf71628ff09e7fded90d91e21d45c290d128b953e7970708f4955f1ed062e",
     "src-tauri/src/commands/sessions.rs": "f802b2cae924dba57e25a26ae02e6b01ab7e4882b65d5ae25457917a6acf177f",
     "src-tauri/src/commands/livestream.rs": "5c53e92c2a24c94ad2cbf5719021c421ad4be0e482e09a4b9818f7023aa35c83",
     "src-tauri/src/commands/obs.rs": "42cc148ed5b6d8a78506a40ea2a272400112abfb586a397488b78a4df0dbf43b",
     "src-tauri/src/commands/voice.rs": "1c5d8fc589feeea832d21621526992e3854e341285add22a8dc8b390dcf48ba0",
-    "src-tauri/src/commands/system.rs": "0769422c7345d127b6ee891cc6cd019035ea6420f47440bb94ea8f266d8615c6"
+    "src-tauri/src/commands/system.rs": "04e4ef09ef77d4134fd9810e50af8544205a3d75a46fc895d6a1dbd0a875ef0f"
   }
 }

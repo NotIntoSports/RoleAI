@@ -170,16 +170,21 @@ pub(super) fn legacy_import_source_cmd(
         Ok(path) => path,
         Err(error) => return migrate_error(error),
     };
-    let database = match state.database.lock() {
+    // 只借 Arc：导入可能持续数秒（大归档），期间记录/资料/诊断命令照常读库
+    // （Database 内部自带连接互斥）。service_guard 由命令包装层持有，
+    // 导入期间会话开始/追答等仍被串行化，避免与 sessions 表写入交错。
+    let database_slot = match state.database.lock() {
         Ok(guard) => guard,
         Err(_) => {
             return service_error("DATABASE_OPERATION_FAILED", "Database is unavailable");
         }
     };
-    let Some(database) = database.as_ref() else {
+    let Some(database) = database_slot.as_ref() else {
         return service_error("DATABASE_OPERATION_FAILED", "Database is unavailable");
     };
-    crate::migrate::import_legacy_sessions_from_user_path(&source, database)
+    let database = std::sync::Arc::clone(database);
+    drop(database_slot);
+    crate::migrate::import_legacy_sessions_from_user_path(&source, &database)
         .map_or_else(migrate_error, |data| CommandResult::Ok { data })
 }
 

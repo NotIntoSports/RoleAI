@@ -798,3 +798,53 @@ fn config_reads_stay_responsive_and_the_turn_uses_the_phase1_snapshot() {
         "{result}"
     );
 }
+
+#[test]
+fn material_import_ipc_dispatch_does_not_wait_for_a_busy_database() {
+    // D-R05 P3 回归：导入的解析/分块阶段不得持有数据库外层互斥，
+    // UI 线程派发与其它 DB 命令不被导入阻塞（与 material_list 同款断言）。
+    let directory = tempfile::tempdir().unwrap();
+    let material_path = directory.path().join("fixture.txt");
+    std::fs::write(&material_path, b"role ai material fixture body").unwrap();
+    let app = mock_builder()
+        .manage(state(directory.path()))
+        .invoke_handler(tauri::generate_handler![super::material_import])
+        .build(mock_context(noop_assets()))
+        .unwrap();
+    let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    let state = app.state::<AppState>();
+    let database_guard = state.database.lock().unwrap();
+    let (dispatched_tx, dispatched_rx) = mpsc::channel();
+    let (result_tx, result_rx) = mpsc::channel();
+    let importer = std::thread::spawn(move || {
+        window.on_message(
+            request(
+                "material_import",
+                serde_json::json!({ "path": material_path.to_string_lossy() }),
+            ),
+            Box::new(move |_, _, result, _, _| {
+                let _ = result_tx.send(result);
+            }),
+        );
+        let _ = dispatched_tx.send(());
+    });
+    let dispatched_without_lock = dispatched_rx
+        .recv_timeout(Duration::from_millis(500))
+        .is_ok();
+    drop(database_guard);
+    importer.join().unwrap();
+    let result = result_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(
+        dispatched_without_lock,
+        "IPC dispatch waited on the busy database instead of releasing the UI thread"
+    );
+    match result {
+        tauri::ipc::InvokeResponse::Ok(body) => {
+            let imported = body.deserialize::<serde_json::Value>().unwrap();
+            assert_eq!(imported["ok"], true, "{imported}");
+        }
+        tauri::ipc::InvokeResponse::Err(error) => panic!("unexpected IPC error: {error:?}"),
+    }
+}

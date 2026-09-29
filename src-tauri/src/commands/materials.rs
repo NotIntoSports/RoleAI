@@ -45,17 +45,24 @@ fn with_materials<T: serde::Serialize + ts_rs::TS>(
     state: &AppState,
     work: impl FnOnce(&MaterialService<'_>) -> Result<T, MaterialServiceError>,
 ) -> CommandResult<T> {
-    let database = match state.database.lock() {
+    // 只借 Arc：解析/分块/检索期间不持有外层互斥（D-R05 P3），
+    // Database 内部自带连接互斥；资料库命令不再互相排队。
+    let database_slot = match state.database.lock() {
         Ok(guard) => guard,
         Err(_) => {
             return service_error("DATABASE_OPERATION_FAILED", "Database is unavailable");
         }
     };
-    let Some(database) = database.as_ref() else {
+    let Some(database) = database_slot.as_ref() else {
         return service_error("DATABASE_OPERATION_FAILED", "Database is unavailable");
     };
-    work(&MaterialService::new(database, &state.paths.data_directory))
-        .map_or_else(material_service_error, |data| CommandResult::Ok { data })
+    let database = std::sync::Arc::clone(database);
+    drop(database_slot);
+    work(&MaterialService::new(
+        &database,
+        &state.paths.data_directory,
+    ))
+    .map_or_else(material_service_error, |data| CommandResult::Ok { data })
 }
 
 pub(super) fn material_list_cmd(state: &AppState) -> CommandResult<Vec<MaterialSummary>> {
@@ -106,10 +113,9 @@ pub fn material_import_blocking(
     state: State<'_, AppState>,
     path: String,
 ) -> CommandResult<MaterialSummary> {
-    let _guard = match service_guard(&state) {
-        Ok(guard) => guard,
-        Err(error) => return error,
-    };
+    // 导入的解析/分块最长 8 秒（D-R05 P3）：不再全程持有 service_lock，
+    // 配置读写与会话命令不被导入阻塞；并发导入由 SQLite 连接互斥与
+    // 内容哈希主键自然去重/拒绝。
     material_import_cmd(&state, path)
 }
 
