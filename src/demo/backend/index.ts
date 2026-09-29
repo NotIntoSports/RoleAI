@@ -15,7 +15,9 @@ import type {
 } from "../../generated/bindings";
 
 import { handleConfigCommand } from "./config";
+import { handleMaterialCommand } from "./materials";
 import { handleProviderCommand } from "./providers";
+import { handleRecordCommand } from "./records";
 import { handleRoleCommand } from "./roles";
 import { getState, resetDemoState } from "./state";
 import { handleVoiceCommand } from "./voice";
@@ -84,13 +86,15 @@ function handleMeetingAndAudio(cmd: string): unknown {
   }
 }
 
-/** 领域分发：config / roles / providers / voice / 会议与音频 / 其余兜底。 */
+/** 领域分发：config / roles / providers / voice / 资料 / 记录 / 会议与音频 / 其余兜底。 */
 function dispatch(cmd: string, payload: Record<string, unknown>): unknown {
   return (
     handleConfigCommand(cmd, payload) ??
     handleRoleCommand(cmd, payload) ??
     handleProviderCommand(cmd, payload) ??
     handleVoiceCommand(cmd, payload) ??
+    handleMaterialCommand(cmd, payload) ??
+    handleRecordCommand(cmd, payload) ??
     handleMeetingAndAudio(cmd) ??
     err("DEMO_NOT_IMPLEMENTED", `在线演示尚未模拟该能力（${cmd}）`)
   );

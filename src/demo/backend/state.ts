@@ -2,12 +2,17 @@
 // 所有类型来自 src/generated/bindings.ts；密钥字段永远只存“已配置”标记，不存任何密钥材料。
 import type {
   EmbeddingConfig,
+  MaterialSummary,
   ProviderConfig,
   RoleProfileConfig,
+  SessionSummary,
+  SessionTurnView,
   VoiceReferenceSummary,
   VoiceRouteConfig,
 } from "../../generated/bindings";
 
+import { DEMO_MATERIALS, type DemoMaterialDoc } from "./materials-data";
+import { DEMO_SESSIONS } from "./records-data";
 import { parseState, stringifyState } from "./util";
 
 const STORAGE_KEY = "roleai.demo.backend.v1";
@@ -26,6 +31,10 @@ export interface DemoState {
   activeRoleProfileId: string | null;
   voiceReferences: VoiceReferenceSummary[];
   obsPasswordConfigured: boolean;
+  materials: MaterialSummary[];
+  materialDocs: Record<string, DemoMaterialDoc>;
+  sessions: SessionSummary[];
+  sessionTurns: Record<string, SessionTurnView[]>;
 }
 
 const STYLE = "使用自然、简洁的中文，每次只处理当前问题。";
@@ -148,7 +157,55 @@ function seedState(): DemoState {
     activeRoleProfileId: "preset-strict-interviewer",
     voiceReferences: [voiceReference],
     obsPasswordConfigured: false,
+    ...seedLibrary(),
   };
+}
+
+/** 资料、会话记录的种子（来自 materials-data / records-data）。 */
+function seedLibrary(): Pick<
+  DemoState,
+  "materials" | "materialDocs" | "sessions" | "sessionTurns"
+> {
+  const materials: MaterialSummary[] = DEMO_MATERIALS.map((doc) => ({
+    id: doc.id,
+    fileName: doc.fileName,
+    contentSha256: doc.contentSha256,
+    mediaType: doc.mediaType,
+    byteSize: doc.byteSize,
+    status: doc.status,
+    chunkCount: doc.chunkCount,
+  }));
+  const materialDocs: Record<string, DemoMaterialDoc> = Object.fromEntries(
+    DEMO_MATERIALS.map((doc) => [doc.id, doc]),
+  );
+  const sessions: SessionSummary[] = [];
+  const sessionTurns: Record<string, SessionTurnView[]> = {};
+  for (const seed of DEMO_SESSIONS) {
+    sessions.push({
+      id: seed.id,
+      status: seed.status,
+      roleProfileId: seed.roleProfileId,
+      voiceRouteId: "route-demo-realtime",
+      transportMode: seed.transportMode,
+      startedAt: seed.startedAt,
+      finishedAt: seed.finishedAt,
+      updatedAt: seed.finishedAt,
+    });
+    sessionTurns[seed.id] = seed.turns.map((turn, index) => ({
+      id: `${seed.id}-t${index + 1}`,
+      turnIndex: index + 1,
+      userText: turn.user,
+      assistantText: turn.assistant,
+      materialsUsed: turn.materialsUsed ?? false,
+      citations: (turn.citations ?? []).map((citation, citationIndex) => ({
+        materialId: citation.materialId,
+        chunkId: `${citation.materialId}-c${citationIndex}`,
+        snippet: citation.snippet,
+      })),
+      createdAt: seed.startedAt,
+    }));
+  }
+  return { materials, materialDocs, sessions, sessionTurns };
 }
 
 let state: DemoState | null = null;
