@@ -58,7 +58,8 @@ pub fn ensure_role_presets(config: &mut AppConfigV1) -> bool {
         if let Some(existing) = config.role_profiles.iter_mut().find(|role| role.id == id) {
             // 场景回填只针对有映射的预设；纯对话预设（strict/coach）scenario
             // 恒为 None，重复赋值会让「已播种」误报为变更。
-            if existing.scenario.is_none() && let Some(scenario) = RoleScenario::from_preset_id(id)
+            if existing.scenario.is_none()
+                && let Some(scenario) = RoleScenario::from_preset_id(id)
             {
                 existing.scenario = Some(scenario);
                 changed = true;

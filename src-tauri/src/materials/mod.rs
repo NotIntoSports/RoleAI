@@ -1,3 +1,6 @@
+//! 资料库子系统流水线：parse（PDF/DOCX/TXT 抽文本）→ chunk（分块）→
+//! hybrid（关键词 + 向量混合检索）→ store（SQLite 持久化），backup 负责导入导出。
+
 pub mod backup;
 pub mod chunk;
 pub mod hybrid;

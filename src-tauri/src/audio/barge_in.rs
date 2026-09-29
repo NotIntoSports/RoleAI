@@ -92,8 +92,8 @@ impl BargeInMonitor {
                 (sum / window.len() as f32).sqrt()
             };
             self.track_echo_floor(window_rms);
-            let energy_assist = self.echo_floor > 0.0
-                && window_rms >= self.echo_floor * ENERGY_ASSIST_RATIO;
+            let energy_assist =
+                self.echo_floor > 0.0 && window_rms >= self.echo_floor * ENERGY_ASSIST_RATIO;
             let voiced =
                 voiced_prob >= START_PROB || (energy_assist && voiced_prob >= ENERGY_ASSIST_PROB);
             self.buffer.extend_from_slice(&raw48);
@@ -218,7 +218,10 @@ mod tests {
         probs.extend(vec![0.0f32; 40]);
         let mut m = monitor(&probs);
         m.ingest(&frames48(2000, 60));
-        assert!(m.triggered(), "6-of-8 sliding count must trigger despite gaps");
+        assert!(
+            m.triggered(),
+            "6-of-8 sliding count must trigger despite gaps"
+        );
     }
 
     /// 能量辅助判定（双讲核心用例）：播报期 AEC 压低近端人声，Silero 概率

@@ -1,0 +1,56 @@
+# cargo-deny 供应链检查配置（工具：EmbarkStudios/cargo-deny，MIT/Apache-2.0）。
+# 运行：cargo deny --manifest-path src-tauri/Cargo.toml check
+# 许可证允许清单对齐仓库根目录 THIRD_PARTY_NOTICES.md；新增依赖引入新许可证时，
+# 先确认许可证允许本项目用途，再在下方 allow 追加并在提交说明里写明原因。
+
+[graph]
+# 按当前默认 target（Windows）解析；不启用 all-features，与 CI 构建一致。
+
+[licenses]
+version = 2
+confidence-threshold = 0.93
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "MIT-0",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "MPL-2.0",
+    "CDLA-Permissive-2.0",
+    "CC0-1.0",
+    "Unlicense",
+]
+
+[advisories]
+version = 2
+# 有漏洞公告且上游已修复的版本直接失败；未发布修复的用 ignore 并写明原因。
+yanked = "warn"
+ignore = [
+    # RUSTSEC-2024-0370：proc-macro-error 失修（非漏洞）。传递链 glib-macros → gtk →
+    # muda → tauri（Linux 菜单栈），上游 tauri 未切换前无法绕开；Windows 构建不编译。
+    "RUSTSEC-2024-0370",
+    # RUSTSEC-2026-0192：ttf-parser 失修（非漏洞）。传递链 lopdf → pdf-extract（PDF
+    # 文本提取直接依赖），pdf-extract 无替代后端，仅解析本地用户自己导入的 PDF。
+    "RUSTSEC-2026-0192",
+    # RUSTSEC-2025-0075/0080/0081/0098/0100：unic-* 全家失修（非漏洞）。传递链
+    # urlpattern → tauri-utils → tauri，等 tauri-utils 更换 URL 匹配实现后删除。
+    "RUSTSEC-2025-0075",
+    "RUSTSEC-2025-0080",
+    "RUSTSEC-2025-0081",
+    "RUSTSEC-2025-0098",
+    "RUSTSEC-2025-0100",
+]
+
+[bans]
+# 重复版本只警告：传递依赖多版本在大型图里常见，硬失败会阻塞无关改动。
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "warn"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

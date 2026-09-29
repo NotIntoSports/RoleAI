@@ -514,7 +514,7 @@ mod tests {
     use crate::{
         config::{ConfigStore, ProviderConfig, SecretSlot},
         database::Database,
-        materials::{hybrid::EmbeddingSpace, MaterialStore},
+        materials::{MaterialStore, hybrid::EmbeddingSpace},
         providers::{EmbeddingError, EmbeddingProbe, ProviderEndpoint},
         services::MaterialService,
     };

@@ -1,3 +1,6 @@
+//! 直播推流状态的 DTO 定义（serde + ts_rs 导出到 src/generated/bindings.ts）。
+//! OBS 的实际控制逻辑在 crate::obs，这里只承载跨进程传输的数据结构。
+
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 

@@ -248,6 +248,9 @@ fn webview_browser_args() -> String {
 }
 
 #[cfg(test)]
+mod prop_tests;
+
+#[cfg(test)]
 mod tests {
     use super::navigation_is_allowed;
 

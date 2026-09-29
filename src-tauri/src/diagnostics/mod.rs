@@ -1,3 +1,7 @@
+//! 本地诊断事件日志：`DiagnosticWriter` 把会话/轮次事件追加写入 JSONL，
+//! `redact_text` 在落盘前抹掉疑似密钥、令牌等敏感片段。
+//! 事件只增不改，供延迟分析与问题回放使用。
+
 use std::{
     fs::{self, OpenOptions},
     io::Write,

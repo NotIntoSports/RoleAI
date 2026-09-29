@@ -1,3 +1,7 @@
+//! SQLite 访问层：连接管理、schema 版本迁移与通用例程。
+//! `Database` 是全局单例且放在 Mutex 里（锁中毒按原样继续用，见 into_inner），
+//! 借用连接必须持锁，这是会话收尾长持锁问题的根源之一。
+
 use std::{
     path::Path,
     sync::{Mutex, OnceLock},
@@ -73,6 +77,8 @@ fn current_schema_version(connection: &Connection) -> Result<i64, DatabaseError>
         .unwrap_or(0))
 }
 
+/// SQLite 单例。连接放在 Mutex 里：借用必须持锁（锁中毒按原样续用），
+/// 这是会话收尾长持锁问题的根源之一，见 services::sessions。
 pub struct Database {
     connection: Mutex<Connection>,
 }

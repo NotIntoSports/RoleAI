@@ -169,8 +169,8 @@ fn char_bigrams(text: &str) -> std::collections::HashSet<(char, char)> {
     chars.windows(2).map(|pair| (pair[0], pair[1])).collect()
 }
 
-/// 音频闸门（上行门控）的纯计时计算，纯搬移自 services/realtime_pump.rs。
-/// 播放设备交互（播净回执、存活探测、缓冲清空）留在泵内，这里只做时刻运算。
+// 音频闸门（上行门控）的纯计时计算，纯搬移自 services/realtime_pump.rs。
+// 播放设备交互（播净回执、存活探测、缓冲清空）留在泵内，这里只做时刻运算。
 
 /// 播净回执丢失时的短兜底尾窗；真实回执仍优先立即开门。
 pub const GATE_DRAIN_FALLBACK_TAIL: Duration = Duration::from_millis(1500);

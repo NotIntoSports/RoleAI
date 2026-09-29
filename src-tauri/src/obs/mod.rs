@@ -1,3 +1,6 @@
+//! OBS 集成：paths 定位本机 OBS 安装与虚拟摄像头，control 经 obs-websocket
+//! 控制场景切换、虚拟摄像头启停，并维护 `ObsRuntimeStatus` 状态上报。
+
 pub mod control;
 pub mod paths;
 

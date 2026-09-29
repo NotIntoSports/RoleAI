@@ -1,3 +1,7 @@
+//! 模型供应商适配层：cascade（ASR→LLM→TTS 级联编排）、openai_compatible（OpenAI 兼容端点）、
+//! realtime_session/openai_realtime（实时语音会话与重连）、realtime_protocol（帧解析）、
+//! embedding 与 voice_clone。统一错误类型见 `RealtimeError`/`CascadeError`。
+
 mod cascade;
 mod embedding;
 mod openai_compatible;
@@ -30,7 +34,7 @@ pub(crate) use openai_compatible::{
 #[cfg(test)]
 pub(crate) use openai_realtime::{
     InputTranscriptAssembler, RealtimeDialectName, RealtimeTransport, dialect_input_rate,
-    realtime_dialect, realtime_url, session_update_event, wait_session_updated,
+    parse_server_event, realtime_dialect, realtime_url, session_update_event, wait_session_updated,
 };
 pub use openai_realtime::{
     OpenAiCompatibleRealtime, RealtimeAudioRequest, RealtimeError, RealtimeModel,

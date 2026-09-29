@@ -131,15 +131,13 @@ impl<S: PlaybackSink> SessionService<S> {
 
     /// 是否存在可强制回答的仅转写发言（热键/按钮的 NOTHING_TO_ANSWER 判定）。
     pub fn realtime_has_transcript_only(&self) -> bool {
-        self.realtime_shared
-            .as_ref()
-            .is_some_and(|shared| {
-                shared
-                    .last_transcript_only
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .is_some()
-            })
+        self.realtime_shared.as_ref().is_some_and(|shared| {
+            shared
+                .last_transcript_only
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .is_some()
+        })
     }
 
     /// 强制会议助手回答最近一条仅转写发言（Ctrl+Alt+A / 「让助手回答」）。

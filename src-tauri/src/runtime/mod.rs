@@ -1,3 +1,6 @@
+//! 会话运行时编排：cascade 组装一轮问答依赖、commands 定义泵控制命令、
+//! preflight 启动前自检、snapshot 会话快照构建、state 全局运行状态（阶段/代次/修订号）。
+
 pub mod cascade;
 pub mod commands;
 pub mod preflight;

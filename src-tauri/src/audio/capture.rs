@@ -302,7 +302,9 @@ impl AudioCapture {
         &self,
         detector: Box<dyn crate::audio::vad::VoiceActivityDetector>,
     ) {
-        self.lock().barge_in = Some(crate::audio::barge_in::BargeInMonitor::with_detector(detector));
+        self.lock().barge_in = Some(crate::audio::barge_in::BargeInMonitor::with_detector(
+            detector,
+        ));
     }
 
     pub fn tap_dropped(&self) -> u64 {

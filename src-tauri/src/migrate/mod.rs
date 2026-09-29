@@ -1,3 +1,6 @@
+//! 旧版数据迁移：探测旧安装根目录、校验归档、备份并导入会话与密钥槽。
+//! 首次启动自动执行（try_first_run_legacy_migration），其余入口由设置页命令调用。
+
 use std::{
     collections::BTreeMap,
     fs,

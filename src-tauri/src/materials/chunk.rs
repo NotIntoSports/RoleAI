@@ -1,6 +1,6 @@
 pub const CHUNKER_VERSION: &str = "resume-semantic-v1";
 
-const MAX_CHUNK_RUNES: usize = 2000;
+pub(crate) const MAX_CHUNK_RUNES: usize = 2000;
 const HARD_SPLIT_LOOKBACK: usize = 400;
 const MAX_CHUNKS: usize = 500;
 
@@ -77,6 +77,21 @@ pub fn chunk_text(source_label: &str, text: &str) -> Vec<MaterialChunk> {
         }
     }
     chunks
+}
+
+/// 属性测试专用的清洗视图（真实清洗路径零拷贝转发），供 prop_tests 校验分块切片。
+#[cfg(test)]
+pub(crate) fn __prop_cleaned(text: &str) -> String {
+    clean_text(text)
+}
+
+/// 属性测试专用：规范段头清单（分块会把段头规范化为这些形）。
+#[cfg(test)]
+pub(crate) fn __prop_section_headings() -> Vec<String> {
+    SECTION_HEADINGS
+        .iter()
+        .map(|heading| heading.chars().filter(|c| !c.is_whitespace()).collect())
+        .collect()
 }
 
 fn clean_text(text: &str) -> String {
@@ -306,30 +321,43 @@ fn split_bullet_items(body: &str) -> Vec<String> {
 
 fn hard_split(text: &str, prefix: &str) -> Vec<String> {
     let runes: Vec<char> = text.chars().collect();
+    // 非首个块会前置段首上下文（prefix），切块预算必须为前缀留位，
+    // 保证任何块（含前缀）都不超过 MAX_CHUNK_RUNES（proptest C51 回归）。
+    let prefix_runes = prefix
+        .chars()
+        .count()
+        .min(MAX_CHUNK_RUNES.saturating_sub(1));
     let mut out = Vec::new();
     let mut start = 0;
     while start < runes.len() {
         let remaining = &runes[start..];
-        if remaining.len() <= MAX_CHUNK_RUNES {
+        let budget = if start > 0 && !prefix.is_empty() {
+            MAX_CHUNK_RUNES - prefix_runes
+        } else {
+            MAX_CHUNK_RUNES
+        };
+        if remaining.len() <= budget {
             let mut piece = remaining.iter().collect::<String>();
             piece = piece.trim().to_owned();
             if start > 0 && !prefix.is_empty() && !piece.starts_with('[') {
-                piece = format!("{prefix}{piece}").trim().to_owned();
+                let context: String = prefix.chars().take(prefix_runes).collect();
+                piece = format!("{context}{piece}").trim().to_owned();
             }
             if !piece.is_empty() {
                 out.push(piece);
             }
             break;
         }
-        let window = &remaining[..MAX_CHUNK_RUNES];
+        let window = &remaining[..budget];
         let mut cut = find_split(window);
         if cut == 0 {
-            cut = MAX_CHUNK_RUNES;
+            cut = budget;
         }
         let mut piece = remaining[..cut].iter().collect::<String>();
         piece = piece.trim().to_owned();
         if start > 0 && !prefix.is_empty() && !piece.starts_with('[') {
-            piece = format!("{prefix}{piece}").trim().to_owned();
+            let context: String = prefix.chars().take(prefix_runes).collect();
+            piece = format!("{context}{piece}").trim().to_owned();
         }
         if !piece.is_empty() {
             out.push(piece);
@@ -463,11 +491,29 @@ fn is_bullet_line(line: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{CHUNKER_VERSION, chunk_text};
+    use super::{CHUNKER_VERSION, MAX_CHUNK_RUNES, chunk_text};
 
     #[test]
     fn chunker_version_is_stable() {
         assert_eq!(CHUNKER_VERSION, "resume-semantic-v1");
+    }
+
+    /// 回归（proptest C51 发现）：hard_split 给非首个块前置段首上下文时，
+    /// 切块预算必须为前缀留位，否则块可达 2006 > 硬上限 2000。
+    #[test]
+    fn hard_split_with_prefix_respects_hard_cap() {
+        let mut text = String::from("[会议纪要]\n");
+        text.push_str(&"甲".repeat(MAX_CHUNK_RUNES * 2));
+        let chunks = chunk_text("prop", &text);
+        assert!(chunks.len() >= 2, "长文本必须被切分");
+        for chunk in &chunks {
+            assert!(
+                chunk.size_estimate <= MAX_CHUNK_RUNES as i64,
+                "块 {} 大小 {} 超过硬上限 {MAX_CHUNK_RUNES}",
+                chunk.index,
+                chunk.size_estimate
+            );
+        }
     }
 
     #[test]
