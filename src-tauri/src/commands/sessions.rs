@@ -866,7 +866,7 @@ pub(super) fn session_finalize_utterance_cmd_inner(
         }
     };
     // 阶段三（持锁）：校验代次（未被停止/更替）后落库，安排播放。
-    let persist = match sessions.complete_finalize_text(plan, outcome, &database, credentials) {
+    let persist = match sessions.complete_finalize_text(*plan, outcome, &database, credentials) {
         Ok(persist) => persist,
         Err(error) => {
             drop(sessions);
@@ -903,7 +903,7 @@ pub(super) fn session_finalize_utterance_cmd_inner(
         }
     };
     let finalized =
-        sessions.complete_finalize_playback(persist, playback_status, playback_error, &database);
+        sessions.complete_finalize_playback(*persist, playback_status, playback_error, &database);
     match finalized {
         Ok(Some(_)) => last_session_turn_view(&sessions, &database),
         Ok(None) => session_service_error(SessionServiceError::StateInvalid),

@@ -9,10 +9,10 @@
 use super::*;
 
 /// 阶段一结果：无可落库内容（对齐旧实现的 `Ok(None)`）或携带快照进入阶段二。
-#[allow(clippy::large_enum_variant)] // Idle 仅作哨兵，装箱 Plan 反而多一次分配。
+/// `FinalizePlan` 体积较大（含配置与历史快照），装箱避免 `Idle` 哨兵分支放大栈占用。
 pub(crate) enum BeginFinalize {
     Idle,
-    Plan(FinalizePlan),
+    Plan(Box<FinalizePlan>),
 }
 
 /// 收尾快照：阶段二/三只依赖这些 owned 数据，不再借用 SessionService。
@@ -67,14 +67,14 @@ pub(crate) enum NetworkOutcome {
 }
 
 /// 阶段二文本落库结果。
-#[allow(clippy::large_enum_variant)] // Dropped/Idle 是无数据哨兵。
+/// `TurnPersist` 体积较大，装箱避免 `Dropped`/`Idle` 哨兵分支放大栈占用。
 pub(crate) enum TextPersist {
     /// 会话已被更替（stop→start）：旧轮结果整体丢弃。
     Dropped,
     /// 无可落库内容：对齐旧 `Ok(None)`（命令层映射 STATE_INVALID）。
     Idle,
     /// 文本已落库；剩 turn_meta 与收尾在阶段三。
-    Turn(TurnPersist),
+    Turn(Box<TurnPersist>),
 }
 
 /// 阶段三输入：turn_meta 前置字段 + 播放安排。
@@ -170,11 +170,11 @@ impl<S: PlaybackSink> SessionService<S> {
             BeginFinalize::Idle => Ok(None),
             BeginFinalize::Plan(plan) => {
                 let outcome = finalize_network(&plan, database, probes, credentials, hooks);
-                match self.complete_finalize_text(plan, outcome, database, credentials)? {
+                match self.complete_finalize_text(*plan, outcome, database, credentials)? {
                     TextPersist::Idle | TextPersist::Dropped => Ok(None),
                     TextPersist::Turn(persist) => {
                         let (status, error) = run_persist_playback(&persist);
-                        self.complete_finalize_playback(persist, status, error, database)
+                        self.complete_finalize_playback(*persist, status, error, database)
                     }
                 }
             }
@@ -207,7 +207,7 @@ impl<S: PlaybackSink> SessionService<S> {
         let generation = self.finalize_generation;
         match self.begin_finalize_inner(database, config, text, force_meeting_assistant, generation)
         {
-            Ok(Some(plan)) => Ok(BeginFinalize::Plan(plan)),
+            Ok(Some(plan)) => Ok(BeginFinalize::Plan(Box::new(plan))),
             Ok(None) => {
                 self.finalizing = false;
                 Ok(BeginFinalize::Idle)
@@ -564,13 +564,13 @@ impl<S: PlaybackSink> SessionService<S> {
                 playback_status = "played";
             }
         }
-        Ok(TextPersist::Turn(TurnPersist {
+        Ok(TextPersist::Turn(Box::new(TurnPersist {
             session_id: plan.session_id,
             turn,
             meta_prelude: meta,
             playback_status,
             playback_job,
-        }))
+        })))
     }
 
     /// 阶段三后半（持锁）：turn_meta 落库与收尾（停止/取消/回 Listening）。
