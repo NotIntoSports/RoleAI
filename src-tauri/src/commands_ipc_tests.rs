@@ -150,6 +150,9 @@ fn slow_model_ipc_allows_takeover_and_stop_before_the_model_returns() {
                 Err(error) => panic!("model request did not arrive: {error}"),
             }
         };
+        // Windows 上 accept 出的套接字继承 listener 的非阻塞模式；恢复阻塞，
+        // 数据未到时由 read_timeout 负责等待，否则 read_line 立即 WouldBlock。
+        socket.set_nonblocking(false).unwrap();
         socket
             .set_read_timeout(Some(Duration::from_secs(15)))
             .unwrap();
@@ -298,6 +301,9 @@ fn slow_model_ipc_allows_stop_and_read_commands_while_finalize_is_inflight() {
                 Err(error) => panic!("model request did not arrive: {error}"),
             }
         };
+        // Windows 上 accept 出的套接字继承 listener 的非阻塞模式；恢复阻塞，
+        // 数据未到时由 read_timeout 负责等待，否则 read_line 立即 WouldBlock。
+        socket.set_nonblocking(false).unwrap();
         socket
             .set_read_timeout(Some(Duration::from_secs(15)))
             .unwrap();
@@ -509,6 +515,9 @@ fn slow_llm_server() -> (
                 Err(error) => panic!("model request did not arrive: {error}"),
             }
         };
+        // Windows 上 accept 出的套接字继承 listener 的非阻塞模式；恢复阻塞，
+        // 数据未到时由 read_timeout 负责等待，否则 read_line 立即 WouldBlock。
+        socket.set_nonblocking(false).unwrap();
         socket
             .set_read_timeout(Some(Duration::from_secs(15)))
             .unwrap();
@@ -544,6 +553,9 @@ fn slow_llm_server() -> (
             loop {
                 match drain_listener.accept() {
                     Ok((mut sock, _)) => {
+                        // 同上：恢复阻塞模式，避免数据未到时 read_line 立即
+                        // WouldBlock 被当成断连而跳过应答。
+                        sock.set_nonblocking(false).unwrap();
                         sock.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
                         let mut reader = BufReader::new(sock.try_clone().unwrap());
                         let mut request_line = String::new();
