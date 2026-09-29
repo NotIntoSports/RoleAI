@@ -15,7 +15,8 @@
     "dev:demo": "vite --config vite.demo.config.ts",
     "build:demo": "tsc -p tsconfig.tauri.json && vite build --config vite.demo.config.ts",
     "test:e2e:demo": "playwright test --config playwright.config.ts",
-    "screenshots": "node scripts/screenshots.mjs"
+    "screenshots": "node scripts/screenshots.mjs",
+    "demo:video": "node scripts/demo-video.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "2.11.1",

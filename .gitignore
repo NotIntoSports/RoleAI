@@ -50,3 +50,6 @@ resources/prerequisites/*
 .local-archive/
 test-results/
 playwright-report/
+
+# 演示视频为可再生成产物（npm run demo:video），不入库
+.github/assets/demo/
