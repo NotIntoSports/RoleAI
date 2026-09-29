@@ -1,0 +1,50 @@
+{"id": "q001", "docId": "doc-01", "question": "连接池满了之后新请求会发生什么？", "goldSnippet": "新请求会在队列中等待最多 500 毫秒，超时后返回 SERVICE_BUSY 错误码"}
+{"id": "q002", "docId": "doc-01", "question": "容量规划的经验公式是什么？", "goldSnippet": "峰值并发会话数乘以每会话平均连接数 1.5，再乘以 1.3 的突发系数"}
+{"id": "q003", "docId": "doc-01", "question": "只读副本的复制延迟大概多少？一致性敏感的接口怎么办？", "goldSnippet": "复制延迟通常在 80 毫秒到 300 毫秒之间，对一致性敏感的接口必须继续访问主库"}
+{"id": "q004", "docId": "doc-01", "question": "慢查询阈值是多少？超了会怎样？", "goldSnippet": "慢查询阈值默认是 200 毫秒，超过阈值会记录到 diagnostics 日志"}
+{"id": "q005", "docId": "doc-01", "question": "连接池空闲连接的回收策略？", "goldSnippet": "连接池的空闲回收时间是 10 分钟"}
+{"id": "q006", "docId": "doc-02", "question": "语音采集的采样率和帧长是多少？", "goldSnippet": "语音采集以 48 千赫兹 16 比特单声道运行，每 32 毫秒产生一个处理帧"}
+{"id": "q007", "docId": "doc-02", "question": "断句的两级判定是怎么做的？", "goldSnippet": "第一级是语音活动检测的静音计数，连续 22 个静音窗（约 700 毫秒）触发句尾判定；第二级是 Smart Turn 完整性模型"}
+{"id": "q008", "docId": "doc-02", "question": "打断检测里人声的辅助判定条件是什么？", "goldSnippet": "用户语音的能量超过回声底噪三倍时辅助判定为人声"}
+{"id": "q009", "docId": "doc-02", "question": "音频送去识别前采样率怎么处理？", "goldSnippet": "音频会经过线性重采样降到 16 千赫兹送入识别服务"}
+{"id": "q010", "docId": "doc-02", "question": "采集缓冲溢出时怎么处理？", "goldSnippet": "超限时直接丢弃最旧的数据并累加溢出计数"}
+{"id": "q011", "docId": "doc-03", "question": "资料导入支持哪些格式？", "goldSnippet": "资料导入支持 Markdown、纯文本、PDF 与 DOCX 四种格式"}
+{"id": "q012", "docId": "doc-03", "question": "单个分块的最大长度是多少？", "goldSnippet": "单块硬上限是 2000 字符，超出时从最近的句子边界回退 400 字符做硬切分"}
+{"id": "q013", "docId": "doc-03", "question": "一篇资料最多切多少块？超了会怎样？", "goldSnippet": "单篇资料的块数上限是 500，超过上限的尾部内容会被丢弃并在导入结果中标记 truncated"}
+{"id": "q014", "docId": "doc-03", "question": "导入时怎么去掉重复内容？", "goldSnippet": "每一块都会计算 SHA-256 哈希，导入时用哈希去重，重复块直接复用已有记录"}
+{"id": "q015", "docId": "doc-03", "question": "导入接口的大小限制是多少？", "goldSnippet": "导入接口的输入上限是 8 兆字节，超过上限返回 IMPORT_TOO_LARGE"}
+{"id": "q016", "docId": "doc-04", "question": "混合检索的两路召回分别基于什么？", "goldSnippet": "关键词检索基于 SQLite 的 FTS5 倒排索引，向量检索基于 sqlite-vec 的 vec0 虚表"}
+{"id": "q017", "docId": "doc-04", "question": "两路召回的结果怎么合并排序？", "goldSnippet": "分别截断到 64 条候选，然后用倒数排名融合，融合常数取 60"}
+{"id": "q018", "docId": "doc-04", "question": "什么情况下会触发向量索引全量重建？", "goldSnippet": "指纹变化会触发全量重建"}
+{"id": "q019", "docId": "doc-04", "question": "检索结果默认返回几条？", "goldSnippet": "检索的默认条数是 5，上限是 20"}
+{"id": "q020", "docId": "doc-04", "question": "查询向量的维度对不上会怎样？", "goldSnippet": "查询为空或向量维度不匹配时自动降级为纯关键词检索"}
+{"id": "q021", "docId": "doc-05", "question": "会话收尾分哪几个阶段？", "goldSnippet": "会话收尾拆成三个阶段"}
+{"id": "q022", "docId": "doc-05", "question": "收尾第二阶段为什么不持锁？", "goldSnippet": "第二阶段释放所有应用层锁，执行识别、大模型与语音合成三次网络调用，此期间停止命令和只读命令都能正常响应"}
+{"id": "q023", "docId": "doc-05", "question": "收尾代次变化了会怎么处理本轮结果？", "goldSnippet": "代次已变化说明会话被停止或更替，本轮结果按已取消处理或整体丢弃"}
+{"id": "q024", "docId": "doc-05", "question": "怎么保证一个会话只有一个收尾在跑？", "goldSnippet": "单飞行守卫保证同一会话同时只有一个收尾在飞行，守卫按代次登记"}
+{"id": "q025", "docId": "doc-05", "question": "落库失败会话会不会卡死在收尾状态？", "goldSnippet": "数据库写入失败时守卫也会复位，避免会话卡死在收尾中状态"}
+{"id": "q026", "docId": "doc-06", "question": "重连退避的参数是怎样的？", "goldSnippet": "基准间隔 500 毫秒，倍率 2，封顶 30 秒"}
+{"id": "q027", "docId": "doc-06", "question": "什么时候退避会重置？", "goldSnippet": "如果连接曾经成功建立过会话，退避基准会重置，因为这类失败多数是网络闪断"}
+{"id": "q028", "docId": "doc-06", "question": "空闲多久会主动重连？", "goldSnippet": "空闲重连的阈值是 120 秒：连续 120 秒没有收到任何服务端事件就主动重建连接"}
+{"id": "q029", "docId": "doc-06", "question": "单个响应的硬超时是多少？超时后做什么？", "goldSnippet": "单个响应的硬超时是 60 秒，超时后清空服务端输入缓冲并重发一次请求，第二次仍然超时就放弃本轮"}
+{"id": "q030", "docId": "doc-06", "question": "实时链路有哪几种状态？", "goldSnippet": "链路状态分为连接中、已连接、重连中和失败四种"}
+{"id": "q031", "docId": "doc-07", "question": "备份期间可以做会话操作吗？", "goldSnippet": "备份期间数据库连接被独占，会话命令会排队等待，因此备份按钮必须提示用户期间会话暂停"}
+{"id": "q032", "docId": "doc-07", "question": "恢复备份前要做什么检查？", "goldSnippet": "恢复时先做完整性检查再原子替换"}
+{"id": "q033", "docId": "doc-07", "question": "密钥存在哪里？", "goldSnippet": "密钥统一存放在操作系统的凭据管理器，数据库内只存凭据引用，绝不落明文"}
+{"id": "q034", "docId": "doc-07", "question": "诊断导出会泄露提示词或密钥吗？", "goldSnippet": "诊断导出会剥离角色提示词正文和所有凭据字段，导出文件限定在数据目录内"}
+{"id": "q035", "docId": "doc-07", "question": "审计日志保留多久？", "goldSnippet": "审计日志记录每一次配置写入的操作者与时间戳，保留 90 天"}
+{"id": "q036", "docId": "doc-08", "question": "虚拟声卡没装好会返回什么？", "goldSnippet": "未就绪时返回 VIRTUAL_AUDIO_REQUIRED"}
+{"id": "q037", "docId": "doc-08", "question": "会议模式下的点名门控是什么意思？", "goldSnippet": "只有当检测到有人提到助手名字时才回答，避免抢话"}
+{"id": "q038", "docId": "doc-08", "question": "候选模式下助手的回答怎么播出？", "goldSnippet": "候选模式相反，助手生成的回答必须经过用户逐条确认才会播出"}
+{"id": "q039", "docId": "doc-08", "question": "通信麦克风配置恢复失败怎么办？", "goldSnippet": "恢复失败会保留恢复信息并提示用户手动处理"}
+{"id": "q040", "docId": "doc-08", "question": "物理麦克风监听是谁在负责？", "goldSnippet": "物理麦克风监听由一个独立的监视进程完成，它的生命周期跟随会话"}
+{"id": "q041", "docId": "doc-09", "question": "诊断导出里包含哪些内容？", "goldSnippet": "诊断导出包含会话元数据、轮次流水、各阶段延迟直方图与错误码统计"}
+{"id": "q042", "docId": "doc-09", "question": "一轮回答被拆成哪几段观测延迟？", "goldSnippet": "一轮回答拆成识别、检索、大模型、合成、播放五段，每段记录中位数与九十五分位"}
+{"id": "q043", "docId": "doc-09", "question": "判断采集端健康度看哪些指标？", "goldSnippet": "逐帧丢弃计数与缓冲溢出计数用于判断采集端健康度"}
+{"id": "q044", "docId": "doc-09", "question": "延迟回归的建议排查顺序是什么？", "goldSnippet": "先看网络分位，再看检索耗时，最后看模型侧"}
+{"id": "q045", "docId": "doc-09", "question": "前端状态轮询的间隔是多少？会被模型调用阻塞吗？", "goldSnippet": "前端的状态轮询间隔是 500 毫秒，轮询请求永远不阻塞在模型调用上"}
+{"id": "q046", "docId": "doc-10", "question": "公开配置视图为什么看不到密钥？", "goldSnippet": "公开视图剥离所有凭据字段，只暴露模型名称、端点健康度与路由开关"}
+{"id": "q047", "docId": "doc-10", "question": "配置写入怎么保证失败不污染现有配置？", "goldSnippet": "先写候选段，校验通过后原子切换为主段，失败的写入不会污染既有配置"}
+{"id": "q048", "docId": "doc-10", "question": "会话进行中修改配置会影响当前回答吗？", "goldSnippet": "会话启动时会做一次配置快照，快照贯穿整个轮次，期间修改配置不影响进行中的回答"}
+{"id": "q049", "docId": "doc-10", "question": "语音路由切换什么时候生效？", "goldSnippet": "路由切换在下一轮生效"}
+{"id": "q050", "docId": "doc-10", "question": "配置回滚是怎么实现的？", "goldSnippet": "配置版本号递增式管理，回滚就是切回旧版本号"}
