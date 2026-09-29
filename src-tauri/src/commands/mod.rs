@@ -521,14 +521,10 @@ mod tests {
     #[test]
     fn material_write_commands_take_the_service_guard() {
         // R1 拆分后 material 命令位于 commands/materials.rs，扫描目标同步指向新文件。
+        // 例外（D-R05 P3，lane-C13）：material_import 的解析/分块最长 8 秒，
+        // 不再全程持有 service_lock（并发导入由连接互斥+哈希主键去重），
+        // 因此 import 断言移除；delete 仍需 service_guard 串行化写删除。
         let source = include_str!("materials.rs");
-        let import = source
-            .split("pub fn material_import")
-            .nth(1)
-            .expect("material_import command")
-            .split("pub fn material_search")
-            .next()
-            .unwrap();
         let delete = source
             .split("pub fn material_delete")
             .nth(1)
@@ -536,7 +532,6 @@ mod tests {
             .split("pub fn material_index")
             .next()
             .unwrap();
-        assert!(import.contains("service_guard"));
         assert!(delete.contains("service_guard"));
     }
 
