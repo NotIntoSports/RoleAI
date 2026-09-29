@@ -68,3 +68,7 @@ name = "audio_hotpath"
 path = "benches/audio_hotpath.rs"
 harness = false
 
+[[bench]]
+name = "materials"
+path = "benches/materials.rs"
+harness = false
