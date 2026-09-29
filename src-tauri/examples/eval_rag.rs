@@ -244,6 +244,6 @@ fn chunk_has_snippet(database: &Database, chunk_id: &str, gold_snippet: &str) ->
         })
         .ok()
         .flatten()
-        .map(|content| normalize_text(&content).contains(&gold_snippet))
+        .map(|content| normalize_text(&content).contains(gold_snippet))
         .unwrap_or(false)
 }

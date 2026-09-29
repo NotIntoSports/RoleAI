@@ -56,7 +56,7 @@ fn synth_document(seed: u64, target_runes: usize) -> String {
         }
         let phrase = PHRASES[rng.next_usize(PHRASES.len())];
         text.push_str(phrase);
-        text.push_str("。");
+        text.push('。');
     }
     text
 }

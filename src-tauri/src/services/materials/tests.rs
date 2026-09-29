@@ -1,6 +1,7 @@
 //! MaterialService 单元测试（纯搬移自 materials.rs 的 tests 模块）。
 
 use super::MaterialService;
+use crate::materials::chunk::chunk_text;
 use crate::{database::Database, materials::MaterialStore};
 
 fn opened(directory: &tempfile::TempDir) -> Database {
@@ -1228,4 +1229,29 @@ fn delete_after_index_removes_vectors() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[test]
+fn well_formed_markdown_preserves_every_sentence_across_chunks() {
+    // "不丢字"的常规文档口径：规范 Markdown 的每个句子都必须落在某个块里。
+    // （乱序 Unicode 的字符级契约不成立：分块会规范化段头、清洗空白并重复
+    // 段首上下文——见 prop_tests 的尺寸/子序列属性与 C51 账本记录。）
+    let sentences = [
+        "订单服务的连接池需要按峰值流量扩容。",
+        "索引缺失导致对账查询在全表扫描。",
+        "The retry policy uses exponential backoff.",
+        "重连退避采用指数递增并以三十秒封顶。",
+    ];
+    let mut text = String::from("## 背景说明\n\n");
+    for sentence in sentences {
+        text.push_str(sentence);
+        text.push('\n');
+    }
+    text.push_str("## 后续动作\n\n所有结论都会同步到值班手册。");
+    let chunks = chunk_text("回归", &text);
+    assert!(!chunks.is_empty());
+    for sentence in sentences {
+        let found = chunks.iter().any(|chunk| chunk.content.contains(sentence));
+        assert!(found, "句子被分块丢弃：{sentence}");
+    }
 }

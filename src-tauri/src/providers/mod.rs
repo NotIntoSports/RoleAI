@@ -34,7 +34,7 @@ pub(crate) use openai_compatible::{
 #[cfg(test)]
 pub(crate) use openai_realtime::{
     InputTranscriptAssembler, RealtimeDialectName, RealtimeTransport, dialect_input_rate,
-    realtime_dialect, realtime_url, session_update_event, wait_session_updated,
+    parse_server_event, realtime_dialect, realtime_url, session_update_event, wait_session_updated,
 };
 pub use openai_realtime::{
     OpenAiCompatibleRealtime, RealtimeAudioRequest, RealtimeError, RealtimeModel,
