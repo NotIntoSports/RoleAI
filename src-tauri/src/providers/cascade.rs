@@ -23,6 +23,7 @@ pub enum CascadeStage {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// 级联链路（ASR→LLM→TTS）的稳定错误码，前端据此提示，不携带敏感细节。
 pub enum CascadeError {
     ClientUnavailable,
     EndpointInvalid(CascadeStage),
@@ -107,6 +108,7 @@ pub struct ChatMessage {
     pub content: String,
 }
 
+/// 语音转写（ASR）供应商能力：把 16kHz 单声道 PCM 转成文本。
 pub trait SpeechToText: Send + Sync {
     fn transcribe(
         &self,
@@ -118,6 +120,7 @@ pub trait SpeechToText: Send + Sync {
     ) -> Result<String, CascadeError>;
 }
 
+/// 文本对话（LLM）供应商能力：按消息列表补全一轮回答。
 pub trait ChatModel: Send + Sync {
     fn complete(
         &self,
@@ -144,6 +147,7 @@ pub trait ChatModel: Send + Sync {
     }
 }
 
+/// 语音合成（TTS）供应商能力：把回答文本合成为可播放的 PCM。
 pub trait TextToSpeech: Send + Sync {
     fn synthesize(
         &self,

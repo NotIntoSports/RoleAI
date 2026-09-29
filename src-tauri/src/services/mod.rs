@@ -1,3 +1,6 @@
+//! 高层服务门面：sessions（会话服务）、realtime_pump（实时音频泵）、
+//! echo_guard（播报回声的文本过滤）、materials/providers 组装、ids（会话/轮次 id）。
+
 mod echo_guard;
 mod embeddings;
 mod ids;

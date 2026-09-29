@@ -1,3 +1,7 @@
+//! 会话服务核心：`SessionService` 持有 service_lock/database/sessions 三把全局锁，
+//! 编排会话生命周期（lifecycle）、实时链路（realtime）、级联单轮（cascade_turn）与
+//! 点名/追答命令（agent_commands）。锁的获取顺序与持锁范围见各函数文档。
+
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
@@ -235,6 +239,8 @@ impl SessionControl {
     }
 }
 
+/// 会话服务：持有 service_lock/database/sessions 三把全局锁，
+/// 编排开始/停止/级联/实时泵；长持锁范围正在按代次方案拆分。
 pub struct SessionService<S: PlaybackSink = NoopSink> {
     runtime: SessionRuntime,
     session_id: Option<String>,

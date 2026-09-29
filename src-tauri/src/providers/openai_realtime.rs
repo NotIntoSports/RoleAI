@@ -29,6 +29,7 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 const CANCEL_POLL: Duration = Duration::from_millis(25);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// 实时会话链路的稳定错误码，前端据此提示，不携带敏感细节。
 pub enum RealtimeError {
     UrlInvalid,
     ConnectFailed,
@@ -162,6 +163,7 @@ pub struct RealtimeAudioRequest<'a> {
     pub hooks: super::TurnStreamHooks<'a>,
 }
 
+/// 实时全双工模型会话能力：推流、提交、收轮，由 openai_realtime 实现。
 pub trait RealtimeModel: Send + Sync {
     fn transcribe_turn(
         &self,

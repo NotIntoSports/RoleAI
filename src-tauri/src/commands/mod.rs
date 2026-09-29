@@ -1,3 +1,7 @@
+//! Tauri 命令层公共设施：`CommandResult` 信封、错误码映射、事件发射与去抖。
+//! 具体命令按域拆在子模块（config/sessions/materials/voice/obs/system/livestream），
+//! 与前端唯一入口 src/api/commands.ts 一一对应；注册表见 lib.rs invoke_handler。
+
 use std::sync::{
     Arc, TryLockError,
     atomic::{AtomicBool, Ordering},

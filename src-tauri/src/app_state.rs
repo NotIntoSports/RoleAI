@@ -25,6 +25,7 @@ pub struct AppPaths {
     pub legacy_search_roots: Vec<LegacySearchRoot>,
 }
 
+/// Tauri 全局状态：密钥服务、数据库、配置与运行时门面的聚合根。
 pub struct AppState {
     pub secrets: SecretService,
     pub database: Mutex<Option<Database>>,

@@ -1,3 +1,6 @@
+//! 密钥存储抽象：`SecretService` 在 Windows 用凭据管理器实现（windows），
+//! 测试与非 Windows 用内存实现（memory）。密钥绝不写入配置文件或日志。
+
 mod memory;
 #[cfg(windows)]
 mod windows;

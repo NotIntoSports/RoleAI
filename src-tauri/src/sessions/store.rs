@@ -96,6 +96,7 @@ pub struct NewSnapshot<'a> {
     pub knowledge_fingerprint: &'a str,
 }
 
+/// 会话表 CRUD 门面：记录、轮次、引用与事件都经它落库。
 pub struct SessionStore<'a> {
     database: &'a Database,
 }

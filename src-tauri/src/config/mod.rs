@@ -1,3 +1,7 @@
+//! 应用配置模型与持久化：`ApplicationConfig`（v1 schema）定义全部可序列化配置，
+//! locator 按优先级定位配置文件，store 负责读写、校验与 schema 迁移，
+//! presets 是内置角色与路由预设。
+
 mod locator;
 pub mod presets;
 mod store;
