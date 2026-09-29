@@ -11,7 +11,9 @@
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "test:tauri": "cargo test --manifest-path src-tauri/Cargo.toml && npm run test:tauri-ui && node --test tests/tauri/*.test.mjs && npm run build:tauri-ui",
-    "test:tauri-package": "node scripts/test-tauri-package.mjs"
+    "test:tauri-package": "node scripts/test-tauri-package.mjs",
+    "dev:demo": "vite --config vite.demo.config.ts",
+    "build:demo": "tsc -p tsconfig.tauri.json && vite build --config vite.demo.config.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "2.11.1",

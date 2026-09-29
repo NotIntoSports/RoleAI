@@ -2,6 +2,7 @@ node_modules/
 src-tauri/target/
 src-tauri/gen/
 dist-tauri-ui/
+dist-demo/
 config/local.json
 config/*.local.json
 config/*.backup.json
