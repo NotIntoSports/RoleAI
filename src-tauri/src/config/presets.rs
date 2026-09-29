@@ -1,11 +1,13 @@
 use super::{AppConfigV1, RoleProfileConfig, RoleScenario};
 
-pub const PRESET_IDS: [&str; 5] = [
+pub const PRESET_IDS: [&str; 7] = [
     "preset-interviewer",
     "preset-hr",
     "preset-candidate",
     "preset-meeting",
     "preset-presenter",
+    "preset-strict-interviewer",
+    "preset-expression-coach",
 ];
 
 pub fn is_preset(id: &str) -> bool {
@@ -40,12 +42,25 @@ pub fn ensure_role_presets(config: &mut AppConfigV1) -> bool {
             "你是产品直播讲解员。仅依据指定产品资料介绍功能、适用场景和限制，不编造价格、库存、优惠或效果承诺。按确认后的讲稿分段讲解。",
             "",
         ),
+        (
+            "严苛面试官",
+            "你是严苛的技术面试官。围绕用户提供的岗位与简历连续追问，优先考察项目深度、决策取舍与事实边界；发现含糊、矛盾或编造迹象时直接指出并要求澄清。一次只问一个问题，问题具体、有压力但不人身攻击。面试结论交由人工复核，不作自动录用决定。",
+            "你好，我们开始。请用两分钟介绍你最有代表性的项目，我会针对细节追问。",
+        ),
+        (
+            "表达教练",
+            "你是表达教练。用户给出一段回答或陈述后，先指出最影响效果的少量问题（结构、重点、冗余、口头禅），再给出一条更清晰的改写示范，并说明改动理由。只依据用户提供的真实内容改写，不虚构经历或事实。每次聚焦一个改进点，避免一次性堆砌建议。",
+            "",
+        ),
     ];
     let mut changed = false;
     for (id, (name, prompt, opening)) in PRESET_IDS.into_iter().zip(definitions) {
         if let Some(existing) = config.role_profiles.iter_mut().find(|role| role.id == id) {
-            if existing.scenario.is_none() {
-                existing.scenario = RoleScenario::from_preset_id(id);
+            // 场景回填只针对有映射的预设；纯对话预设（strict/coach）scenario
+            // 恒为 None，重复赋值会让「已播种」误报为变更。
+            if existing.scenario.is_none() && let Some(scenario) = RoleScenario::from_preset_id(id)
+            {
+                existing.scenario = Some(scenario);
                 changed = true;
             }
             continue;
@@ -84,7 +99,7 @@ mod tests {
     fn seeds_once_and_preserves_user_edits_and_selection() {
         let mut config = AppConfigV1::default();
         assert!(ensure_role_presets(&mut config));
-        assert_eq!(config.role_profiles.len(), 5);
+        assert_eq!(config.role_profiles.len(), PRESET_IDS.len());
         assert!(!ensure_role_presets(&mut config));
         config.role_profiles[0].system_prompt = "existing user text".into();
         assert!(!ensure_role_presets(&mut config));
@@ -165,7 +180,7 @@ mod tests {
         assert_eq!(saved.scenario, Some(super::RoleScenario::MeetingAssistant));
         assert!(roles.delete("preset-meeting").is_err());
         let next = store.load().unwrap();
-        assert_eq!(next.role_profiles.len(), 6);
+        assert_eq!(next.role_profiles.len(), PRESET_IDS.len() + 1);
         assert_eq!(
             next.role_profiles.iter().find(|r| r.id == "preset-meeting"),
             original
