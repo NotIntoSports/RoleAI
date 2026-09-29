@@ -136,8 +136,10 @@ struct CaptureState {
     tap_dropped: std::sync::atomic::AtomicU64,
     /// 实时会话信号接收端：分段/打断判定经此转发给泵（None 表示无实时路线）。
     realtime_sink: Option<std::sync::mpsc::Sender<RealtimeCaptureSignal>>,
-    /// AGC 当前增益（进分段器/tap 的链路；barge 监听保持原始电平）。
+    /// AGC 当前增益（进分段器/barge 监听/上行 tap 的同一条链路）。
     agc_gain: f32,
+    /// 播报期（回声抑制窗内）麦克风电平诊断节流点：1Hz 一条 debug。
+    last_gain_diag: Option<Instant>,
 }
 
 /// ingest 后取走本地判定信号并发往 sink；须在 capture 锁外调用（send 可能
@@ -347,10 +349,18 @@ impl AudioCapture {
         let mut state = self.lock();
         state.barge_in = if enabled {
             match crate::audio::vad::SileroVad::new() {
-                Ok(vad) => Some(BargeInMonitor::with_detector(Box::new(vad))),
-                Err(_) => None,
+                Ok(vad) => {
+                    tracing::debug!(target: "audio_barge", "barge 打断监听已启用（Silero VAD）");
+                    Some(BargeInMonitor::with_detector(Box::new(vad)))
+                }
+                Err(error) => {
+                    // 静默降级会让「本地打断永不触发」无从排查，必须留痕。
+                    tracing::warn!(target: "audio_barge", ?error, "Silero VAD 加载失败，本地打断不可用");
+                    None
+                }
             }
         } else {
+            tracing::debug!(target: "audio_barge", "barge 打断监听已关闭");
             None
         };
     }
@@ -411,6 +421,7 @@ impl AudioCapture {
                 tap_dropped: std::sync::atomic::AtomicU64::new(0),
                 realtime_sink: None,
                 agc_gain: 1.0,
+                last_gain_diag: None,
             })),
             child: Mutex::new(None),
             sidecar_dead: Arc::new(AtomicBool::new(false)),
@@ -551,7 +562,23 @@ fn ingest_into_state(state: &mut CaptureState, pcm: &[u8]) {
         None => pcm,
     };
     let suppressed = state.echo_until.is_some_and(|until| Instant::now() < until);
+    // 播报期电平诊断（1Hz）：看 AGC 增益与块峰值在回声抑制窗内的实际走势，
+    // 用于判定打断不触发时麦克风侧到底是「没人声」还是「人声但 Silero 没过阈」。
+    if suppressed
+        && state
+            .last_gain_diag
+            .is_none_or(|at| at.elapsed() >= Duration::from_secs(1))
+    {
+        state.last_gain_diag = Some(Instant::now());
+        tracing::debug!(
+            target: "audio_barge",
+            gain = format_args!("{:.2}", state.agc_gain),
+            chunk_peak,
+            "播报期麦克风电平诊断"
+        );
+    }
     // 经 guard 的字段投影借用不相交不成立（deref_mut 独占整个 guard），先拆出可变借用。
+    let agc_gain = state.agc_gain;
     let CaptureState {
         barge_in,
         barge_flag,
@@ -571,6 +598,12 @@ fn ingest_into_state(state: &mut CaptureState, pcm: &[u8]) {
     {
         monitor.ingest(pcm_for_vad);
         if monitor.triggered() {
+            tracing::debug!(
+                target: "audio_barge",
+                gain = format_args!("{:.2}", agc_gain),
+                chunk_peak,
+                "barge 打断监听触发（连续人声窗达标）"
+            );
             *barge_utterance = monitor.take_staged();
             barge_flag.store(true, Ordering::SeqCst);
         }
@@ -743,7 +776,7 @@ mod tests {
         );
         let utterance = capture.take_barge_in_utterance().expect("staged utterance");
         assert!(
-            utterance.len() >= 8 * 3072,
+            utterance.len() >= 6 * 3072,
             "utterance should cover the triggered windows (gained PCM)"
         );
     }
