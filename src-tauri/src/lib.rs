@@ -68,6 +68,15 @@ pub fn run() {
         std::process::exit(2);
     }
 
+    // 诊断日志走 stdout（tauri:dev 终端可见）；默认 info，RUST_LOG=debug 打开
+    // 实时会话打断/回声链路的逐事件定位日志（realtime_pump / audio_barge）。
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .try_init();
+
     let builder = tauri::Builder::default().plugin(
         tauri_plugin_global_shortcut::Builder::new()
             .with_handler(|app, _, event| {
