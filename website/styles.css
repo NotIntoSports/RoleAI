@@ -1,0 +1,245 @@
+/* RoleAI 落地页样式：纯 CSS，深浅色跟随系统，无脚本。 */
+:root {
+  --bg: #ffffff;
+  --bg-soft: #f4f6f8;
+  --text: #1b2733;
+  --text-muted: #51606e;
+  --accent: #2456d6;
+  --accent-contrast: #ffffff;
+  --border: #d8dee4;
+  --card: #ffffff;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14181d;
+    --bg-soft: #1b2128;
+    --text: #e8ecf1;
+    --text-muted: #a3aeb9;
+    --accent: #7fa3ff;
+    --accent-contrast: #0e1420;
+    --border: #2c343d;
+    --card: #1b2128;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+  line-height: 1.65;
+  color: var(--text);
+  background: var(--bg);
+}
+
+a {
+  color: var(--accent);
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.container {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 0 20px;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 0;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+  font-size: 18px;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.brand-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-soft);
+}
+
+.hero {
+  padding: 40px 0 24px;
+}
+
+.hero h1 {
+  margin: 0 0 8px;
+  font-size: clamp(28px, 5vw, 44px);
+  line-height: 1.2;
+}
+
+.hero .tagline {
+  margin: 0 0 12px;
+  font-size: clamp(17px, 2.6vw, 22px);
+  font-weight: 600;
+}
+
+.hero .description {
+  margin: 0 0 20px;
+  max-width: 720px;
+  color: var(--text-muted);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.button {
+  display: inline-block;
+  padding: 10px 20px;
+  border-radius: 10px;
+  font-weight: 600;
+  text-decoration: none;
+  border: 1px solid var(--border);
+}
+
+.button-primary {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border-color: transparent;
+}
+
+.button-primary:hover {
+  text-decoration: none;
+  filter: brightness(1.08);
+}
+
+.button:not(.button-primary):hover {
+  background: var(--bg-soft);
+  text-decoration: none;
+}
+
+.badges {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.hero-shot {
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  margin: 18px 0 8px;
+}
+
+.notice {
+  font-size: 13px;
+  color: var(--text-muted);
+  border-left: 3px solid var(--border);
+  padding-left: 12px;
+  max-width: 760px;
+}
+
+section {
+  padding: 36px 0;
+}
+
+section > h2 {
+  margin: 0 0 6px;
+  font-size: clamp(22px, 3.4vw, 30px);
+}
+
+.section-lead {
+  margin: 0 0 22px;
+  color: var(--text-muted);
+}
+
+.features {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.features li {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px;
+}
+
+.features h3 {
+  margin: 0 0 6px;
+  font-size: 17px;
+}
+
+.features p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 16px;
+}
+
+.gallery figure {
+  margin: 0;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.gallery img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.gallery figcaption {
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border);
+}
+
+footer {
+  border-top: 1px solid var(--border);
+  background: var(--bg-soft);
+  padding: 22px 0 30px;
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+footer .container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 24px;
+  justify-content: space-between;
+}

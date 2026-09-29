@@ -11,6 +11,7 @@ import { chromium } from "@playwright/test";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const OUT_DIR = path.join(repoRoot, ".github", "assets", "screenshots");
+const WEB_OUT_DIR = path.join(repoRoot, "website", "assets", "screenshots");
 const BASE = process.env.DEMO_URL ?? "http://127.0.0.1:1421/RoleAI/demo/";
 const VIEWPORT = { width: 1440, height: 900 };
 const WARN_BYTES = 1.5 * 1024 * 1024;
@@ -60,24 +61,20 @@ function stopServer() {
   }
 }
 
-function shotPath(name) {
-  return path.join(OUT_DIR, name);
-}
-
-function reportSize(name) {
-  const size = statSync(shotPath(name)).size;
-  const kb = Math.round(size / 1024);
-  console.log(`  ✓ ${name} (${kb} KB${size > WARN_BYTES ? " —— 超过 1.5MB，考虑压缩" : ""})`);
-}
-
 async function gotoApp(page, hash) {
   await page.goto(`${BASE}?capture=1${hash}`);
   await page.getByRole("navigation", { name: "主导航" }).waitFor();
   await page.waitForTimeout(400);
 }
 
-async function main() {
-  await mkdir(OUT_DIR, { recursive: true });
+async function captureAll(outDir, deviceScaleFactor) {
+  const shotPath = (name) => path.join(outDir, name);
+  const reportSize = (name) => {
+    const size = statSync(shotPath(name)).size;
+    const kb = Math.round(size / 1024);
+    console.log(`  ✓ ${name} (${kb} KB${size > WARN_BYTES ? " —— 超过 1.5MB，考虑压缩" : ""})`);
+  };
+  await mkdir(outDir, { recursive: true });
   await ensureServer();
   const browser = await chromium.launch({
     args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream"],
@@ -86,7 +83,7 @@ async function main() {
   try {
     // —— 会话进行中的截图（深色 / 浅色）——
     for (const theme of ["dark", "light"]) {
-      const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: 2 });
+      const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor });
       await context.addInitScript((t) => {
         window.localStorage.setItem("ai-assistant.theme", t);
       }, theme);
@@ -112,7 +109,7 @@ async function main() {
     }
 
     // —— 静态页面截图（深色）——
-    const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: 2 });
+    const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor });
     await context.addInitScript(() => {
       window.localStorage.setItem("ai-assistant.theme", "dark");
     });
@@ -200,7 +197,12 @@ async function main() {
     await browser.close();
     stopServer();
   }
-  console.log(`\n全部截图已生成到 ${OUT_DIR}`);
+  console.log(`\n截图已生成到 ${outDir}`);
+}
+
+async function main() {
+  await captureAll(OUT_DIR, 2);
+  await captureAll(WEB_OUT_DIR, 1);
 }
 
 main().catch((error) => {

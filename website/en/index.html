@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="description" content="RoleAI is a Windows desktop AI role-play assistant: define a persona, opening line and style, then hold real-time voice conversations grounded in your local materials. Try the online demo — no install needed." />
+    <title>RoleAI — Let AI join the conversation in the role you define</title>
+    <link rel="stylesheet" href="../styles.css" />
+  </head>
+  <body>
+    <header class="container topbar">
+      <a class="brand" href="../"><span class="brand-mark" aria-hidden="true">✦</span>RoleAI</a>
+      <span class="badges">
+        <img src="https://img.shields.io/github/stars/NotIntoSports/RoleAI?style=social" alt="GitHub Stars" width="90" height="20" loading="lazy" />
+        <img src="https://img.shields.io/github/license/NotIntoSports/RoleAI" alt="License" width="92" height="20" loading="lazy" />
+      </span>
+    </header>
+
+    <main>
+      <section class="container hero" aria-labelledby="hero-heading">
+        <h1 id="hero-heading">RoleAI</h1>
+        <p class="tagline">Let AI join the conversation in the role you define.</p>
+        <p class="description">
+          A Windows desktop AI role-play assistant: set the persona, opening line and speaking style,
+          pick your model and voice providers, and hold voice conversations grounded in imported materials.
+          Built for interview practice, meeting assistance and live-stream narration, with session records
+          and a teleprompter studio included.
+        </p>
+        <div class="actions">
+          <a class="button button-primary" href="../demo/">Try the online demo</a>
+          <a class="button" href="https://github.com/NotIntoSports/RoleAI/releases">Download for Windows</a>
+          <a class="button" href="https://github.com/NotIntoSports/RoleAI/tree/main/guide">Read the docs</a>
+        </div>
+        <img
+          class="hero-shot"
+          src="../assets/screenshots/workspace-light.png"
+          alt="RoleAI workspace: a strict-interviewer role in a live conversation with streaming subtitles and reply"
+          width="1440"
+          height="900"
+        />
+        <p class="notice">
+          This is an internal trial build for Windows x64. Before use, disclose that an AI is participating and
+          how it is recorded, and keep a human in the review loop; do not use it for covert impersonation or
+          unreviewed automated decisions. Everything in the online demo is fictional and connected to no AI service.
+        </p>
+      </section>
+
+      <section class="container" aria-labelledby="features-heading">
+        <h2 id="features-heading">Three core capabilities</h2>
+        <p class="section-lead">A complete loop around real-time conversation — from talking to reviewing.</p>
+        <ul class="features">
+          <li>
+            <h3>Real-time voice</h3>
+            <p>Speech appears as live subtitles and the AI reply streams in; barge in at any moment, with pause, takeover and correction controls.</p>
+          </li>
+          <li>
+            <h3>Roles and materials</h3>
+            <p>Strict interviewer, speaking coach, meeting assistant and live-stream presenter roles ship out of the box; answers can cite imported materials.</p>
+          </li>
+          <li>
+            <h3>Local-first</h3>
+            <p>Role configs, materials and session records stay on your machine; keys live in Windows Credential Manager; records export to Markdown.</p>
+          </li>
+        </ul>
+      </section>
+
+      <section class="container" aria-labelledby="gallery-heading">
+        <h2 id="gallery-heading">A quick tour</h2>
+        <p class="section-lead">All screenshots are generated automatically by Playwright and stay in sync with the UI.</p>
+        <div class="gallery">
+          <figure>
+            <img src="../assets/screenshots/interview-live.png" alt="The strict interviewer pressing for cache-design details" width="1440" height="900" loading="lazy" />
+            <figcaption>Mock interview: relentless follow-ups</figcaption>
+          </figure>
+          <figure>
+            <img src="../assets/screenshots/materials.png" alt="Materials page listing documents and keyword search hits" width="1440" height="900" loading="lazy" />
+            <figcaption>Materials: import, search and cite</figcaption>
+          </figure>
+          <figure>
+            <img src="../assets/screenshots/records.png" alt="Session record detail showing multiple dialogue turns" width="1440" height="900" loading="lazy" />
+            <figcaption>Records: revisit and export</figcaption>
+          </figure>
+          <figure>
+            <img src="../assets/screenshots/services.png" alt="Services page showing a provider connection test with redacted keys" width="1440" height="900" loading="lazy" />
+            <figcaption>Services: connection tests, redacted keys</figcaption>
+          </figure>
+          <figure>
+            <img src="../assets/screenshots/livestream.png" alt="Live-stream studio with segments generated from product materials" width="1440" height="900" loading="lazy" />
+            <figcaption>Live-stream studio: segment-by-segment narration</figcaption>
+          </figure>
+          <figure>
+            <img src="../assets/screenshots/diagnostics.png" alt="Diagnostics page with voice-route latency statistics" width="1440" height="900" loading="lazy" />
+            <figcaption>Diagnostics: P50/P95 at a glance</figcaption>
+          </figure>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="container">
+        <span>RoleAI · Windows desktop client</span>
+        <span>
+          <a href="https://github.com/NotIntoSports/RoleAI">GitHub</a> ·
+          <a href="https://github.com/NotIntoSports/RoleAI/tree/main/guide">Docs</a> ·
+          <a href="../demo/">Online demo</a> ·
+          <a href="../">中文</a>
+        </span>
+      </div>
+    </footer>
+  </body>
+</html>
