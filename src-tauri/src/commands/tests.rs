@@ -477,15 +477,18 @@ fn command_body<'a>(source: &'a str, name: &str) -> &'a str {
 
 #[test]
 fn session_mutating_commands_take_the_service_guard() {
-    // R1 拆分后 session 命令位于 commands/sessions.rs，扫描目标同步指向新文件。
-    let source = include_str!("sessions.rs");
-    for name in [
-        "session_start",
-        "session_stop",
-        "session_delete",
-        "session_export",
-        "session_finalize_utterance",
-        "session_agent_command",
+    // C23 拆分后 session 命令位于 commands/sessions/{lifecycle,records,turns}.rs，
+    // 扫描目标同步指向新文件（沿用 R1 拆分 livestream 的做法）。
+    let lifecycle = include_str!("sessions/lifecycle.rs");
+    let records = include_str!("sessions/records.rs");
+    let turns = include_str!("sessions/turns.rs");
+    for (source, name) in [
+        (lifecycle, "session_start"),
+        (lifecycle, "session_stop"),
+        (records, "session_delete"),
+        (records, "session_export"),
+        (turns, "session_finalize_utterance"),
+        (turns, "session_agent_command"),
     ] {
         assert!(
             command_body(source, name).contains("service_guard"),
@@ -496,12 +499,14 @@ fn session_mutating_commands_take_the_service_guard() {
 
 #[test]
 fn session_read_and_mode_commands_skip_the_service_guard() {
-    let source = include_str!("sessions.rs");
-    for name in [
-        "session_list",
-        "session_get",
-        "session_set_mode",
-        "runtime_get_status",
+    let lifecycle = include_str!("sessions/lifecycle.rs");
+    let records = include_str!("sessions/records.rs");
+    let turns = include_str!("sessions/turns.rs");
+    for (source, name) in [
+        (records, "session_list"),
+        (records, "session_get"),
+        (lifecycle, "session_set_mode"),
+        (turns, "runtime_get_status"),
     ] {
         let body = command_body(source, name);
         let until_next = body
