@@ -1,7 +1,7 @@
 {
   "name": "role-ai",
   "version": "0.1.0",
-  "description": "Windows desktop client for local RoleAI interactions",
+  "description": "Local-first real-time voice AI role assistant for Windows: Rust + Tauri full-duplex voice pipeline for mock interview practice, meeting assistance, and live-stream presenting",
   "author": "RoleAI contributors",
   "private": true,
   "scripts": {
