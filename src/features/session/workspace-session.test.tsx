@@ -1312,4 +1312,153 @@ describe("WorkspaceSession", () => {
     await waitFor(() => expect(sharer.stop).toHaveBeenCalled());
     expect(screen.queryByRole("region", { name: "视频画面预览" })).toBeNull();
   });
+
+  function streamListeners(): {
+    listen: (event: string, handler: (payload: never) => void) => Promise<() => void>;
+    transcript: (payload: SessionTranscriptEvent) => void;
+    reply: (payload: SessionReplyEvent) => void;
+  } {
+    const handlers: {
+      transcript?: (payload: SessionTranscriptEvent) => void;
+      reply?: (payload: SessionReplyEvent) => void;
+    } = {};
+    const listen = vi.fn(async (event: string, handler: (payload: never) => void) => {
+      if (event === "session:transcript:v1") {
+        handlers.transcript = handler as (payload: SessionTranscriptEvent) => void;
+      }
+      if (event === "session:reply:v1") handlers.reply = handler as (payload: SessionReplyEvent) => void;
+      return () => {};
+    });
+    return {
+      listen,
+      transcript: (payload) => handlers.transcript?.(payload),
+      reply: (payload) => handlers.reply?.(payload),
+    };
+  }
+
+  it("renders consecutive partials as one entry showing the latest snapshot", async () => {
+    const bus = streamListeners();
+    vi.mocked(commands.getSession).mockImplementation(async () => ({
+      ok: true,
+      data: detail({ turns: [] }),
+    }));
+
+    render(<WorkspaceSession listen={bus.listen} />);
+    await waitFor(() => expect(bus.listen).toHaveBeenCalledWith("session:reply:v1", expect.any(Function)));
+    fireEvent.click(await screen.findByRole("button", { name: "开始会话" }));
+    await waitFor(() => expect(commands.startSession).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      bus.transcript({ seq: 4294967297, text: "帮我", done: false });
+      bus.reply({ seq: 4294967298, text: "好的", done: false });
+      bus.reply({ seq: 4294967299, text: "好的，我来介绍", done: false });
+      bus.reply({ seq: 4294967300, text: "好的，我来介绍这个岗位。", done: false });
+    });
+    expect(screen.getByLabelText("用户转写").textContent).toContain("帮我");
+    expect(screen.getAllByLabelText("AI 回复")).toHaveLength(1);
+    expect(screen.getByLabelText("AI 回复").textContent).toContain("好的，我来介绍这个岗位。");
+    expect(screen.queryByText("好的")).toBeNull();
+    expect(screen.queryByText("好的，我来介绍")).toBeNull();
+  });
+
+  it("keeps a single entry after done and adopts the persisted text", async () => {
+    const bus = streamListeners();
+    let storedTurns: SessionTurnView[] = [];
+    vi.mocked(commands.getSession).mockImplementation(async () => ({
+      ok: true,
+      data: detail({ turns: storedTurns }),
+    }));
+
+    render(<WorkspaceSession listen={bus.listen} />);
+    await waitFor(() => expect(bus.listen).toHaveBeenCalledWith("session:reply:v1", expect.any(Function)));
+    fireEvent.click(await screen.findByRole("button", { name: "开始会话" }));
+    await waitFor(() => expect(commands.startSession).toHaveBeenCalledTimes(1));
+    const fetchesAfterStart = vi.mocked(commands.getSession).mock.calls.length;
+
+    act(() => {
+      bus.transcript({ seq: 4294967297, text: "第三轮问题", done: false });
+      bus.reply({ seq: 4294967298, text: "第三轮回答的前半", done: false });
+    });
+    expect(screen.getAllByLabelText("AI 回复")).toHaveLength(1);
+
+    // done=true 后落库文本以会话详情为准：仍只有一条，且不残留 partial 旧快照。
+    storedTurns = [
+      turn({ id: "turn-9", turnIndex: 0, userText: "第三轮问题", assistantText: "第三轮回答的前半，以及补充的后半。", materialsUsed: false }),
+    ];
+    await act(async () => {
+      bus.reply({ seq: 6, text: "第三轮回答的前半，以及补充的后半。", done: true });
+      bus.transcript({ seq: 5, text: "第三轮问题", done: true });
+    });
+    await waitFor(() =>
+      expect(vi.mocked(commands.getSession).mock.calls.length).toBeGreaterThan(fetchesAfterStart),
+    );
+    expect(screen.getAllByLabelText("AI 回复")).toHaveLength(1);
+    expect(screen.getByLabelText("AI 回复").textContent).toContain("以及补充的后半。");
+    expect(screen.queryByText("第三轮回答的前半")).toBeNull();
+  });
+
+  it("shows the previous persisted turn and the new live turn in order", async () => {
+    const bus = streamListeners();
+    let storedTurns = [
+      turn({ id: "turn-1", turnIndex: 0, userText: "第一轮问题", assistantText: "第一轮回答", materialsUsed: false }),
+    ];
+    vi.mocked(commands.getSession).mockImplementation(async () => ({
+      ok: true,
+      data: detail({ turns: storedTurns }),
+    }));
+
+    render(<WorkspaceSession listen={bus.listen} />);
+    await waitFor(() => expect(bus.listen).toHaveBeenCalledWith("session:reply:v1", expect.any(Function)));
+    fireEvent.click(await screen.findByRole("button", { name: "开始会话" }));
+    await waitFor(() => expect(screen.getByLabelText("AI 回复").textContent).toContain("第一轮回答"));
+
+    act(() => {
+      bus.transcript({ seq: 4294967301, text: "第二轮问题", done: false });
+      bus.reply({ seq: 4294967302, text: "第二轮回答，正在生成", done: false });
+    });
+    const bubbles = screen.getAllByLabelText(/AI 回复/);
+    expect(bubbles).toHaveLength(2);
+    expect(bubbles[0].getAttribute("aria-label")).toBe("AI 回复 · 第 1 轮");
+    expect(bubbles[1].getAttribute("aria-label")).toBe("AI 回复");
+    expect(bubbles[0].textContent).toContain("第一轮回答");
+    expect(bubbles[1].textContent).toContain("第二轮回答，正在生成");
+  });
+
+  it("ignores a stale partial arriving after the turn is done", async () => {
+    const bus = streamListeners();
+    let storedTurns: SessionTurnView[] = [];
+    vi.mocked(commands.getSession).mockImplementation(async () => ({
+      ok: true,
+      data: detail({ turns: storedTurns }),
+    }));
+
+    render(<WorkspaceSession listen={bus.listen} />);
+    await waitFor(() => expect(bus.listen).toHaveBeenCalledWith("session:reply:v1", expect.any(Function)));
+    fireEvent.click(await screen.findByRole("button", { name: "开始会话" }));
+    await waitFor(() => expect(commands.startSession).toHaveBeenCalledTimes(1));
+    const fetchesAfterStart = vi.mocked(commands.getSession).mock.calls.length;
+
+    act(() => {
+      bus.reply({ seq: 4294967297, text: "回答前半", done: false });
+      bus.reply({ seq: 4294967298, text: "回答前半与后半全文", done: false });
+    });
+    storedTurns = [
+      turn({ id: "turn-4", turnIndex: 0, userText: "问题", assistantText: "回答前半与后半全文", materialsUsed: false }),
+    ];
+    await act(async () => {
+      bus.reply({ seq: 6, text: "回答前半与后半全文", done: true });
+    });
+    await waitFor(() =>
+      expect(vi.mocked(commands.getSession).mock.calls.length).toBeGreaterThan(fetchesAfterStart),
+    );
+    expect(screen.getByLabelText("AI 回复").textContent).toContain("回答前半与后半全文");
+
+    // 迟到的旧轮 partial（seq 更小）不得回退已显示内容。
+    act(() => {
+      bus.reply({ seq: 4294967297, text: "回答前半", done: false });
+    });
+    expect(screen.getAllByLabelText("AI 回复")).toHaveLength(1);
+    expect(screen.getByLabelText("AI 回复").textContent).toContain("回答前半与后半全文");
+    expect(screen.queryByText("回答前半")).toBeNull();
+  });
 });

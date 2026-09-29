@@ -1,6 +1,7 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { AudioLines, Boxes, Mic, Server } from "lucide-react";
 import * as api from "../../api/commands";
+import { EmptyState } from "../../components/empty-state";
 import { EmbeddingEditor } from "../../features/services/embedding-editor";
 import { VoiceReferenceEditor } from "../../features/services/voice-reference-editor";
 import type { CommandResult, ProviderDependency, ProviderTestResult, PublicConfig, VoiceReferenceSummary, VoiceRouteMode, WebCapability } from "../../generated/bindings";
@@ -275,7 +276,7 @@ export function ServicesPage() {
         </form>
         <div className="service-list configuration-list">
           <h3>已配置供应商 <span className="configuration-count">{providers.length}</span></h3>
-          {providers.length === 0 && <p className="empty-state">还没有供应商。</p>}
+          {providers.length === 0 && <EmptyState title="还没有供应商。" />}
           {providers.map((item) => <article className="service-card" key={item.id}>
             <h3>{item.name || "未命名供应商"}</h3><p>{item.baseUrl}</p>
             <p>密钥：{item.credential?.configured ? "已安全保存" : "未配置"}</p>
@@ -313,7 +314,7 @@ export function ServicesPage() {
         </form>
         <div className="service-list configuration-list">
           <h3>已配置线路 <span className="configuration-count">{config?.speech.voiceRoutes.length ?? 0}</span></h3>
-          {(config?.speech.voiceRoutes ?? []).length === 0 && <p className="empty-state">还没有语音线路。</p>}
+          {(config?.speech.voiceRoutes ?? []).length === 0 && <EmptyState title="还没有语音线路。" />}
           {config?.speech.voiceRoutes.map((item) => <article className="service-card" key={item.id}>
             <h3>{item.name}</h3><p>{item.mode === "cascaded" ? "级联" : "端到端"} · {item.ready ? "测试通过" : "尚未就绪"}</p>
             {item.active && <span className="status-badge">当前启用</span>}

@@ -1,10 +1,9 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 
 import * as api from "../../api/commands";
+import { EmptyState } from "../../components/empty-state";
+import { errorNoticeText as errorText } from "../../components/error-notice";
 import type { CommandResult, PublicConfig } from "../../generated/bindings";
-
-const errorText = (error: { code: string; message: string; field?: string | null }) =>
-  `${error.field ? error.field + "：" : ""}${error.code}：${error.message}`;
 
 const emptyEmbedding = {
   id: "",
@@ -198,7 +197,7 @@ export function EmbeddingEditor({ focusId = null }: { focusId?: string | null })
         </form>
         <div className="service-list configuration-list">
           <h3>已配置模型 <span className="configuration-count">{items.length}</span></h3>
-          {items.length === 0 && <p className="empty-state">还没有 Embedding 配置。</p>}
+          {items.length === 0 && <EmptyState title="还没有 Embedding 配置。" />}
           {items.map((item) => {
             const providerName = providers.find((provider) => provider.id === item.providerId)?.name;
             const source = providerName || item.baseUrl || "自定义";

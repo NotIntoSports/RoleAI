@@ -62,6 +62,32 @@ describe("ServicesPage", () => {
     vi.clearAllMocks();
   });
 
+  it("toggles panel visibility and keeps inactive panels unfocusable across back-and-forth switches", async () => {
+    vi.mocked(commands.listVoiceReferences).mockResolvedValue({ ok: true, data: [] });
+    render(<ServicesPage />);
+    await screen.findByRole("heading", { name: "模型供应商" });
+    const navigation = within(screen.getByRole("navigation", { name: "服务分类" }));
+    const panels: Record<string, HTMLElement> = {
+      模型供应商: document.getElementById("services-panel-providers") as HTMLElement,
+      语音线路: document.getElementById("services-panel-routes") as HTMLElement,
+      音色克隆: document.getElementById("services-panel-voices") as HTMLElement,
+      Embedding: document.getElementById("services-panel-embedding") as HTMLElement,
+    };
+    // 面板以 hidden 属性隐藏（HTML 标准规定 hidden 后代不可聚焦、不入无障碍树），
+    // jsdom 不模拟真实焦点遍历，因此以 hidden 属性断言不可聚焦。
+    const expectOnlyVisible = (name: string) => {
+      for (const [label, panel] of Object.entries(panels)) {
+        expect(panel.hidden).toBe(label !== name);
+      }
+    };
+    expectOnlyVisible("模型供应商");
+    for (const name of ["语音线路", "音色克隆", "Embedding", "音色克隆", "模型供应商", "语音线路", "模型供应商"]) {
+      fireEvent.click(navigation.getByRole("button", { name }));
+      expectOnlyVisible(name);
+      expect(screen.getByRole("heading", { name })).toBeTruthy();
+    }
+  });
+
   it("opens providers by default and exposes one category at a time", async () => {
     render(<ServicesPage />);
     expect(screen.getByRole("heading", { level: 1 }).textContent).toContain("服务");

@@ -1,11 +1,10 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 
 import * as api from "../../api/commands";
+import { EmptyState } from "../../components/empty-state";
+import { errorNoticeText as errorText } from "../../components/error-notice";
 import type { CommandResult, PublicConfig, VoiceReferenceSummary } from "../../generated/bindings";
 import { RECORD_MAX_MS, RECORD_MIN_MS, VoiceRecorder, bytesToBase64, type RecordingResult } from "./wav-recorder";
-
-const errorText = (error: { code: string; message: string; field?: string | null }) =>
-  `${error.field ? error.field + "：" : ""}${error.code}：${error.message}`;
 
 const emptyReference = { id: "", name: "", providerId: "", targetModel: "" };
 
@@ -285,7 +284,7 @@ export function VoiceReferenceEditor({ visible }: { visible: boolean }) {
         </form>
         <div className="service-list configuration-list">
           <h3>已保存音色 <span className="configuration-count">{references.length}</span></h3>
-          {references.length === 0 && <p className="empty-state">还没有音色。</p>}
+          {references.length === 0 && <EmptyState title="还没有音色。" />}
           {references.map((item) => {
             const providerName = providers.find((provider) => provider.id === item.providerId)?.name;
             return (

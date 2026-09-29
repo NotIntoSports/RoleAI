@@ -2,11 +2,10 @@ import { useCallback, useEffect, useState } from "react";
 import { ArrowLeft, ArrowUpRight, Download, MessageSquare, Quote, Trash2 } from "lucide-react";
 
 import * as api from "../../api/commands";
+import { EmptyState } from "../../components/empty-state";
+import { errorNoticeText as errorText } from "../../components/error-notice";
 import type { CommandResult, SessionDetail, SessionSummary } from "../../generated/bindings";
 import "../../styles/library.css";
-
-const errorText = (error: { code: string; message: string; field?: string | null }) =>
-  `${error.field ? error.field + "：" : ""}${error.code}：${error.message}`;
 
 const sessionStatus: Record<string, string> = {
   idle: "未开始",
@@ -175,7 +174,7 @@ export function RecordsList() {
             <p className="library-meta">角色 {roleLabel(detail.session.roleProfileId, roleNames)}</p>
             <p className="record-id">会话 ID <code>{detail.session.id}</code></p>
           </header>
-          {detail.turns.length === 0 && <p className="empty-state">本次会话还没有对话内容。</p>}
+          {detail.turns.length === 0 && <EmptyState title="本次会话还没有对话内容。" />}
           {detail.turns.map((item) => (
             <article className="record-turn" key={item.id} aria-label={`回合 ${item.turnIndex + 1}`}>
               <h3>回合 {item.turnIndex + 1}</h3>
@@ -203,11 +202,12 @@ export function RecordsList() {
       ) : (
         <div className="library-rows" aria-label="会话列表" aria-busy={busy}>
           {loaded && items.length === 0 && (
-            <div className="empty-state library-empty">
-              <MessageSquare size={28} aria-hidden="true" />
-              <p>还没有记录。</p>
-              <span className="muted">在工作台开始会话后，可在这里回看对话。</span>
-            </div>
+            <EmptyState
+              className="library-empty"
+              icon={<MessageSquare size={28} aria-hidden="true" />}
+              title="还没有记录。"
+              hint="在工作台开始会话后，可在这里回看对话。"
+            />
           )}
           {items.map((item) => (
             <article className="library-row" key={item.id}>

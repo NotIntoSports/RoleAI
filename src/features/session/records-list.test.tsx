@@ -181,6 +181,31 @@ describe("RecordsList", () => {
     confirmSpy.mockRestore();
   });
 
+  it("keeps the list visible when deletion fails", async () => {
+    vi.mocked(commands.listSessions).mockResolvedValue({ ok: true, data: [summary()] });
+    vi.mocked(commands.deleteSession).mockResolvedValue({
+      ok: false,
+      error: {
+        code: "DATABASE_OPERATION_FAILED",
+        message: "记录仍被引用，删除失败",
+        requestId: "r3",
+        retryable: true,
+      },
+    });
+
+    render(<RecordsList />);
+    expect(await screen.findByText("sess-1")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+    await waitFor(() => expect(commands.deleteSession).toHaveBeenCalledWith("sess-1"));
+    expect((await screen.findByRole("status")).textContent).toContain(
+      "DATABASE_OPERATION_FAILED：记录仍被引用，删除失败",
+    );
+    expect(screen.getByText("sess-1")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "查看" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "删除" })).toBeTruthy();
+  });
+
   it("shows export field errors and IPC failures", async () => {
     vi.mocked(commands.listSessions).mockResolvedValue({ ok: true, data: [summary()] });
     vi.mocked(commands.getSession).mockResolvedValue({ ok: true, data: detail() });

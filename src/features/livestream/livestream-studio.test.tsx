@@ -55,4 +55,49 @@ describe("LivestreamStudio", () => {
     fireEvent.click(screen.getByRole("button", { name: "回答并播报" }));
     await waitFor(() => expect(commands.insertLivestreamQuestion).toHaveBeenCalledWith("适合什么场景？"));
   });
+
+  it("guides to the materials page when no ready materials exist", async () => {
+    vi.mocked(commands.listMaterials).mockResolvedValue({ ok: true, data: [] });
+    render(<LivestreamStudio />);
+    expect(await screen.findByText("暂无已就绪资料，请先到“资料”页导入并建立索引。")).toBeTruthy();
+    expect(screen.queryByRole("checkbox", { name: /product\.pdf/ })).toBeNull();
+  });
+
+  it("disables stopping the OBS virtual camera while it is not active", async () => {
+    render(<LivestreamStudio />);
+    expect(await screen.findByText("虚拟摄像头未启动")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "停止 OBS 输出" })).toBeDisabled();
+  });
+
+  it("disables actions while generation is in flight", async () => {
+    let finishGenerate!: (result: { ok: true; data: typeof runtime }) => void;
+    vi.mocked(commands.generateLivestream).mockImplementation(
+      () => new Promise((resolve) => { finishGenerate = resolve; }),
+    );
+    render(<LivestreamStudio />);
+    fireEvent.change(await screen.findByLabelText("产品标题"), { target: { value: "产品 A" } });
+    fireEvent.click(await screen.findByRole("checkbox", { name: /product\.pdf/ }));
+    const generateButton = screen.getByRole("button", { name: "生成分段讲稿" });
+    expect(generateButton).toBeEnabled();
+    fireEvent.click(generateButton);
+    await waitFor(() => expect(generateButton).toBeDisabled());
+    expect(screen.getByRole("button", { name: "停止 OBS 输出" })).toBeDisabled();
+    finishGenerate({ ok: true, data: runtime });
+    await waitFor(() => expect(generateButton).toBeEnabled());
+  });
+
+  it("shows the backend error code and message when generation fails", async () => {
+    vi.mocked(commands.generateLivestream).mockResolvedValue({
+      ok: false,
+      error: { code: "LIVESTREAM_GENERATE_FAILED", message: "资料索引不可用", retryable: false, requestId: "r2" },
+    });
+    render(<LivestreamStudio />);
+    fireEvent.change(await screen.findByLabelText("产品标题"), { target: { value: "产品 B" } });
+    fireEvent.click(await screen.findByRole("checkbox", { name: /product\.pdf/ }));
+    fireEvent.click(screen.getByRole("button", { name: "生成分段讲稿" }));
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "LIVESTREAM_GENERATE_FAILED：资料索引不可用",
+    );
+    expect(screen.queryByText("欢迎了解产品 A")).toBeNull();
+  });
 });
