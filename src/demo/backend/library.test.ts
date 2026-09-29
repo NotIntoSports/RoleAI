@@ -23,7 +23,7 @@ describe("demo backend: materials library", () => {
   it("seeds 3 fictional materials", async () => {
     const materials = expectOk(await invoke<Array<{ id: string; status: string }>>("material_list"));
     expect(materials.map((m) => m.id)).toEqual(["mat-demo-handbook", "mat-demo-article", "mat-demo-jd"]);
-    expect(materials.every((m) => m.status === "indexed")).toBe(true);
+    expect(materials.every((m) => m.status === "text_ready")).toBe(true);
   });
 
   it("ranks keyword search hits across materials with snippets", async () => {
@@ -43,7 +43,7 @@ describe("demo backend: materials library", () => {
       }),
     );
     expect(imported.fileName).toBe("我的简历.pdf");
-    expect(imported.status).toBe("indexed");
+    expect(imported.status).toBe("text_ready");
     const afterDelete = expectOk(await invoke<{ ready: boolean }>("material_delete", { id: imported.id }));
     expect(afterDelete.ready).toBe(true);
     const list = expectOk(await invoke<Array<{ id: string }>>("material_list"));

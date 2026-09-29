@@ -107,7 +107,7 @@ export function handleMaterialCommand(cmd: string, payload: Record<string, unkno
           fileName,
           mediaType: guessMediaType(fileName),
           byteSize: 2048 + fileName.length * 16,
-          status: "indexed",
+          status: "text_ready",
           chunkCount: 1,
           contentSha256: `demo-${demoId("sha").slice(4)}`,
           sections: [

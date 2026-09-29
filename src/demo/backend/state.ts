@@ -2,6 +2,7 @@
 // 所有类型来自 src/generated/bindings.ts；密钥字段永远只存“已配置”标记，不存任何密钥材料。
 import type {
   EmbeddingConfig,
+  LivestreamRuntime,
   MaterialSummary,
   ProviderConfig,
   RoleProfileConfig,
@@ -35,6 +36,9 @@ export interface DemoState {
   materialDocs: Record<string, DemoMaterialDoc>;
   sessions: SessionSummary[];
   sessionTurns: Record<string, SessionTurnView[]>;
+  livestream: LivestreamRuntime | null;
+  /** OBS 是否已连接（演示里由虚拟摄像头开关维护）。 */
+  obsConnected: boolean;
 }
 
 const STYLE = "使用自然、简洁的中文，每次只处理当前问题。";
@@ -158,6 +162,8 @@ function seedState(): DemoState {
     voiceReferences: [voiceReference],
     obsPasswordConfigured: false,
     ...seedLibrary(),
+    livestream: null,
+    obsConnected: false,
   };
 }
 

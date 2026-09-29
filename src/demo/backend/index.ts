@@ -16,6 +16,7 @@ import type {
 
 import { handleConfigCommand } from "./config";
 import { handleLiveSessionCommand, liveRuntimeStatus } from "./live-commands";
+import { handleLivestreamCommand } from "./livestream";
 import { handleMaterialCommand } from "./materials";
 import { handleProviderCommand } from "./providers";
 import { handleRecordCommand } from "./records";
@@ -96,6 +97,7 @@ function dispatch(cmd: string, payload: Record<string, unknown>): unknown {
     handleVoiceCommand(cmd, payload) ??
     handleMaterialCommand(cmd, payload) ??
     handleRecordCommand(cmd, payload) ??
+    handleLivestreamCommand(cmd, payload) ??
     handleMeetingAndAudio(cmd) ??
     err("DEMO_NOT_IMPLEMENTED", `在线演示尚未模拟该能力（${cmd}）`)
   );

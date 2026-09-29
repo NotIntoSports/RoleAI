@@ -21,7 +21,7 @@ export const DEMO_MATERIALS: DemoMaterialDoc[] = [
     fileName: "云帆协同办公平台产品手册 v2.3.pdf",
     mediaType: "application/pdf",
     byteSize: 1187424,
-    status: "indexed",
+    status: "text_ready",
     chunkCount: 42,
     contentSha256: "demo-9f21c7a4handbook",
     sections: [
@@ -52,7 +52,7 @@ export const DEMO_MATERIALS: DemoMaterialDoc[] = [
     fileName: "高并发缓存的三板斧：击穿、穿透、雪崩.md",
     mediaType: "text/markdown",
     byteSize: 14210,
-    status: "indexed",
+    status: "text_ready",
     chunkCount: 18,
     contentSha256: "demo-3b7e11ccarticle",
     sections: [
@@ -79,7 +79,7 @@ export const DEMO_MATERIALS: DemoMaterialDoc[] = [
     fileName: "后端工程师岗位JD（云帆科技）.pdf",
     mediaType: "application/pdf",
     byteSize: 88064,
-    status: "indexed",
+    status: "text_ready",
     chunkCount: 6,
     contentSha256: "demo-55aa0d12jd",
     sections: [
