@@ -642,6 +642,7 @@ fn collect_turn(
                 | ServerEvent::SpeechStarted
                 | ServerEvent::SpeechStopped
                 | ServerEvent::InputCommitted
+                | ServerEvent::ItemCreated
                 | ServerEvent::ResponseCreated,
             )
             | None => {}

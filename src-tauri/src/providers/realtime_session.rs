@@ -78,6 +78,10 @@ pub struct RealtimeCapabilityProfile {
     pub clear_input: bool,
     /// conversation.item.create 是否可用于上下文回放与文本轮次；false 由 instructions 承载。
     pub item_replay: bool,
+    /// 回放是否包含 assistant 轮。Qwen-Omni Realtime 的 item.create 只接受
+    /// user message：assistant item 服务端不回执且直接断连（真机逐条回执
+    /// 实测，2026-09-29），Aliyun 方言必须跳过，否则每次重连即死循环。
+    pub replay_assistant: bool,
     /// input_image_buffer.append 是否可用（Qwen-Omni 系视频/桌面帧上行）。
     /// DashScope 文档限定 Aliyun 方言；GLM/OpenAI 方言静默丢弃，不报错。
     pub video_input: bool,
@@ -106,6 +110,7 @@ impl RealtimeCapabilityProfile {
             truncate: true,
             clear_input: true,
             item_replay: true,
+            replay_assistant: dialect.name != RealtimeDialectName::Aliyun,
             // input_image_buffer.append 仅 DashScope Qwen-Omni 系文档化支持。
             video_input: dialect.name == RealtimeDialectName::Aliyun,
             idle_reconnect_after: IDLE_RECONNECT_AFTER,
@@ -404,6 +409,11 @@ fn run_connection(state: &SharedState, config: &RealtimeSessionConfig) -> Connec
             Ok(raw) => {
                 idle_at = Instant::now() + state.profile.idle_reconnect_after;
                 if let Err(error) = handle_server_event(state, &raw, &mut response_opened_at) {
+                    eprintln!(
+                        "[realtime] server rejected: {} <- {}",
+                        error.code(),
+                        &raw.chars().take(220).collect::<String>()
+                    );
                     return ConnectionOutcome::Reconnect {
                         had_session: true,
                         reason: error.code().to_owned(),
@@ -662,7 +672,13 @@ fn session_setup(
         match parse_server_event(&raw)? {
             Some(ServerEvent::SessionUpdated) => break,
             Some(ServerEvent::SessionCreated) | None => {}
-            Some(_) => return Err(RealtimeError::SessionUpdateUnexpected),
+            Some(_) => {
+                eprintln!(
+                    "[realtime] unexpected during session.update: {}",
+                    &raw.chars().take(220).collect::<String>()
+                );
+                return Err(RealtimeError::SessionUpdateUnexpected);
+            }
         }
     }
     replay_history(state, config, socket)?;
@@ -697,7 +713,11 @@ fn replay_history(
     }
     for (user, assistant) in config.history_window() {
         if !user.is_empty() {
-            send_text(
+            eprintln!(
+                "[realtime] replay user item: {}…",
+                &user.chars().take(16).collect::<String>()
+            );
+            send_item_create(
                 socket,
                 &json!({
                     "type": "conversation.item.create",
@@ -708,24 +728,69 @@ fn replay_history(
                     },
                 })
                 .to_string(),
+                "user",
             )?;
         }
         if !assistant.is_empty() {
-            send_text(
+            if !state.profile.replay_assistant {
+                // Qwen-Omni：assistant item 服务端不回执直接断连，跳过（上下文
+                // 仍有 user 问题序列 + instructions）。
+                eprintln!(
+                    "[realtime] skip assistant item (profile rejects): {}…",
+                    &assistant.chars().take(16).collect::<String>()
+                );
+                continue;
+            }
+            eprintln!(
+                "[realtime] replay assistant item: {}…",
+                &assistant.chars().take(16).collect::<String>()
+            );
+            send_item_create(
                 socket,
                 &json!({
                     "type": "conversation.item.create",
                     "item": {
                         "type": "message",
                         "role": "assistant",
-                        "content": [{ "type": "output_text", "text": assistant }],
+                        // assistant 消息的 content type 是 "text"（"output_text"
+                        // 只出现在响应事件 payload）。qwen 对 "output_text"
+                        // 直接 400「content field is required」，重连即死循环。
+                        "content": [{ "type": "text", "text": assistant }],
                     },
                 })
                 .to_string(),
+                "assistant",
             )?;
         }
     }
     Ok(())
+}
+
+/// 回放单条 item 并等服务端回执：conversation.item.created 视为通过；
+/// error 事件带上是哪类 item 被拒；无回执画像（不回 created）超时后放行。
+fn send_item_create(
+    socket: &mut TungsteniteSocket,
+    payload: &str,
+    kind: &str,
+) -> Result<(), RealtimeError> {
+    send_text(socket, payload)?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            eprintln!("[realtime] replay {kind} item: no ack within 5s, continue");
+            return Ok(());
+        }
+        let raw = socket.recv_text(remaining)?;
+        match parse_server_event(&raw)? {
+            Some(ServerEvent::ItemCreated) => return Ok(()),
+            Some(ServerEvent::SessionCreated) | Some(ServerEvent::SessionUpdated) | None => {}
+            Some(_) => {
+                eprintln!("[realtime] replay {kind} item rejected <- {}", &raw.chars().take(200).collect::<String>());
+                return Err(RealtimeError::Remote("REALTIME_ITEM_REJECTED".to_owned()));
+            }
+        }
+    }
 }
 
 /// 按方言 100ms 帧切片 append（DashScope 单帧限制安全值，其余方言等时长换算）。
@@ -884,7 +949,10 @@ fn handle_server_event(
             let _ = state.events.send(ActorEvent::ResponseStarted);
         }
         Some(
-            ServerEvent::SessionCreated | ServerEvent::SessionUpdated | ServerEvent::InputCommitted,
+            ServerEvent::SessionCreated
+            | ServerEvent::SessionUpdated
+            | ServerEvent::InputCommitted
+            | ServerEvent::ItemCreated,
         )
         | None => {}
     }
@@ -934,7 +1002,16 @@ mod tests {
             );
             ws.get_mut().set_read_timeout(Some(remaining)).unwrap();
             match ws.read().unwrap() {
-                Message::Text(text) => return serde_json::from_str(&text).unwrap(),
+                Message::Text(text) => {
+                    let frame: Value = serde_json::from_str(&text).unwrap();
+                    // 回放逐条等回执：桩收到 item.create 即回 created，
+                    // 客户端 send_item_create 不必空等 5s 超时。
+                    if frame["type"] == "conversation.item.create" {
+                        ws.send(Message::Text(r#"{"type":"conversation.item.created"}"#.into()))
+                            .unwrap();
+                    }
+                    return frame;
+                }
                 Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {}
                 Message::Binary(_) => continue,
                 Message::Close(_) => panic!("unexpected close"),
@@ -1038,13 +1115,28 @@ mod tests {
         .unwrap()
     }
 
-    fn wait_connected(actor: &RealtimeSession) {
+    /// 等 Connected；Aliyun 画像回放只发 user item 且逐条等回执，桩侧
+    /// 回执由这里泵出（读到 item.create 即回 created），避免客户端空等超时。
+    fn wait_connected(actor: &RealtimeSession, ws: &mut MockSocket) {
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         loop {
             assert!(
                 std::time::Instant::now() < deadline,
                 "Connected event not observed"
             );
+            // 短超时读：桩可能在等客户端下一帧，这里不能长阻塞，
+            // 否则 deadline 全被 read 耗光、Connected 轮询饿死。
+            let _ = ws
+                .get_mut()
+                .set_read_timeout(Some(Duration::from_millis(100)));
+            if let Ok(message) = ws.read() {
+                if let Message::Text(text) = message {
+                    if text.contains("conversation.item.create") {
+                        ws.send(Message::Text(r#"{"type":"conversation.item.created"}"#.into()))
+                            .unwrap();
+                    }
+                }
+            }
             if matches!(
                 actor.recv_event(Duration::from_millis(100)),
                 Some(ActorEvent::Connected)
@@ -1097,15 +1189,14 @@ mod tests {
         );
         assert_eq!(update["session"]["turn_detection"]["create_response"], true);
         assert_eq!(update["session"]["input_audio_format"], "pcm");
-        // 上下文回放：旧→新 user/assistant 各一条。
+        // 上下文回放：只回 user 轮——Qwen-Omni 的 item.create 拒收 assistant
+        // item（服务端不回执直接断连），Aliyun 画像跳过 assistant。
         let item1 = read_frame(&mut ws);
         assert_eq!(item1["type"], "conversation.item.create");
         assert_eq!(item1["item"]["role"], "user");
         assert_eq!(item1["item"]["content"][0]["text"], "你好");
-        let item2 = read_frame(&mut ws);
-        assert_eq!(item2["item"]["role"], "assistant");
-        assert_eq!(item2["item"]["content"][0]["type"], "output_text");
-        wait_connected(&actor);
+        assert_eq!(item1["item"]["content"][0]["type"], "input_text");
+        wait_connected(&actor, &mut ws);
 
         // 采集环 48kHz：300ms = 28800B 48k → 降采样到方言 16k = 9600B → 3 个 3200B 帧。
         actor.send(ActorCommand::AppendAudio(vec![0x10; 28_800]));
@@ -1145,7 +1236,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let actor = spawn_actor(port, true, vec![]);
         let (_, mut ws) = accept_session(&listener);
-        wait_connected(&actor);
+        wait_connected(&actor, &mut ws);
 
         actor.send(ActorCommand::AppendAudio(vec![0x30; 9600]));
         actor.send(ActorCommand::CommitTurn);
@@ -1179,7 +1270,7 @@ mod tests {
         .unwrap();
         let (update, mut ws) = accept_session(&listener);
         assert_eq!(update["session"]["turn_detection"], Value::Null);
-        wait_connected(&actor);
+        wait_connected(&actor, &mut ws);
         actor.send(ActorCommand::CommitTurn);
         assert_eq!(read_frame(&mut ws)["type"], "input_audio_buffer.commit");
         assert_eq!(read_frame(&mut ws)["type"], "response.create");
@@ -1195,7 +1286,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let actor = spawn_actor(port, true, vec![]);
         let (_, mut ws) = accept_session(&listener);
-        wait_connected(&actor);
+        wait_connected(&actor, &mut ws);
         let jpeg = STANDARD.encode([0xAA, 0xBB, 0xCC]);
         actor.send(ActorCommand::AppendAudio(vec![0x30; 9600]));
         assert_eq!(read_frame(&mut ws)["type"], "input_audio_buffer.append");
@@ -1223,7 +1314,7 @@ mod tests {
         })
         .unwrap();
         let (_, mut ws) = accept_session(&listener);
-        wait_connected(&actor);
+        wait_connected(&actor, &mut ws);
         actor.send(ActorCommand::AppendImage("aGk=".into()));
         ws.get_mut()
             .set_read_timeout(Some(Duration::from_millis(300)))
@@ -1249,7 +1340,7 @@ mod tests {
         let port = port.port();
         let actor = spawn_actor(port, true, vec![]);
         let (_, mut ws1) = accept_session(&listener);
-        wait_connected(&actor);
+        wait_connected(&actor, &mut ws1);
 
         actor.send(ActorCommand::AppendImage("first".into()));
         actor.send(ActorCommand::AppendImage("latest".into()));
@@ -1258,7 +1349,7 @@ mod tests {
         ws1.send(Message::Close(None)).unwrap();
         ws1.get_mut().shutdown(std::net::Shutdown::Both).ok();
         let (_, mut ws2) = accept_session(&listener);
-        wait_connected(&actor);
+        wait_connected(&actor, &mut ws2);
 
         actor.send(ActorCommand::AppendImage("after-reconnect".into()));
         assert_no_frame(&mut ws2, Duration::from_millis(300));
@@ -1276,7 +1367,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let actor = spawn_actor(port, true, vec![]);
         let (_, mut ws) = accept_session(&listener);
-        wait_connected(&actor);
+        wait_connected(&actor, &mut ws);
 
         for event in [
             r#"{"type":"input_audio_buffer.speech_started"}"#.to_string(),
@@ -1329,7 +1420,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let actor = spawn_actor(port, true, vec![]);
         let (_, mut ws) = accept_session(&listener);
-        wait_connected(&actor);
+        wait_connected(&actor, &mut ws);
 
         actor.send(ActorCommand::CancelResponse);
         assert_eq!(read_frame(&mut ws)["type"], "response.cancel");
@@ -1357,7 +1448,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let actor = spawn_actor(port, true, vec![]);
         let (_, mut ws) = accept_session(&listener);
-        wait_connected(&actor);
+        wait_connected(&actor, &mut ws);
 
         actor.send(ActorCommand::GateInput(true));
         actor.send(ActorCommand::AppendAudio(vec![0x20; 3200]));
@@ -1377,7 +1468,7 @@ mod tests {
         let actor = spawn_manual_actor(port, true);
         let (update, mut ws) = accept_session(&listener);
         assert!(update["session"]["turn_detection"].is_null());
-        wait_connected(&actor);
+        wait_connected(&actor, &mut ws);
 
         // Tier C：客户端 commit + response.create（auto_respond=true）。
         // 9600B@48k → 降采样 3200B@16k，恰一个 100ms append 帧。
@@ -1402,7 +1493,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let actor = spawn_manual_actor(port, false);
         let (_, mut ws) = accept_session(&listener);
-        wait_connected(&actor);
+        wait_connected(&actor, &mut ws);
 
         actor.send(ActorCommand::CommitTurn);
         assert_eq!(read_frame(&mut ws)["type"], "input_audio_buffer.commit");
@@ -1415,17 +1506,17 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let actor = spawn_actor(port, true, vec![("上轮".into(), "上答".into())]);
         let (_, mut ws1) = accept_session(&listener);
-        wait_connected(&actor);
+        wait_connected(&actor, &mut ws1);
         ws1.send(Message::Close(None)).unwrap();
         ws1.get_mut().shutdown(std::net::Shutdown::Both).ok();
 
-        // 第二次连接：上下文再次回放（服务端会话无历史）。
+        // 第二次连接：上下文再次回放（服务端会话无历史）；Aliyun 画像只回 user 轮。
         let (update2, mut ws2) = accept_session(&listener);
         assert_eq!(update2["session"]["turn_detection"]["type"], "server_vad");
         let replayed = read_frame(&mut ws2);
         assert_eq!(replayed["type"], "conversation.item.create");
         assert_eq!(replayed["item"]["content"][0]["text"], "上轮");
-        wait_connected(&actor);
+        wait_connected(&actor, &mut ws2);
     }
 
     /// DashScope 流式首响 live 冒烟（Tier A 全链路）：常驻连接 + 持续上行真实语音 +
@@ -1748,8 +1839,8 @@ mod tests {
         }
 
         // 拒绝后连接仍可用：重连成功，画像原样重放（无逐字段回退）。
-        let (update2, _ws2) = accept_session(&listener);
+        let (update2, mut ws2) = accept_session(&listener);
         assert_eq!(update2["session"]["turn_detection"]["type"], "server_vad");
-        wait_connected(&actor);
+        wait_connected(&actor, &mut ws2);
     }
 }

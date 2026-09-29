@@ -287,6 +287,8 @@ fn sanitize_remote_code(raw: &str) -> String {
 pub(crate) enum ServerEvent {
     SessionCreated,
     SessionUpdated,
+    /// conversation.item.create 的回执（回放逐条确认用）。
+    ItemCreated,
     /// response.done 携带的 response.status（completed/cancelled，缺省 None）。
     ResponseDone(Option<String>),
     Audio(Vec<u8>),
@@ -356,6 +358,7 @@ pub(crate) fn parse_server_event(raw: &str) -> Result<Option<ServerEvent>, Realt
         "response.created" => Ok(Some(ServerEvent::ResponseCreated)),
         "session.updated" => Ok(Some(ServerEvent::SessionUpdated)),
         "session.created" => Ok(Some(ServerEvent::SessionCreated)),
+        "conversation.item.created" => Ok(Some(ServerEvent::ItemCreated)),
         "error" => {
             let error = event.get("error");
             // code 缺省时回退；同时透出限长的 message（剔除密钥样式片段）——
