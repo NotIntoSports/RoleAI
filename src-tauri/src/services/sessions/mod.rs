@@ -30,6 +30,7 @@ mod realtime;
 pub use self::realtime::*;
 mod agent_commands;
 mod cascade_turn;
+pub(crate) mod finalize;
 mod lifecycle;
 
 pub struct MeetingCapture<'a> {
@@ -260,6 +261,11 @@ pub struct SessionService<S: PlaybackSink = NoopSink> {
     // 实时会话泵（端到端流式路线）：读侧共享状态 + 泵本体（Drop 即关停）。
     realtime_shared: Option<std::sync::Arc<crate::services::realtime_pump::PumpShared>>,
     realtime_pump: Option<crate::services::realtime_pump::RealtimePump>,
+    // 收尾代次：begin_finalize/finish_stop/reset_runtime/fail_session 各 +1。
+    // 三阶段收尾的阶段三用它判定“收尾期间会话被停止/更替”，决定落库为取消或丢弃。
+    finalize_generation: u64,
+    // 收尾网络阶段进行中（阶段二不持 sessions 锁，用它挡住并发 finalize）。
+    finalizing: bool,
 }
 
 impl SessionService<NoopSink> {
@@ -293,6 +299,8 @@ impl<S: PlaybackSink> SessionService<S> {
             summary_job: None,
             realtime_shared: None,
             realtime_pump: None,
+            finalize_generation: 0,
+            finalizing: false,
         }
     }
 
@@ -483,6 +491,8 @@ impl<S: PlaybackSink> SessionService<S> {
     fn finish_stop(&mut self, database: &Database) -> Result<SessionRecord, SessionServiceError> {
         // 会话终态：立即关停实时泵、摘除 tap（常驻连接与上行随会话终止）。
         self.detach_realtime_pump();
+        // 在途收尾（阶段二）的阶段三将看到代次变化，按“已取消”落库或丢弃。
+        self.finalize_generation = self.finalize_generation.wrapping_add(1);
         let session_id = self
             .session_id
             .clone()

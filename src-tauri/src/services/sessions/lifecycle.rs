@@ -144,10 +144,14 @@ impl<S: PlaybackSink> SessionService<S> {
         self.summary_job = None;
         self.control.reset();
         self.capture = AudioCapture::from_injected();
+        // 新会话使在途收尾（阶段二）的阶段三代次失配，旧轮结果被丢弃。
+        self.finalize_generation = self.finalize_generation.wrapping_add(1);
+        self.finalizing = false;
     }
 
     pub(super) fn fail_session(&mut self, database: &Database) -> Result<(), SessionServiceError> {
         self.detach_realtime_pump();
+        self.finalize_generation = self.finalize_generation.wrapping_add(1);
         let Some(session_id) = self.session_id.clone() else {
             return Ok(());
         };

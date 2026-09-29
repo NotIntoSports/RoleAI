@@ -14,7 +14,7 @@
     "src-tauri/tests/security_contract.rs": "22e42bfb76980bd585e6b012585207d39a1a8848b707336b0ebbc14f7dfb7ea3",
     "src-tauri/src/commands/config.rs": "26d3dcc5ed93c6211566883a463759a9da7f4298eb07665bcfc5c0c1a9f7004a",
     "src-tauri/src/commands/materials.rs": "ffcfd2a87be825510d8ad76f0c16799ea2bf10ea6a01e40f5e227b98eb4f258f",
-    "src-tauri/src/commands/sessions.rs": "1621472960ff2d76a01bd68ce34ca74249a93ab1a11290543103540ff6512e80",
+    "src-tauri/src/commands/sessions.rs": "f802b2cae924dba57e25a26ae02e6b01ab7e4882b65d5ae25457917a6acf177f",
     "src-tauri/src/commands/livestream.rs": "5c53e92c2a24c94ad2cbf5719021c421ad4be0e482e09a4b9818f7023aa35c83",
     "src-tauri/src/commands/obs.rs": "42cc148ed5b6d8a78506a40ea2a272400112abfb586a397488b78a4df0dbf43b",
     "src-tauri/src/commands/voice.rs": "1c5d8fc589feeea832d21621526992e3854e341285add22a8dc8b390dcf48ba0",

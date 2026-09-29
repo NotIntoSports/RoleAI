@@ -28,7 +28,7 @@ pub struct AppPaths {
 /// Tauri 全局状态：密钥服务、数据库、配置与运行时门面的聚合根。
 pub struct AppState {
     pub secrets: SecretService,
-    pub database: Mutex<Option<Database>>,
+    pub database: Mutex<Option<Arc<Database>>>,
     pub diagnostics: DiagnosticWriter,
     pub config: ConfigStore,
     pub service_lock: Mutex<()>,
@@ -163,7 +163,9 @@ impl AppState {
             crate::prerequisites::recover_persisted_audio_routing(&paths.data_directory);
         Ok(Self {
             secrets,
-            database: Mutex::new(database),
+            // Arc：会话收尾的网络阶段需要不持锁使用数据库（内部自带连接互斥），
+            // 外层 Option 只表达“未就绪”；替换走 repair_config。
+            database: Mutex::new(database.map(Arc::new)),
             diagnostics,
             config,
             service_lock: Mutex::new(()),
@@ -224,7 +226,7 @@ impl AppState {
             ) {
                 Ok(database) => {
                     if let Ok(mut slot) = self.database.lock() {
-                        *slot = Some(database);
+                        *slot = Some(Arc::new(database));
                     }
                     StartupState::Ready
                 }

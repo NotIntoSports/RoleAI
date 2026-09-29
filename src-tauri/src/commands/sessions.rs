@@ -1,6 +1,10 @@
 //! sessions 域命令：会话生命周期、单轮编排、麦克风/视频推流、运行时状态。
 //! 纯搬移自 commands.rs，不含行为变更。
 use super::*;
+use crate::providers::CascadeError;
+use crate::services::sessions::finalize::{
+    BeginFinalize, TextPersist, finalize_network, run_finalize_playback,
+};
 
 pub(super) const EVENT_RUNTIME_STATUS: &str = "runtime:status:v1";
 pub(super) const EVENT_AUDIO_LEVEL: &str = "audio:level:v1";
@@ -798,15 +802,19 @@ pub(super) fn session_finalize_utterance_cmd_inner(
         Ok(config) => config,
         Err(error) => return CommandResult::Err { error },
     };
-    let database = match state.database.lock() {
+    // 数据库只借 Arc：收尾的网络与播放阶段不持有外层互斥
+    // （Database 内部自带连接互斥），记录/资料/诊断命令不再被收尾阻塞。
+    let database_slot = match state.database.lock() {
         Ok(guard) => guard,
         Err(_) => {
             return service_error("DATABASE_OPERATION_FAILED", "Database is unavailable");
         }
     };
-    let Some(database) = database.as_ref() else {
+    let Some(database) = database_slot.as_ref() else {
         return service_error("DATABASE_OPERATION_FAILED", "Database is unavailable");
     };
+    let database = Arc::clone(database);
+    drop(database_slot);
     let mut sessions = match state.sessions.lock() {
         Ok(guard) => guard,
         Err(_) => {
@@ -816,7 +824,7 @@ pub(super) fn session_finalize_utterance_cmd_inner(
             );
         }
     };
-    let finalized = if force_meeting_assistant {
+    if force_meeting_assistant {
         // 端到端路线 + 会议桥接 + 泵在跑：级联 forced 分支取不到轮次（应答
         // 由泵的点名门控决定），改为让泵对最近一条仅转写发言发起回答。回答
         // 异步生成、由前端就绪轮询落库，这里立即返回最后一轮视图，不持
@@ -830,14 +838,74 @@ pub(super) fn session_finalize_utterance_cmd_inner(
                 return session_service_error(SessionServiceError::NothingToAnswer);
             }
             sessions.trigger_realtime_assistant();
-            return last_session_turn_view(&sessions, database);
+            return last_session_turn_view(&sessions, &database);
         }
-        sessions.finalize_utterance_forced_with_hooks(database, &config, probes, credentials, hooks)
-    } else {
-        sessions.finalize_utterance_with_hooks(database, &config, probes, credentials, text, hooks)
+    }
+    // 阶段一（持锁）：读取快照、生成本轮 id、登记收尾代次。
+    let plan = match sessions.begin_finalize(&database, &config, text, force_meeting_assistant) {
+        Ok(BeginFinalize::Plan(plan)) => plan,
+        Ok(BeginFinalize::Idle) => {
+            drop(sessions);
+            return session_service_error(SessionServiceError::StateInvalid);
+        }
+        Err(error) => {
+            drop(sessions);
+            return session_service_error(error);
+        }
     };
+    drop(sessions);
+    // 阶段二（不持锁）：ASR/LLM/TTS 网络调用；停止与只读命令正常响应。
+    let outcome = finalize_network(&plan, &database, probes, credentials, hooks);
+    let mut sessions = match state.sessions.lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            return service_error(
+                "SERVICE_BUSY",
+                "Service configuration is temporarily unavailable",
+            );
+        }
+    };
+    // 阶段三（持锁）：校验代次（未被停止/更替）后落库，安排播放。
+    let persist = match sessions.complete_finalize_text(plan, outcome, &database, credentials) {
+        Ok(persist) => persist,
+        Err(error) => {
+            drop(sessions);
+            return session_service_error(error);
+        }
+    };
+    let persist = match persist {
+        TextPersist::Dropped => {
+            drop(sessions);
+            return session_service_error(SessionServiceError::Cascade(CascadeError::Cancelled));
+        }
+        TextPersist::Idle => {
+            drop(sessions);
+            return session_service_error(SessionServiceError::StateInvalid);
+        }
+        TextPersist::Turn(persist) => persist,
+    };
+    drop(sessions);
+    // 播放（不持锁）：扬声器输出期间所有命令正常响应。
+    let (playback_status, playback_error) = match &persist.playback_job {
+        None => (persist.playback_status, None),
+        Some(job) => match run_finalize_playback(job) {
+            Ok(status) => (status, None),
+            Err(code) => ("failed", Some(code)),
+        },
+    };
+    let mut sessions = match state.sessions.lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            return service_error(
+                "SERVICE_BUSY",
+                "Service configuration is temporarily unavailable",
+            );
+        }
+    };
+    let finalized =
+        sessions.complete_finalize_playback(persist, playback_status, playback_error, &database);
     match finalized {
-        Ok(Some(_)) => last_session_turn_view(&sessions, database),
+        Ok(Some(_)) => last_session_turn_view(&sessions, &database),
         Ok(None) => session_service_error(SessionServiceError::StateInvalid),
         Err(error) => session_service_error(error),
     }
@@ -1446,6 +1514,10 @@ fn session_finalize_utterance_blocking_inner<R: tauri::Runtime>(
         embed: embed_secret.as_deref().map(String::as_str),
         e2e: e2e_secret.as_deref().map(String::as_str),
     };
+    // 供应商/密钥读取完成后立即释放 service_lock：收尾的网络与播放阶段
+    // 不再阻塞配置读写、会话开始/导出/删除等同样持该锁的命令。
+    // 本轮的配置/端点/密钥已在上方固化为快照，阶段二期间改配置不影响本轮。
+    drop(_guard);
     // 流式上屏：文本快照即时发事件（done=false），轮次落库后由
     // emit_transcript_and_reply 补发 done=true 的收尾事件。闭包与 hooks
     // 必须存活于本函数作用域，故在此内联构造而非收敛成辅助函数。
