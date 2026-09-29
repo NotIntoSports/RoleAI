@@ -144,9 +144,10 @@ impl<S: PlaybackSink> SessionService<S> {
         self.summary_job = None;
         self.control.reset();
         self.capture = AudioCapture::from_injected();
-        // 新会话使在途收尾（阶段二）的阶段三代次失配，旧轮结果被丢弃。
+        // 新会话使在途收尾（阶段二）的阶段三代次失配，旧轮结果被丢弃；
+        // 新会话必须立即可提问，守卫在此按更替语义直接复位。
         self.finalize_generation = self.finalize_generation.wrapping_add(1);
-        self.finalizing = false;
+        self.finalizing_generation = None;
     }
 
     pub(super) fn fail_session(&mut self, database: &Database) -> Result<(), SessionServiceError> {

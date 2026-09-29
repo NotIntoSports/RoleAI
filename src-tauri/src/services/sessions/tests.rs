@@ -2156,3 +2156,110 @@ fn meeting_mention_tolerates_spaces_and_punctuation() {
         "会议助手"
     ));
 }
+
+// —— D 线审查修复的回归测试：finalizing 单飞行守卫的归属与复位 ——
+
+use super::finalize::{BeginFinalize, NetworkOutcome, TextPersist, finalize_network};
+
+#[test]
+fn failed_turn_persist_releases_the_finalize_guard() {
+    // 落库失败（? 传播）曾把收尾守卫卡在“在飞”，该会话后续收尾全部
+    // Idle→STATE_INVALID 直到重开会话（D 线审查 P2）。守卫必须在
+    // complete_finalize_text 的失败出口复位。
+    let (_directory, database) = opened();
+    let mut service = SessionService::with_sink(RecordingSink::default());
+    let config = ready_public_config();
+    service.start(&database, &config, true, false).unwrap();
+    let asr = ScriptedAsr::ok("ignored");
+    let llm = ScriptedLlm::ok("answer");
+    let tts = ScriptedTts::ok(&[1, 2, 3]);
+    let embed = UnusedEmbed;
+    let probes = cascaded_probes(&asr, &llm, &tts, &embed);
+
+    let plan = match service
+        .begin_finalize(&database, &config, Some("question"), false)
+        .unwrap()
+    {
+        BeginFinalize::Plan(plan) => plan,
+        BeginFinalize::Idle => panic!("first finalize must plan"),
+    };
+    let outcome = finalize_network(
+        &plan,
+        &database,
+        &probes,
+        credentials(),
+        &TurnStreamHooks::none(),
+    );
+    // 确定性写失败：先占住本轮 (session_id, turn_index)，insert_turn 撞
+    // UNIQUE(session_id, turn_index) 约束，数据库本身保持健康。
+    let (session_id, turn_index) = (plan.session_id.clone(), plan.turn_index);
+    database
+        .with_connection(|connection| {
+            connection.execute(
+                "INSERT INTO session_turns(id, session_id, turn_index, user_text, assistant_text, materials_used, created_at)
+                 VALUES ('conflict-row', ?1, ?2, '', '', 0, '2026-01-01T00:00:00Z')",
+                rusqlite::params![session_id, turn_index],
+            )
+        })
+        .unwrap();
+    assert!(
+        service
+            .complete_finalize_text(*plan, outcome, &database, credentials())
+            .is_err(),
+        "unique conflict must fail the persist"
+    );
+
+    // 守卫必须已复位：下一次收尾不得返回 Ok(Idle)——Idle 的唯一来源就是
+    // 守卫未释放。（persist 失败遗留的 Thinking 相位会让后续尝试在相位
+    // 迁移处报 StateInvalid；那是先于本修复存在的独立行为，不在本卡范围。）
+    let second = service.begin_finalize(&database, &config, Some("question"), false);
+    assert!(
+        !matches!(second, Ok(BeginFinalize::Idle)),
+        "guard must be released after a failed persist"
+    );
+}
+
+#[test]
+fn dropped_finalize_keeps_a_newer_finalizes_guard() {
+    // 旧收尾的阶段三 Dropped 分支曾无条件清守卫：stop→start 后新收尾 B
+    // 在飞时，A 的 Dropped 会清掉 B 的旗标，第三个收尾随即能与 B 并发
+    // （D 线审查 T03 §2）。守卫按代次归属：A 不得清 B 的。
+    let (_directory, database) = opened();
+    let mut service = SessionService::with_sink(RecordingSink::default());
+    let config = ready_public_config();
+    service.start(&database, &config, true, false).unwrap();
+
+    // A：旧会话的收尾进入阶段二。
+    let plan_a = match service
+        .begin_finalize(&database, &config, Some("q1"), false)
+        .unwrap()
+    {
+        BeginFinalize::Plan(plan) => plan,
+        BeginFinalize::Idle => panic!("first finalize must plan"),
+    };
+    // 更替：stop → start（reset_runtime 清守卫并升代次），新收尾 B 进场。
+    service.stop(&database).unwrap();
+    service.start(&database, &config, true, false).unwrap();
+    let plan_b = match service
+        .begin_finalize(&database, &config, Some("q2"), false)
+        .unwrap()
+    {
+        BeginFinalize::Plan(plan) => plan,
+        BeginFinalize::Idle => panic!("second finalize must plan"),
+    };
+    drop(plan_b);
+    // A 的阶段三：session_id 失配 → Dropped；不得影响 B 的守卫。
+    let dropped = service
+        .complete_finalize_text(*plan_a, NetworkOutcome::Idle, &database, credentials())
+        .unwrap();
+    assert!(matches!(dropped, TextPersist::Dropped));
+
+    // B 仍在飞行：第三个收尾必须被单飞行守卫挡下（Idle）。
+    let third = service
+        .begin_finalize(&database, &config, Some("q3"), false)
+        .unwrap();
+    assert!(
+        matches!(third, BeginFinalize::Idle),
+        "newer finalize B must still own the guard"
+    );
+}

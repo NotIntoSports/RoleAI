@@ -155,8 +155,11 @@ pub struct SessionService<S: PlaybackSink = NoopSink> {
     // 收尾代次：begin_finalize/finish_stop/reset_runtime/fail_session 各 +1。
     // 三阶段收尾的阶段三用它判定“收尾期间会话被停止/更替”，决定落库为取消或丢弃。
     finalize_generation: u64,
-    // 收尾网络阶段进行中（阶段二不持 sessions 锁，用它挡住并发 finalize）。
-    finalizing: bool,
+    // 收尾单飞行守卫：Some(代次) 表示该代次的收尾在飞行中（阶段二/播放）。
+    // 记录代次使 complete 阶段只清自己的守卫——更替后新收尾若已在飞，
+    // 旧收尾的放弃分支不得误清（D 线审查 T03 §2）；落库失败路径也必须复位，
+    // 否则该会话后续收尾全部 Idle→STATE_INVALID。
+    finalizing_generation: Option<u64>,
 }
 
 impl SessionService<NoopSink> {
@@ -191,7 +194,7 @@ impl<S: PlaybackSink> SessionService<S> {
             realtime_shared: None,
             realtime_pump: None,
             finalize_generation: 0,
-            finalizing: false,
+            finalizing_generation: None,
         }
     }
 

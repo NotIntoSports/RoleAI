@@ -80,6 +80,8 @@ pub(crate) enum TextPersist {
 /// 阶段三输入：turn_meta 前置字段 + 播放安排。
 pub(crate) struct TurnPersist {
     pub session_id: String,
+    /// 所属收尾的代次：阶段三释放守卫时按代次比对（只清自己的）。
+    pub generation: u64,
     pub turn: CascadeTurn,
     /// 完整 meta（含 pump 字段），仅缺 `playbackStatus`。
     pub meta_prelude: serde_json::Value,
@@ -198,22 +200,23 @@ impl<S: PlaybackSink> SessionService<S> {
         {
             return Err(SessionServiceError::StateInvalid);
         }
-        // 并发收尾：阶段二期间另一个 finalize 到来，对齐旧 `Ok(None)`。
-        if self.finalizing {
+        // 并发收尾：阶段二/播放期间另一个 finalize 到来，对齐旧 `Ok(None)`。
+        if self.finalizing_generation.is_some() {
             return Ok(BeginFinalize::Idle);
         }
-        self.finalizing = true;
         self.finalize_generation = self.finalize_generation.wrapping_add(1);
         let generation = self.finalize_generation;
+        // 登记本代次为在飞收尾；begin 全程持锁，早退分支不存在并发方。
+        self.finalizing_generation = Some(generation);
         match self.begin_finalize_inner(database, config, text, force_meeting_assistant, generation)
         {
             Ok(Some(plan)) => Ok(BeginFinalize::Plan(Box::new(plan))),
             Ok(None) => {
-                self.finalizing = false;
+                self.finalizing_generation = None;
                 Ok(BeginFinalize::Idle)
             }
             Err(error) => {
-                self.finalizing = false;
+                self.finalizing_generation = None;
                 Err(error)
             }
         }
@@ -324,7 +327,28 @@ impl<S: PlaybackSink> SessionService<S> {
     }
 
     /// 阶段三前半（持锁）：代次校验、回声过滤、文本落库、播放安排。
+    /// 阶段三前半（持锁）：文本落库。放弃与失败路径（含 `?` 传播）在此复位
+    /// 收尾守卫，只清自己代次的——更替后新收尾若已在飞不受影响（T03 §2）；
+    /// `Turn` 成功路径的守卫保持到 `complete_finalize_playback`（播放窗口
+    /// 仍需挡住并发收尾），由其按代次释放。
     pub(crate) fn complete_finalize_text(
+        &mut self,
+        plan: FinalizePlan,
+        outcome: NetworkOutcome,
+        database: &Database,
+        credentials: CascadeCredentials<'_>,
+    ) -> Result<TextPersist, SessionServiceError> {
+        let generation = plan.generation;
+        let result = self.complete_finalize_text_inner(plan, outcome, database, credentials);
+        if !matches!(result, Ok(TextPersist::Turn(_)))
+            && self.finalizing_generation == Some(generation)
+        {
+            self.finalizing_generation = None;
+        }
+        result
+    }
+
+    fn complete_finalize_text_inner(
         &mut self,
         plan: FinalizePlan,
         outcome: NetworkOutcome,
@@ -333,28 +357,23 @@ impl<S: PlaybackSink> SessionService<S> {
     ) -> Result<TextPersist, SessionServiceError> {
         // 会话已被更替（stop→start）：旧轮结果整体丢弃，不写任何数据。
         if self.session_id.as_deref() != Some(plan.session_id.as_str()) {
-            self.finalizing = false;
             return Ok(TextPersist::Dropped);
         }
         let (turn, pump_turn_meta, pump_playback_status, pump_response_failed) = match outcome {
             NetworkOutcome::Idle => {
-                self.finalizing = false;
                 return Ok(TextPersist::Idle);
             }
             NetworkOutcome::Cascade(error) => {
                 let result = self.recover_from_cascade_error(database, &plan.session_id, error);
-                self.finalizing = false;
                 return result.map(|_| TextPersist::Idle);
             }
             NetworkOutcome::Realtime(error) => {
                 let result = self.recover_from_realtime_error(database, &plan.session_id, error);
-                self.finalizing = false;
                 return result.map(|_| TextPersist::Idle);
             }
             NetworkOutcome::RealtimePumpFailure(reason) => {
                 self.last_error_code = Some(reason.clone());
                 self.return_to_listening(database, &plan.session_id)?;
-                self.finalizing = false;
                 return Err(SessionServiceError::Realtime(RealtimeError::Remote(reason)));
             }
             NetworkOutcome::Turn {
@@ -387,7 +406,6 @@ impl<S: PlaybackSink> SessionService<S> {
         if !turn.user_text.trim().is_empty()
             && crate::services::echo_guard::is_echo(&turn.user_text, &recent_assistant)
         {
-            self.finalizing = false;
             self.return_to_listening(database, &plan.session_id)?;
             return Ok(TextPersist::Idle);
         }
@@ -566,6 +584,7 @@ impl<S: PlaybackSink> SessionService<S> {
         }
         Ok(TextPersist::Turn(Box::new(TurnPersist {
             session_id: plan.session_id,
+            generation: plan.generation,
             turn,
             meta_prelude: meta,
             playback_status,
@@ -573,8 +592,29 @@ impl<S: PlaybackSink> SessionService<S> {
         })))
     }
 
-    /// 阶段三后半（持锁）：turn_meta 落库与收尾（停止/取消/回 Listening）。
+    /// 阶段三后半（持锁）：turn_meta 落库与收尾。无论成功失败（含 `?` 传播），
+    /// 在此按代次释放收尾守卫——收尾飞行到此结束。
     pub(crate) fn complete_finalize_playback(
+        &mut self,
+        persist: TurnPersist,
+        playback_status: &'static str,
+        playback_error: Option<&'static str>,
+        database: &Database,
+    ) -> Result<Option<CascadeTurn>, SessionServiceError> {
+        let generation = persist.generation;
+        let result = self.complete_finalize_playback_inner(
+            persist,
+            playback_status,
+            playback_error,
+            database,
+        );
+        if self.finalizing_generation == Some(generation) {
+            self.finalizing_generation = None;
+        }
+        result
+    }
+
+    fn complete_finalize_playback_inner(
         &mut self,
         persist: TurnPersist,
         playback_status: &'static str,
@@ -594,16 +634,13 @@ impl<S: PlaybackSink> SessionService<S> {
         let store = SessionStore::new(database);
         store.append_event(&persist.session_id, "turn_meta", &meta.to_string())?;
         if self.control.stop_requested() {
-            self.finalizing = false;
             self.finish_stop(database)?;
             return Ok(Some(persist.turn));
         }
         if self.control.is_cancelled() {
-            self.finalizing = false;
             self.return_to_listening(database, &persist.session_id)?;
             return Ok(Some(persist.turn));
         }
-        self.finalizing = false;
         self.runtime.transition(SessionPhase::Listening)?;
         persist_phase(&store, &persist.session_id, SessionPhase::Listening)?;
         Ok(Some(persist.turn))
