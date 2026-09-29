@@ -98,7 +98,7 @@
 
 **取舍。** 静态链接让二进制大几 MB、重编译变慢，换来"装完就能跑、行为不随用户机器变化"——对桌面应用是正确的交换。模型本身（Silero opset 16、Smart Turn int8）随包分发，全程离线推理，不联网。
 
-**相关代码。** [Cargo.toml](../src-tauri/src/Cargo.toml)（`ort`、`silero-vad-rust`、`rustfft` 三段注释完整记录了钉版与静态链接的原因）。
+**相关代码。** [Cargo.toml](../src-tauri/Cargo.toml)（`ort`、`silero-vad-rust`、`rustfft` 三段注释完整记录了钉版与静态链接的原因）。
 
 ## 一图流
 

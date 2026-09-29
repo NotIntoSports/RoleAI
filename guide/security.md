@@ -23,7 +23,7 @@ RoleAI 处理两类敏感数据：**你的 API Key** 和 **你的对话内容**�
 - **内存卫生**：内存中的密钥副本用 `zeroize` 的 `Zeroizing` 包装，用完即清零。
 - **错误不泄密**：密钥相关错误只有两个稳定错误码（`SECRET_REFERENCE_INVALID` / `SECRET_BACKEND_UNAVAILABLE`），不带细节。
 
-相关代码：[secrets/](../src-tauri/src/secrets/mod.rs)、[Cargo.toml](../src-tauri/src/Cargo.toml)（`keyring`、`zeroize` 钉版依赖）。
+相关代码：[secrets/](../src-tauri/src/secrets/mod.rs)、[Cargo.toml](../src-tauri/Cargo.toml)（`keyring`、`zeroize` 钉版依赖）。
 
 ## Tauri 能力白名单
 
