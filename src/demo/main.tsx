@@ -4,8 +4,9 @@
 // 正式包入口是 index.html → src/main.tsx，永远不会引用本文件（见 B10 隔离测试）。
 import { mockIPC } from "@tauri-apps/api/mocks";
 
-import { handleDemoInvoke } from "./backend";
+import { handleDemoInvoke, installDemoResetHook } from "./backend";
 
 mockIPC(handleDemoInvoke, { shouldMockEvents: true });
+installDemoResetHook();
 
 void import("../main");
