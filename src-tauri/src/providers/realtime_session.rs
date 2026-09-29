@@ -786,7 +786,10 @@ fn send_item_create(
             Some(ServerEvent::ItemCreated) => return Ok(()),
             Some(ServerEvent::SessionCreated) | Some(ServerEvent::SessionUpdated) | None => {}
             Some(_) => {
-                eprintln!("[realtime] replay {kind} item rejected <- {}", &raw.chars().take(200).collect::<String>());
+                eprintln!(
+                    "[realtime] replay {kind} item rejected <- {}",
+                    &raw.chars().take(200).collect::<String>()
+                );
                 return Err(RealtimeError::Remote("REALTIME_ITEM_REJECTED".to_owned()));
             }
         }
@@ -1007,8 +1010,10 @@ mod tests {
                     // 回放逐条等回执：桩收到 item.create 即回 created，
                     // 客户端 send_item_create 不必空等 5s 超时。
                     if frame["type"] == "conversation.item.create" {
-                        ws.send(Message::Text(r#"{"type":"conversation.item.created"}"#.into()))
-                            .unwrap();
+                        ws.send(Message::Text(
+                            r#"{"type":"conversation.item.created"}"#.into(),
+                        ))
+                        .unwrap();
                     }
                     return frame;
                 }
@@ -1132,8 +1137,10 @@ mod tests {
             if let Ok(message) = ws.read() {
                 if let Message::Text(text) = message {
                     if text.contains("conversation.item.create") {
-                        ws.send(Message::Text(r#"{"type":"conversation.item.created"}"#.into()))
-                            .unwrap();
+                        ws.send(Message::Text(
+                            r#"{"type":"conversation.item.created"}"#.into(),
+                        ))
+                        .unwrap();
                     }
                 }
             }
@@ -1828,10 +1835,7 @@ mod tests {
             );
             match actor.recv_event(Duration::from_millis(100)) {
                 Some(ActorEvent::Reconnecting(reason)) => {
-                    assert!(
-                        reason.contains("SESSION_FIELD_REJECTED"),
-                        "reason={reason}"
-                    );
+                    assert!(reason.contains("SESSION_FIELD_REJECTED"), "reason={reason}");
                     break;
                 }
                 Some(_) | None => continue,

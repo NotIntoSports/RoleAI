@@ -381,7 +381,6 @@ impl<S: PlaybackSink> SessionService<S> {
         self.playback = playback;
     }
 
-
     #[cfg(test)]
     fn runtime_can_answer(&self) -> bool {
         self.runtime.can_answer()
@@ -3195,12 +3194,24 @@ mod tests {
     fn meeting_mention_tolerates_spaces_and_punctuation() {
         use super::meeting_assistant_was_mentioned;
         // 空格 + 中文标点打断角色名：规范化后仍算点名。
-        assert!(meeting_assistant_was_mentioned("会议 助手，你好", "会议助手"));
+        assert!(meeting_assistant_was_mentioned(
+            "会议 助手，你好",
+            "会议助手"
+        ));
         // 英文问号 + 空格分隔的「AI 助手」也算点名。
         assert!(meeting_assistant_was_mentioned("AI 助手?", "会议助手"));
-        assert!(meeting_assistant_was_mentioned("嘿，会议助手帮我记一下", "会议助手"));
+        assert!(meeting_assistant_was_mentioned(
+            "嘿，会议助手帮我记一下",
+            "会议助手"
+        ));
         // 普通讨论不含点名关键词。
-        assert!(!meeting_assistant_was_mentioned("你听得见我说话吗", "会议助手"));
-        assert!(!meeting_assistant_was_mentioned("这个方案大家怎么看", "会议助手"));
+        assert!(!meeting_assistant_was_mentioned(
+            "你听得见我说话吗",
+            "会议助手"
+        ));
+        assert!(!meeting_assistant_was_mentioned(
+            "这个方案大家怎么看",
+            "会议助手"
+        ));
     }
 }

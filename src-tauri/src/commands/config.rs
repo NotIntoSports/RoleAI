@@ -24,7 +24,9 @@ pub fn config_get_public_blocking(state: State<'_, AppState>) -> CommandResult<P
     public_config(&state)
 }
 
-pub(super) fn provider_service_error<T: ts_rs::TS>(error: ProviderServiceError) -> CommandResult<T> {
+pub(super) fn provider_service_error<T: ts_rs::TS>(
+    error: ProviderServiceError,
+) -> CommandResult<T> {
     let code = error.code();
     let mut public = PublicError::new(
         code,

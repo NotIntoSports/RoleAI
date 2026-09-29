@@ -15,11 +15,12 @@ use crate::{
     },
     contracts::{
         AgentCommandInput, AgentCommandResult, AudioLevelEvent, CommandResult,
-        DiagnosticsExportResult, DiagnosticsLatencySummary, FoundationStatus, LegacyMigrationStatus, LegacySessionImport,
-        LivestreamDraftInput, LivestreamGenerateInput, LivestreamRuntime, MicPcmAcceptance,
-        RuntimeStatus, SessionAudioEvent, SessionCitationView, SessionDetail, SessionExportResult,
-        SessionPlaybackControlEvent, SessionReplyEvent, SessionStartResult, SessionSummary,
-        SessionTranscriptEvent, SessionTurnView, StartupState, VideoFrameAcceptance,
+        DiagnosticsExportResult, DiagnosticsLatencySummary, FoundationStatus,
+        LegacyMigrationStatus, LegacySessionImport, LivestreamDraftInput, LivestreamGenerateInput,
+        LivestreamRuntime, MicPcmAcceptance, RuntimeStatus, SessionAudioEvent, SessionCitationView,
+        SessionDetail, SessionExportResult, SessionPlaybackControlEvent, SessionReplyEvent,
+        SessionStartResult, SessionSummary, SessionTranscriptEvent, SessionTurnView, StartupState,
+        VideoFrameAcceptance,
     },
     error::PublicError,
     providers::{
@@ -45,13 +46,11 @@ use crate::{
     sessions::{SessionExportError, SessionExportFormat, SessionStore, export_session},
 };
 
-
 fn service_error<T: ts_rs::TS>(code: &str, message: &str) -> CommandResult<T> {
     CommandResult::Err {
         error: PublicError::new(code, message, false),
     }
 }
-
 
 fn embedding_probe<T: ts_rs::TS>() -> Result<OpenAiCompatibleEmbeddingProbe, CommandResult<T>> {
     OpenAiCompatibleEmbeddingProbe::new()
@@ -117,9 +116,6 @@ fn service_guard_try<T: ts_rs::TS>(
         )),
     }
 }
-
-
-
 
 // All filesystem/network work and contended locks live on blocking workers.
 // The owned handle keeps AppState alive without extending a borrowed State.

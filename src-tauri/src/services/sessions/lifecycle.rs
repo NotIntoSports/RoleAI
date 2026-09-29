@@ -112,7 +112,6 @@ impl<S: PlaybackSink> SessionService<S> {
         self.finish_stop(database)
     }
 
-
     pub fn poll_sidecar(
         &mut self,
         database: &Database,

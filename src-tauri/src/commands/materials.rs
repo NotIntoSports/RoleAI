@@ -62,7 +62,10 @@ pub(super) fn material_list_cmd(state: &AppState) -> CommandResult<Vec<MaterialS
     with_materials(state, |service| service.list())
 }
 
-pub(super) fn material_import_cmd(state: &AppState, path: String) -> CommandResult<MaterialSummary> {
+pub(super) fn material_import_cmd(
+    state: &AppState,
+    path: String,
+) -> CommandResult<MaterialSummary> {
     let path = match resolve_import_path(&path) {
         Ok(path) => path,
         Err(error) => return material_service_error(error),

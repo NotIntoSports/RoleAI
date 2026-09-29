@@ -152,8 +152,10 @@ pub fn default_segmenter() -> Box<dyn SpeechSegmenter> {
 /// `loader` 仅测试注入：模拟 Silero 模型加载失败，钉住降级路径。
 /// 生产语义与 `default_segmenter` 完全一致。
 fn default_segmenter_with(
-    loader: impl FnOnce()
-        -> Result<crate::audio::vad::VadSegmenter, Box<dyn std::error::Error + Send + Sync>>,
+    loader: impl FnOnce() -> Result<
+        crate::audio::vad::VadSegmenter,
+        Box<dyn std::error::Error + Send + Sync>,
+    >,
 ) -> Box<dyn SpeechSegmenter> {
     if std::env::var("AI_VOICE_VAD").as_deref() == Ok("off") {
         tracing::warn!("AI_VOICE_VAD=off：Silero VAD 被关闭，已降级为能量门限分段");

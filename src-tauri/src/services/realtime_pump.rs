@@ -19,7 +19,9 @@ use super::super::providers::realtime_session::{ActorCommand, ActorEvent, Realti
 
 use crate::audio::playback::PlaybackDiagnostics;
 
-use super::echo_guard::{GATE_DRAIN_FALLBACK_TAIL, gate_drain_deadline_from_bytes, gate_timers_expired};
+use super::echo_guard::{
+    GATE_DRAIN_FALLBACK_TAIL, gate_drain_deadline_from_bytes, gate_timers_expired,
+};
 
 /// 回答开始看门狗：`RespondText` 发出后迟迟收不到 `response.created` 时，
 /// 第一次超时清服务端输入缓冲并重发一次；再超时放弃本轮（response_failed
@@ -1861,10 +1863,7 @@ mod pump_tests {
         fixture.pump.send(PumpCommand::ForceRespond);
         let item = read_frame(&mut ws);
         assert_eq!(item["type"], "conversation.item.create");
-        assert_eq!(
-            item["item"]["content"][0]["text"],
-            "你听得见我说话吗"
-        );
+        assert_eq!(item["item"]["content"][0]["text"], "你听得见我说话吗");
         assert_eq!(read_frame(&mut ws)["type"], "response.create");
 
         // 服务端完成应答：成轮 assistant_text 非空、forced=true。
@@ -2318,7 +2317,8 @@ mod pump_tests {
             credential: Some(credential.as_str().to_owned()),
             model_id: route["e2eModelId"].as_str().unwrap_or("").to_owned(),
             voice,
-            instructions: "你是会议助手。普通讨论只听不答；被点名或被要求回答时用中文简短回答。".into(),
+            instructions: "你是会议助手。普通讨论只听不答；被点名或被要求回答时用中文简短回答。"
+                .into(),
             history: vec![],
             auto_respond: false, // 会议助手点名门控：create_response=false
             enable_search: false,
@@ -2483,7 +2483,8 @@ mod pump_tests {
             credential: Some(credential.as_str().to_owned()),
             model_id: route["e2eModelId"].as_str().unwrap_or("").to_owned(),
             voice: route["voiceId"].as_str().unwrap_or("").to_owned(),
-            instructions: "你是会议助手。普通讨论只听不答；被点名或被要求回答时用中文简短回答。".into(),
+            instructions: "你是会议助手。普通讨论只听不答；被点名或被要求回答时用中文简短回答。"
+                .into(),
             history: vec![],
             auto_respond: false,
             enable_search: false,
@@ -4222,10 +4223,7 @@ mod pump_tests {
         .unwrap();
         // 等六个 delta 都被泵处理完，避免 FlushHeld 抢在超限 delta 之前。
         std::thread::sleep(Duration::from_millis(400));
-        assert!(
-            fixture.sink.written().is_empty(),
-            "候选模式不得直接出声"
-        );
+        assert!(fixture.sink.written().is_empty(), "候选模式不得直接出声");
 
         fixture.pump.send(PumpCommand::FlushHeld);
         wait_for(

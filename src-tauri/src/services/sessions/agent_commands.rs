@@ -28,7 +28,6 @@ impl<S: PlaybackSink> SessionService<S> {
         Ok(self.control.mode())
     }
 
-
     pub fn execute_command(
         &mut self,
         database: &Database,

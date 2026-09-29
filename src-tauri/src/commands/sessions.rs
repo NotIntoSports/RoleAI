@@ -411,7 +411,10 @@ pub(super) fn session_start_capture_cmd(
     }
 }
 
-pub(super) fn keep_session_routing(state: &AppState, change: crate::prerequisites::AudioRoutingChange) {
+pub(super) fn keep_session_routing(
+    state: &AppState,
+    change: crate::prerequisites::AudioRoutingChange,
+) {
     let _ = crate::prerequisites::persist_audio_routing(&state.paths.data_directory, &change);
     if let Ok(mut slot) = state.audio_routing.lock() {
         *slot = Some(change);
@@ -568,7 +571,10 @@ pub(super) fn session_list_cmd(state: &AppState) -> CommandResult<Vec<SessionSum
     }
 }
 
-pub(super) fn session_get_cmd(state: &AppState, session_id: String) -> CommandResult<SessionDetail> {
+pub(super) fn session_get_cmd(
+    state: &AppState,
+    session_id: String,
+) -> CommandResult<SessionDetail> {
     let database = match state.database.lock() {
         Ok(guard) => guard,
         Err(_) => {
@@ -584,7 +590,10 @@ pub(super) fn session_get_cmd(state: &AppState, session_id: String) -> CommandRe
     }
 }
 
-pub(super) fn session_delete_cmd(state: &AppState, session_id: String) -> CommandResult<FoundationStatus> {
+pub(super) fn session_delete_cmd(
+    state: &AppState,
+    session_id: String,
+) -> CommandResult<FoundationStatus> {
     let database = match state.database.lock() {
         Ok(guard) => guard,
         Err(_) => {

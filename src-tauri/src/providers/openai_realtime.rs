@@ -1303,10 +1303,13 @@ mod connection_tests {
             while !got_completed {
                 let remaining = deadline.saturating_duration_since(std::time::Instant::now());
                 if remaining.is_zero() {
-                    eprintln!("forced probe: transcription incomplete after 30s, responding anyway");
+                    eprintln!(
+                        "forced probe: transcription incomplete after 30s, responding anyway"
+                    );
                     break;
                 }
-                let text = match socket.recv_text(remaining.min(std::time::Duration::from_secs(5))) {
+                let text = match socket.recv_text(remaining.min(std::time::Duration::from_secs(5)))
+                {
                     Ok(text) => text,
                     Err(RealtimeError::Timeout) => continue,
                     Err(error) => return Err(error),
@@ -1331,8 +1334,8 @@ mod connection_tests {
             // 观测服务端对强制回答的反应：response.done / error / 沉默断链。
             let respond_deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
             loop {
-                let remaining = respond_deadline
-                    .saturating_duration_since(std::time::Instant::now());
+                let remaining =
+                    respond_deadline.saturating_duration_since(std::time::Instant::now());
                 if remaining.is_zero() {
                     eprintln!("forced probe: 60s with no response.done — server stalled");
                     return Ok(());

@@ -119,8 +119,9 @@ fn ensure_diagnostics_destination(state: &AppState, destination: &str) -> Result
     Ok(())
 }
 
-
-pub(super) fn legacy_migration_status_cmd(state: &AppState) -> CommandResult<LegacyMigrationStatus> {
+pub(super) fn legacy_migration_status_cmd(
+    state: &AppState,
+) -> CommandResult<LegacyMigrationStatus> {
     let configured = match state.config.load() {
         Ok(config) => crate::migrate::secret_slots_configured(&config),
         Err(_) => false,
@@ -161,7 +162,10 @@ fn migrate_error<T: ts_rs::TS>(error: crate::migrate::MigrateError) -> CommandRe
     service_error(error.code(), message)
 }
 
-pub(super) fn legacy_import_source_cmd(state: &AppState, path: String) -> CommandResult<LegacySessionImport> {
+pub(super) fn legacy_import_source_cmd(
+    state: &AppState,
+    path: String,
+) -> CommandResult<LegacySessionImport> {
     let source = match resolve_legacy_source_path(&path) {
         Ok(path) => path,
         Err(error) => return migrate_error(error),
@@ -623,7 +627,6 @@ pub fn virtual_audio_install_blocking<R: tauri::Runtime>(
 }
 blocking_command!(with_events virtual_audio_install, virtual_audio_install_blocking() -> crate::prerequisites::VirtualAudioPreparation);
 
-
 pub fn diagnostics_latency_summary_blocking(
     state: State<'_, AppState>,
     limit: Option<u32>,
@@ -647,7 +650,12 @@ pub fn diagnostics_latency_summary_blocking(
             .load()
             .ok()
             .and_then(|config| {
-                config.speech.voice_routes.iter().find(|route| route.id == route_id).map(|route| route.name.clone())
+                config
+                    .speech
+                    .voice_routes
+                    .iter()
+                    .find(|route| route.id == route_id)
+                    .map(|route| route.name.clone())
             })
             .unwrap_or_else(|| route_id.to_owned())
     };
@@ -665,15 +673,16 @@ pub fn diagnostics_latency_summary_blocking(
         }
         for event in events.iter().filter(|event| event.kind == "turn_meta") {
             if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&event.payload) {
-                summaries.entry(session.voice_route_id.clone()).or_default().push((session.id.clone(), meta));
+                summaries
+                    .entry(session.voice_route_id.clone())
+                    .or_default()
+                    .push((session.id.clone(), meta));
             }
         }
     }
     let routes = summaries
         .into_iter()
-        .map(|(route_id, metas)| {
-            summarize_route(&route_id, &route_label(&route_id), &metas)
-        })
+        .map(|(route_id, metas)| summarize_route(&route_id, &route_label(&route_id), &metas))
         .collect();
     CommandResult::Ok {
         data: DiagnosticsLatencySummary {
@@ -693,7 +702,10 @@ fn summarize_route(
 ) -> crate::contracts::RouteLatencySummary {
     let mut latencies: Vec<f64> = metas
         .iter()
-        .filter_map(|(_, meta)| meta.get("latencyMsFirstAudio").and_then(|value| value.as_f64()))
+        .filter_map(|(_, meta)| {
+            meta.get("latencyMsFirstAudio")
+                .and_then(|value| value.as_f64())
+        })
         .collect();
     latencies.sort_by(|a, b| a.total_cmp(b));
     let mut dropped_by_session: std::collections::HashMap<&str, u64> =
@@ -756,9 +768,18 @@ mod latency_summary_tests {
     #[test]
     fn summary_skips_null_latencies_for_percentiles_but_counts_samples() {
         let metas = vec![
-            ("s1".to_owned(), serde_json::json!({"latencyMsFirstAudio":100,"ingressDropped":5})),
-            ("s2".to_owned(), serde_json::json!({"latencyMsFirstAudio":200,"ingressDropped":9})),
-            ("s3".to_owned(), serde_json::json!({"latencyMsFirstAudio":null,"ingressDropped":2})),
+            (
+                "s1".to_owned(),
+                serde_json::json!({"latencyMsFirstAudio":100,"ingressDropped":5}),
+            ),
+            (
+                "s2".to_owned(),
+                serde_json::json!({"latencyMsFirstAudio":200,"ingressDropped":9}),
+            ),
+            (
+                "s3".to_owned(),
+                serde_json::json!({"latencyMsFirstAudio":null,"ingressDropped":2}),
+            ),
         ];
         let summary = summarize_route("route-1", "线路一", &metas);
         assert_eq!(summary.samples, 3);
@@ -772,8 +793,14 @@ mod latency_summary_tests {
     #[test]
     fn summary_all_null_latencies_yield_null_percentiles() {
         let metas = vec![
-            ("s1".to_owned(), serde_json::json!({"latencyMsFirstAudio":null})),
-            ("s1".to_owned(), serde_json::json!({"latencyMsFirstAudio":null,"ingressDropped":7})),
+            (
+                "s1".to_owned(),
+                serde_json::json!({"latencyMsFirstAudio":null}),
+            ),
+            (
+                "s1".to_owned(),
+                serde_json::json!({"latencyMsFirstAudio":null,"ingressDropped":7}),
+            ),
         ];
         let summary = summarize_route("route-1", "线路一", &metas);
         assert_eq!(summary.samples, 2);
@@ -785,7 +812,10 @@ mod latency_summary_tests {
 
     #[test]
     fn missing_route_falls_back_to_id_as_label() {
-        let metas = vec![("s1".to_owned(), serde_json::json!({"latencyMsFirstAudio":50}))];
+        let metas = vec![(
+            "s1".to_owned(),
+            serde_json::json!({"latencyMsFirstAudio":50}),
+        )];
         let summary = summarize_route("route-x", "route-x", &metas);
         assert_eq!(summary.route_label, "route-x");
         assert_eq!(summary.p50_ms, Some(50.0));

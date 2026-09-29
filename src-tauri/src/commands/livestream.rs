@@ -573,7 +573,10 @@ fn spawn_livestream_playback(app: AppHandle, playback: LivestreamPlayback) {
     });
 }
 
-pub(super) fn advance_livestream_after_success(state: &AppState, token: &Arc<AtomicBool>) -> Option<String> {
+pub(super) fn advance_livestream_after_success(
+    state: &AppState,
+    token: &Arc<AtomicBool>,
+) -> Option<String> {
     let current = state.livestream_playback_cancel.lock().ok()?;
     if !Arc::ptr_eq(&current, token) || token.load(Ordering::SeqCst) {
         return None;
