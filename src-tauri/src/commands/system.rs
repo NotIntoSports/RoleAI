@@ -686,7 +686,7 @@ pub fn diagnostics_latency_summary_blocking(
         .collect();
     CommandResult::Ok {
         data: DiagnosticsLatencySummary {
-            sessions_scanned: sessions_scanned as u32,
+            sessions_scanned,
             routes,
         },
     }

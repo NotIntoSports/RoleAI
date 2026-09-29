@@ -285,9 +285,10 @@ impl<S: PlaybackSink> SessionService<S> {
                 Some("text_only")
             } else if completed.held {
                 None // 候选闸门：由 candidate 分支标注 pending_confirmation
-            } else if completed.response_failed {
-                Some("failed")
-            } else if completed.playback_write_failed || !completed.playback_alive {
+            } else if completed.response_failed
+                || completed.playback_write_failed
+                || !completed.playback_alive
+            {
                 Some("failed")
             } else if completed.audio_bytes == 0 {
                 Some("text_only")

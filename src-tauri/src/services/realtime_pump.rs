@@ -4178,11 +4178,11 @@ mod pump_tests {
         let mut reopened = false;
         for _ in 0..6 {
             tap_tx.send(vec![3u8; 9600]).unwrap();
-            if let Some(frame) = try_read_frame(&mut ws_reconnected, Duration::from_millis(120)) {
-                if frame["type"] == "input_audio_buffer.append" {
-                    reopened = true;
-                    break;
-                }
+            if let Some(frame) = try_read_frame(&mut ws_reconnected, Duration::from_millis(120))
+                && frame["type"] == "input_audio_buffer.append"
+            {
+                reopened = true;
+                break;
             }
         }
         assert!(reopened, "重连后上行必须立即恢复，不得等播净回执");
@@ -4306,11 +4306,11 @@ mod pump_tests {
         let mut reopened = false;
         for _ in 0..7 {
             tap_tx.send(vec![3u8; 9600]).unwrap();
-            if let Some(frame) = try_read_frame(&mut ws, Duration::from_millis(150)) {
-                if frame["type"] == "input_audio_buffer.append" {
-                    reopened = true;
-                    break;
-                }
+            if let Some(frame) = try_read_frame(&mut ws, Duration::from_millis(150))
+                && frame["type"] == "input_audio_buffer.append"
+            {
+                reopened = true;
+                break;
             }
         }
         assert!(

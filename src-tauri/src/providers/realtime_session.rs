@@ -1134,15 +1134,14 @@ mod tests {
             let _ = ws
                 .get_mut()
                 .set_read_timeout(Some(Duration::from_millis(100)));
-            if let Ok(message) = ws.read() {
-                if let Message::Text(text) = message {
-                    if text.contains("conversation.item.create") {
-                        ws.send(Message::Text(
-                            r#"{"type":"conversation.item.created"}"#.into(),
-                        ))
-                        .unwrap();
-                    }
-                }
+            if let Ok(message) = ws.read()
+                && let Message::Text(text) = message
+                && text.contains("conversation.item.create")
+            {
+                ws.send(Message::Text(
+                    r#"{"type":"conversation.item.created"}"#.into(),
+                ))
+                .unwrap();
             }
             if matches!(
                 actor.recv_event(Duration::from_millis(100)),

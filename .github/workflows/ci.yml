@@ -16,6 +16,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.96"
+          components: rustfmt, clippy
       - run: npm ci
       - name: Reject local-only docs and agent ledgers
         shell: pwsh
@@ -28,6 +29,12 @@ jobs:
             exit 1
           }
       - run: npm audit --audit-level=high
+      - name: cargo fmt --check
+        working-directory: src-tauri
+        run: cargo fmt --all --check
+      - name: cargo clippy -D warnings
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
       - run: npx tsc -p tsconfig.tauri.json --noEmit
       - run: npm run test:tauri-ui
       - run: node --test tests/tauri/*.test.mjs
