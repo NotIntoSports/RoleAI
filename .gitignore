@@ -30,6 +30,7 @@ dist/
 dist-verify/
 dist-new/
 dist-desktop/
+coverage/
 _tmp_*.png
 crop_*.png
 *.tsbuildinfo
