@@ -46,7 +46,7 @@ jobs:
   e2e-demo:
     # 演示版（GitHub Pages 在线 demo）端到端测试：真实浏览器走六页面 + 脚本会话主流程。
     # ubuntu 比 windows 快；webServer 由 playwright.config.ts 拉起 npm run dev:demo，
-    # 不涉及 Electron/Tauri，也不需要 Rust 工具链。
+    # 纯浏览器产物（桌面壳与 Rust 工具链都不涉及）。
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
