@@ -18,6 +18,6 @@
     "src-tauri/src/commands/livestream.rs": "5c53e92c2a24c94ad2cbf5719021c421ad4be0e482e09a4b9818f7023aa35c83",
     "src-tauri/src/commands/obs.rs": "42cc148ed5b6d8a78506a40ea2a272400112abfb586a397488b78a4df0dbf43b",
     "src-tauri/src/commands/voice.rs": "1c5d8fc589feeea832d21621526992e3854e341285add22a8dc8b390dcf48ba0",
-    "src-tauri/src/commands/system.rs": "5b093c492f406479a82c82f62af06eb609dbacd33dc8206b15d780fe5a31b137"
+    "src-tauri/src/commands/system.rs": "bd98e4aa0d7fae626ac28e31837f39959e0f9767e6a63f29015d5b3a4d0c79e3"
   }
 }

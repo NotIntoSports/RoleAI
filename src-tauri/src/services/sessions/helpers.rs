@@ -389,8 +389,11 @@ pub(super) fn run_e2e_turn(
     // 一次性返回，无法拆出 ASR/LLM/TTS 各自的完成点，只记检索、首 token 与
     // 轮次完成三个锚点（见时间线字段注释）。
     let started = std::time::Instant::now();
-    let mut timeline = crate::services::realtime_pump::TurnTimeline::default();
-    timeline.retrieval_done_ms = Some(started.elapsed().as_millis() as u64);
+    let retrieval_done_ms = started.elapsed().as_millis() as u64;
+    let mut timeline = crate::services::realtime_pump::TurnTimeline {
+        retrieval_done_ms: Some(retrieval_done_ms),
+        ..crate::services::realtime_pump::TurnTimeline::default()
+    };
     let instructions = e2e_instructions(active_role_profile(request.config), &citations);
     // 首个增量快照即首 token：包一层回调记录时间点后转发原钩子。
     let first_token = std::cell::OnceCell::<Option<u64>>::new();
@@ -457,7 +460,7 @@ pub(super) fn run_e2e_turn(
         materials_used: !citations.is_empty(),
         citations,
         error_code: None,
-        timeline,
+        timeline: Box::new(timeline),
     })
 }
 

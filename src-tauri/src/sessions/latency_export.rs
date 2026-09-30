@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use crate::services::realtime_pump::TurnTimeline;
 
-use super::store::{SessionEvent, SessionStore};
+use super::store::SessionStore;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LatencyExportError {
@@ -73,7 +73,10 @@ pub(crate) fn parse_turn_latency(
 /// 单轮总延迟：优先 latencyMsFirstAudio（泵：speech_stopped → 首包；
 /// 级联：轮次起点 → TTS 完成），缺省退回时间线首末锚点跨度。
 pub(crate) fn turn_total_latency_ms(meta: &serde_json::Value) -> Option<f64> {
-    if let Some(total) = meta.get("latencyMsFirstAudio").and_then(|value| value.as_f64()) {
+    if let Some(total) = meta
+        .get("latencyMsFirstAudio")
+        .and_then(|value| value.as_f64())
+    {
         return Some(total);
     }
     let timeline = meta.get("timeline")?;
@@ -91,7 +94,11 @@ pub(crate) fn turn_total_latency_ms(meta: &serde_json::Value) -> Option<f64> {
 }
 
 /// 导出文件名：`<session_id>-latency.<扩展名>`，与 session_export 同目录约定。
-pub(crate) fn latency_export_path(export_root: &Path, session_id: &str, format: LatencyExportFormat) -> PathBuf {
+pub(crate) fn latency_export_path(
+    export_root: &Path,
+    session_id: &str,
+    format: LatencyExportFormat,
+) -> PathBuf {
     export_root.join(format!("{session_id}-{}", format.extension()))
 }
 
@@ -116,7 +123,9 @@ pub fn export_latency(
         .collect();
     let body = match format {
         LatencyExportFormat::Csv => build_csv(&session.id, &session.voice_route_id, &turns, &metas),
-        LatencyExportFormat::Trace => build_trace(&session.id, &session.voice_route_id, &turns, &metas),
+        LatencyExportFormat::Trace => {
+            build_trace(&session.id, &session.voice_route_id, &turns, &metas)
+        }
     };
     std::fs::create_dir_all(export_root).map_err(|_| LatencyExportError::WriteFailed)?;
     let path = latency_export_path(export_root, session_id, format);
@@ -171,7 +180,11 @@ fn build_csv(
             .find(|meta: &&serde_json::Value| meta["turnId"] == serde_json::json!(turn_id))
     };
     let mut body = String::from("# session_id,route_id\n");
-    body.push_str(&format!("# {},{}\n", csv_escape(_session_id), csv_escape(route_id)));
+    body.push_str(&format!(
+        "# {},{}\n",
+        csv_escape(_session_id),
+        csv_escape(route_id)
+    ));
     body.push_str(&CSV_COLUMNS.join(","));
     body.push('\n');
     for turn in turns {
@@ -180,12 +193,16 @@ fn build_csv(
             Some(parsed) => parsed,
             None => continue, // 旧记录无时间线：跳过（CSV 只收可解释的延迟轮）。
         };
-        let total = meta.and_then(|meta| turn_total_latency_ms(meta));
+        let total = meta.and_then(turn_total_latency_ms);
         let mut row: Vec<String> = vec![
             turn.turn_index.to_string(),
             csv_escape(&turn.created_at),
             mode.to_owned(),
-            if interrupted { "true".into() } else { "false".into() },
+            if interrupted {
+                "true".into()
+            } else {
+                "false".into()
+            },
             total.map(|value| value.to_string()).unwrap_or_default(),
         ];
         for field in [
@@ -232,7 +249,7 @@ const TRACE_CASCADE_ANCHORS: [(&str, &str); 5] = [
 ];
 
 fn anchor_value(timeline: &TurnTimeline, field: &str) -> Option<u64> {
-    let value = match field {
+    match field {
         "speechStartedMs" => timeline.speech_started_ms,
         "speechStoppedMs" => timeline.speech_stopped_ms,
         "transcriptDoneMs" => timeline.transcript_done_ms,
@@ -247,8 +264,7 @@ fn anchor_value(timeline: &TurnTimeline, field: &str) -> Option<u64> {
         "playbackStartedMs" => timeline.playback_started_ms,
         "playbackDoneMs" => timeline.playback_done_ms,
         _ => None,
-    };
-    value
+    }
 }
 
 /// Chrome Trace JSON：每轮一个进程轨道（pid = turnIndex+1），相邻锚点之间
@@ -275,7 +291,11 @@ fn build_trace(
             continue;
         };
         let pid = turn.turn_index + 1;
-        let mode_label = if mode == "cascade" { "级联" } else { "实时" };
+        let mode_label = if mode == "cascade" {
+            "级联"
+        } else {
+            "实时"
+        };
         events.push(serde_json::json!({
             "ph": "M", "name": "process_name", "pid": pid, "tid": 0,
             "args": {"name": format!("第 {} 轮 · {}{}", turn.turn_index + 1, mode_label, if interrupted { " · 被打断" } else { "" })},
@@ -317,7 +337,10 @@ fn build_trace(
 
 #[cfg(test)]
 mod tests {
-    use super::{LatencyExportError, LatencyExportFormat, build_csv, build_trace, export_latency, latency_export_path};
+    use super::{
+        LatencyExportError, LatencyExportFormat, build_csv, build_trace, export_latency,
+        latency_export_path,
+    };
     use crate::database::Database;
     use crate::sessions::store::{NewSession, NewTurn, SessionStore};
 
@@ -364,10 +387,23 @@ mod tests {
         assert_eq!(lines.next().unwrap(), "# sess,route-a");
         let header = lines.next().unwrap();
         for column in [
-            "turnIndex", "createdAt", "mode", "interrupted", "totalMs",
-            "asrDoneMs", "ttsDoneMs", "responseDoneMs", "userText", "assistantText",
+            "turnIndex",
+            "createdAt",
+            "mode",
+            "interrupted",
+            "totalMs",
+            "asrDoneMs",
+            "ttsDoneMs",
+            "responseDoneMs",
+            "userText",
+            "assistantText",
         ] {
-            assert!(header.contains(&format!(",{column},")) || header.starts_with(&format!("{column},")) || header.ends_with(&format!(",{column}")), "missing {column} in {header}");
+            assert!(
+                header.contains(&format!(",{column},"))
+                    || header.starts_with(&format!("{column},"))
+                    || header.ends_with(&format!(",{column}")),
+                "missing {column} in {header}"
+            );
         }
     }
 
@@ -402,7 +438,10 @@ mod tests {
                     "timeline": {"asrDoneMs": 120, "ttsDoneMs": 700}
                 }),
             ),
-            (2, serde_json::json!({"turnId": "turn-2", "playbackStatus": "played"})),
+            (
+                2,
+                serde_json::json!({"turnId": "turn-2", "playbackStatus": "played"}),
+            ),
         ];
         let body = build_csv("s", "route-a", &turns, &metas);
         let data_rows: Vec<&str> = body
@@ -443,15 +482,10 @@ mod tests {
             .find(|event| event["name"] == "process_name")
             .unwrap();
         assert_eq!(process["pid"], 1);
-        assert!(process["args"]["name"]
-            .as_str()
-            .unwrap()
-            .contains("级联"));
+        assert!(process["args"]["name"].as_str().unwrap().contains("级联"));
         // 4 个锚点 → 3 个片段；ts/dur 为微秒。
-        let slices: Vec<&serde_json::Value> = events
-            .iter()
-            .filter(|event| event["ph"] == "X")
-            .collect();
+        let slices: Vec<&serde_json::Value> =
+            events.iter().filter(|event| event["ph"] == "X").collect();
         assert_eq!(slices.len(), 3);
         assert_eq!(slices[0]["ts"], 100_000_u64);
         assert_eq!(slices[0]["dur"], 200_000_u64);
@@ -468,7 +502,8 @@ mod tests {
             .append_event("sess-lat", "turn_meta", r#"{"turnId":"turn-1","latencyMode":"cascade","timeline":{"asrDoneMs":80,"ttsDoneMs":640}}"#)
             .unwrap();
         let export_root = directory.path().join("exports");
-        let path = export_latency(&store, &session_id, LatencyExportFormat::Csv, &export_root).unwrap();
+        let path =
+            export_latency(&store, &session_id, LatencyExportFormat::Csv, &export_root).unwrap();
         assert_eq!(
             path,
             latency_export_path(&export_root, &session_id, LatencyExportFormat::Csv)
@@ -477,8 +512,8 @@ mod tests {
         let body = std::fs::read_to_string(&path).unwrap();
         assert!(body.contains("asrDoneMs"));
         assert!(body.contains("80"));
-        let missing = export_latency(&store, "nope", LatencyExportFormat::Csv, &export_root)
-            .unwrap_err();
+        let missing =
+            export_latency(&store, "nope", LatencyExportFormat::Csv, &export_root).unwrap_err();
         assert_eq!(missing, LatencyExportError::NotFound);
     }
 }

@@ -916,7 +916,8 @@ impl ChatModel for DelayedLlm {
         model_id: &str,
         messages: &[ChatMessage],
     ) -> Result<String, CascadeError> {
-        self.inner.complete(endpoint, credential, model_id, messages)
+        self.inner
+            .complete(endpoint, credential, model_id, messages)
     }
 
     fn complete_streaming(
@@ -1006,25 +1007,25 @@ fn cascade_turn_records_stage_timeline_with_loose_ranges() {
 
     // 宽松上界（5s）避免负载抖动误报；下界由注入延迟保证；阶段单调不减。
     let asr_done = timeline.asr_done_ms.expect("asr done recorded");
-    assert!(asr_done >= 25 && asr_done < 5_000, "asr_done_ms={asr_done}");
+    assert!((25..5_000).contains(&asr_done), "asr_done_ms={asr_done}");
     let retrieval_done = timeline.retrieval_done_ms.expect("retrieval done recorded");
     assert!(
-        retrieval_done >= asr_done && retrieval_done < 5_000,
+        retrieval_done >= asr_done && (retrieval_done < 5_000),
         "retrieval_done_ms={retrieval_done}"
     );
     let first_token = timeline.llm_first_token_ms.expect("first token recorded");
     assert!(
-        first_token >= retrieval_done + 20 && first_token < 5_000,
+        first_token >= retrieval_done + 20 && (first_token < 5_000),
         "llm_first_token_ms={first_token}"
     );
     let llm_done = timeline.llm_done_ms.expect("llm done recorded");
     assert!(
-        llm_done > first_token && llm_done < 5_000,
+        llm_done > first_token && (llm_done < 5_000),
         "llm_done_ms={llm_done}"
     );
     let tts_done = timeline.tts_done_ms.expect("tts done recorded");
     assert!(
-        tts_done >= llm_done + 15 && tts_done < 5_000,
+        tts_done >= llm_done + 15 && (tts_done < 5_000),
         "tts_done_ms={tts_done}"
     );
     // 级联路径不产出 Realtime 泵阶段与播放起止。

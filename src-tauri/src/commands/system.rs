@@ -915,7 +915,12 @@ mod latency_summary_tests {
             serde_json::json!({"timeline": {"asrDoneMs": 42}}),
         )];
         let summary = summarize_route("route-1", "cascade", "线路一", &metas);
-        assert!(summary.stages.iter().all(|stage| stage.stage != "llmDoneMs"));
+        assert!(
+            summary
+                .stages
+                .iter()
+                .all(|stage| stage.stage != "llmDoneMs")
+        );
         let asr = summary
             .stages
             .iter()
@@ -983,7 +988,10 @@ mod latency_summary_tests {
             })),
             Some(430.0)
         );
-        assert_eq!(turn_total_latency_ms(&serde_json::json!({"timeline": {}})), None);
+        assert_eq!(
+            turn_total_latency_ms(&serde_json::json!({"timeline": {}})),
+            None
+        );
         assert_eq!(turn_total_latency_ms(&serde_json::json!({})), None);
     }
 }

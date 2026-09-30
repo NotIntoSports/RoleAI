@@ -40,7 +40,8 @@ pub struct CascadeTurn {
     pub materials_used: bool,
     pub error_code: Option<&'static str>,
     /// 分阶段延迟时间线（相对本函数入口；落库进 turn_meta，见 finalize.rs）。
-    pub timeline: crate::services::realtime_pump::TurnTimeline,
+    /// 装箱控制 NetworkOutcome::Turn 变体尺寸（clippy large_enum_variant）。
+    pub timeline: Box<crate::services::realtime_pump::TurnTimeline>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -191,7 +192,7 @@ pub fn run_cascade_turn(
         materials_used: !citations.is_empty(),
         citations,
         error_code,
-        timeline,
+        timeline: Box::new(timeline),
     })
 }
 

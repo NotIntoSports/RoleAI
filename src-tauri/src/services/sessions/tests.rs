@@ -2279,7 +2279,13 @@ fn cascade_finalize_writes_stage_timeline_into_turn_meta() {
     let embed = UnusedEmbed;
     let probes = cascaded_probes(&asr, &llm, &tts, &embed);
     service
-        .finalize_utterance(&database, &config, &probes, credentials(), Some("时间线问题"))
+        .finalize_utterance(
+            &database,
+            &config,
+            &probes,
+            credentials(),
+            Some("时间线问题"),
+        )
         .unwrap();
 
     let meta = latest_turn_meta(&database, service.session_id().unwrap());

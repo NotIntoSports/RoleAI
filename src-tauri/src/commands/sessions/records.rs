@@ -8,8 +8,7 @@ fn turn_latency_view(
     route_id: &str,
 ) -> Option<crate::contracts::TurnLatencyView> {
     let meta = meta?;
-    let (timeline, mode, interrupted) =
-        crate::sessions::latency_export::parse_turn_latency(meta)?;
+    let (timeline, mode, interrupted) = crate::sessions::latency_export::parse_turn_latency(meta)?;
     Some(crate::contracts::TurnLatencyView {
         route_id: route_id.to_owned(),
         mode: mode.to_owned(),
