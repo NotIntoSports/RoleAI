@@ -1,5 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useLocation } from "wouter";
+import { Link } from "wouter";
+import { useHashLocation } from "wouter/use-hash-location";
 import { ClipboardList, FileText, FolderOpen, Play, Sparkles, Trash2 } from "lucide-react";
 
 import * as api from "../../api/commands";
@@ -29,7 +30,11 @@ interface PracticeWizardProps {
 }
 
 export function PracticeWizard({ materialsLink = "/materials" }: PracticeWizardProps = {}) {
-  const [, navigate] = useLocation();
+  // 应用外壳（app/shell.tsx）使用 wouter/use-hash-location（hash 路由）；
+  // 这里必须用同一路由原语。此前误用 wouter 默认的 pathname 路由，
+  // 开始训练后的 navigate("/") 会把地址推成无 hash 的 "/"，
+  // hash 路由收不到任何通知，界面停留在向导页（lane-I I03 端到端红灯）。
+  const [, navigate] = useHashLocation();
   const [step, setStep] = useState(0);
   const [position, setPosition] = useState("");
   const [jdMaterialId, setJdMaterialId] = useState("");

@@ -16,6 +16,7 @@
     "build:demo": "tsc -p tsconfig.tauri.json && vite build --config vite.demo.config.ts",
     "test:e2e:demo": "playwright test --config playwright.config.ts",
     "test:e2e:desktop": "node e2e/desktop/wd-smoke.mjs",
+    "test:e2e:desktop:main": "node e2e/desktop/main-flow.mjs",
     "screenshots": "node scripts/screenshots.mjs",
     "demo:video": "node scripts/demo-video.mjs"
   },
