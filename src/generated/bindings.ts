@@ -14,7 +14,21 @@ export type DiagnosticsExportResult = { exported: boolean, };
 
 export type DiagnosticsLatencySummary = { sessionsScanned: number, routes: Array<RouteLatencySummary>, };
 
-export type RouteLatencySummary = { routeId: string, routeLabel: string, samples: number, p50Ms: number | null, p95Ms: number | null, ingressDroppedTotal: number, };
+export type StageLatencySummary = { 
+/**
+ * 时间线字段名（camelCase，如 `asrDoneMs`）。
+ */
+stage: string, samples: number, p50Ms: number | null, p95Ms: number | null, };
+
+export type RouteLatencySummary = { routeId: string, routeLabel: string, 
+/**
+ * "cascade" | "realtime"（旧记录缺 latencyMode 时归一为 realtime）。
+ */
+mode: string, samples: number, p50Ms: number | null, p95Ms: number | null, 
+/**
+ * 有样本的阶段才出现在列表内，顺序固定（时间线字段声明序）。
+ */
+stages: Array<StageLatencySummary>, ingressDroppedTotal: number, };
 
 export type StartupState = { "kind": "ready" } | { "kind": "migrated" } | { "kind": "recoverable", error: PublicError, } | { "kind": "invalid", error: PublicError, };
 

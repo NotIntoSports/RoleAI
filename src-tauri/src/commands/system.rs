@@ -664,30 +664,46 @@ pub fn diagnostics_latency_summary_blocking(
             })
             .unwrap_or_else(|| route_id.to_owned())
     };
-    // 更新时间倒序（store.list 语义），只扫最近 limit 个会话。
-    let mut summaries: std::collections::BTreeMap<String, Vec<(String, serde_json::Value)>> =
+    // 更新时间倒序（store.list 语义）扫描会话；按线路 + 模式分组，只统计
+    // 最近 TURN_SAMPLE_CAP 轮（默认 200）：会话内事件按时间升序，从最新往回取。
+    let mut groups: std::collections::BTreeMap<(String, String), Vec<(String, serde_json::Value)>> =
         std::collections::BTreeMap::new();
     let mut sessions_scanned: u32 = 0;
-    for session in sessions.iter().take(limit) {
+    let mut turns_collected: usize = 0;
+    'sessions: for session in sessions.iter().take(limit) {
         let events = match store.list_events(&session.id) {
             Ok(events) => events,
             Err(_) => return service_error("DIAGNOSTICS_OPERATION_FAILED", "无法读取会话事件"),
         };
-        if events.iter().any(|event| event.kind == "turn_meta") {
+        let turn_metas: Vec<serde_json::Value> = events
+            .iter()
+            .filter(|event| event.kind == "turn_meta")
+            .filter_map(|event| serde_json::from_str(&event.payload).ok())
+            .collect();
+        if !turn_metas.is_empty() {
             sessions_scanned += 1;
         }
-        for event in events.iter().filter(|event| event.kind == "turn_meta") {
-            if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&event.payload) {
-                summaries
-                    .entry(session.voice_route_id.clone())
-                    .or_default()
-                    .push((session.id.clone(), meta));
+        for meta in turn_metas.iter().rev() {
+            if turns_collected >= TURN_SAMPLE_CAP {
+                break 'sessions;
             }
+            let mode = meta
+                .get("latencyMode")
+                .and_then(|value| value.as_str())
+                .unwrap_or("realtime")
+                .to_owned();
+            groups
+                .entry((session.voice_route_id.clone(), mode))
+                .or_default()
+                .push((session.id.clone(), meta.clone()));
+            turns_collected += 1;
         }
     }
-    let routes = summaries
+    let routes = groups
         .into_iter()
-        .map(|(route_id, metas)| summarize_route(&route_id, &route_label(&route_id), &metas))
+        .map(|((route_id, mode), metas)| {
+            summarize_route(&route_id, &mode, &route_label(&route_id), &metas)
+        })
         .collect();
     CommandResult::Ok {
         data: DiagnosticsLatencySummary {
@@ -697,11 +713,32 @@ pub fn diagnostics_latency_summary_blocking(
     }
 }
 
-/// 单线路汇总：样本数、首响最近秩百分位、每会话最大入口丢帧之和。
-/// `ingressDropped` 在写入侧是会话内累计值，逐轮求和会重复计数，
-/// 因此按会话取最大值后再按线路求和。
+/// 分阶段汇总覆盖的时间线字段（固定顺序 = 时间线字段声明序）。
+const TIMELINE_STAGE_FIELDS: [&str; 13] = [
+    "speechStartedMs",
+    "speechStoppedMs",
+    "transcriptDoneMs",
+    "responseCreatedMs",
+    "asrDoneMs",
+    "retrievalDoneMs",
+    "llmFirstTokenMs",
+    "llmDoneMs",
+    "firstAudioMs",
+    "ttsDoneMs",
+    "responseDoneMs",
+    "playbackStartedMs",
+    "playbackDoneMs",
+];
+
+/// 汇总统计覆盖的最近轮数上限（跨会话全局计）。
+const TURN_SAMPLE_CAP: usize = 200;
+
+/// 单线路单模式汇总：样本数、首响最近秩百分位、分阶段百分位、
+/// 每会话最大入口丢帧之和。`ingressDropped` 在写入侧是会话内累计值，
+/// 逐轮求和会重复计数，因此按会话取最大值后再按线路求和。
 fn summarize_route(
     route_id: &str,
+    mode: &str,
     route_label: &str,
     metas: &[(String, serde_json::Value)],
 ) -> crate::contracts::RouteLatencySummary {
@@ -713,6 +750,29 @@ fn summarize_route(
         })
         .collect();
     latencies.sort_by(|a, b| a.total_cmp(b));
+    let stages = TIMELINE_STAGE_FIELDS
+        .iter()
+        .filter_map(|stage| {
+            let mut values: Vec<f64> = metas
+                .iter()
+                .filter_map(|(_, meta)| {
+                    meta.get("timeline")
+                        .and_then(|timeline| timeline.get(stage))
+                        .and_then(|value| value.as_f64())
+                })
+                .collect();
+            if values.is_empty() {
+                return None;
+            }
+            values.sort_by(|a, b| a.total_cmp(b));
+            Some(crate::contracts::StageLatencySummary {
+                stage: (*stage).to_owned(),
+                samples: values.len() as u32,
+                p50_ms: nearest_rank_percentile(&values, 50.0),
+                p95_ms: nearest_rank_percentile(&values, 95.0),
+            })
+        })
+        .collect();
     let mut dropped_by_session: std::collections::HashMap<&str, u64> =
         std::collections::HashMap::new();
     for (session_id, meta) in metas {
@@ -728,9 +788,11 @@ fn summarize_route(
     crate::contracts::RouteLatencySummary {
         route_id: route_id.to_owned(),
         route_label: route_label.to_owned(),
+        mode: mode.to_owned(),
         samples: metas.len() as u32,
         p50_ms: nearest_rank_percentile(&latencies, 50.0),
         p95_ms: nearest_rank_percentile(&latencies, 95.0),
+        stages,
         ingress_dropped_total: dropped_by_session.values().sum::<u64>() as u32,
     }
 }
@@ -786,7 +848,8 @@ mod latency_summary_tests {
                 serde_json::json!({"latencyMsFirstAudio":null,"ingressDropped":2}),
             ),
         ];
-        let summary = summarize_route("route-1", "线路一", &metas);
+        let summary = summarize_route("route-1", "realtime", "线路一", &metas);
+        assert_eq!(summary.mode, "realtime");
         assert_eq!(summary.samples, 3);
         // n=2 非空样本 [100,200]：p50 → 第 1 个? ceil(0.5·2)=1 → 100；p95 → ceil(0.95·2)=2 → 200。
         assert_eq!(summary.p50_ms, Some(100.0));
@@ -807,7 +870,8 @@ mod latency_summary_tests {
                 serde_json::json!({"latencyMsFirstAudio":null,"ingressDropped":7}),
             ),
         ];
-        let summary = summarize_route("route-1", "线路一", &metas);
+        let summary = summarize_route("route-1", "cascade", "线路一", &metas);
+        assert_eq!(summary.mode, "cascade");
         assert_eq!(summary.samples, 2);
         assert_eq!(summary.p50_ms, None);
         assert_eq!(summary.p95_ms, None);
@@ -821,8 +885,71 @@ mod latency_summary_tests {
             "s1".to_owned(),
             serde_json::json!({"latencyMsFirstAudio":50}),
         )];
-        let summary = summarize_route("route-x", "route-x", &metas);
+        let summary = summarize_route("route-x", "realtime", "route-x", &metas);
         assert_eq!(summary.route_label, "route-x");
         assert_eq!(summary.p50_ms, Some(50.0));
+    }
+
+    #[test]
+    fn stage_summary_absent_for_zero_samples_and_exact_for_one() {
+        // 0 个样本：阶段不出现在列表；1 个样本：p50 = p95 = 该样本。
+        let metas = vec![(
+            "s1".to_owned(),
+            serde_json::json!({"timeline": {"asrDoneMs": 42}}),
+        )];
+        let summary = summarize_route("route-1", "cascade", "线路一", &metas);
+        assert!(summary.stages.iter().all(|stage| stage.stage != "llmDoneMs"));
+        let asr = summary
+            .stages
+            .iter()
+            .find(|stage| stage.stage == "asrDoneMs")
+            .expect("asr stage present");
+        assert_eq!(asr.samples, 1);
+        assert_eq!(asr.p50_ms, Some(42.0));
+        assert_eq!(asr.p95_ms, Some(42.0));
+    }
+
+    #[test]
+    fn stage_summary_nearest_rank_for_two_samples_and_skips_nulls() {
+        // 2 个样本 [100,200]：p50 → ceil(0.5·2)=1 → 100；p95 → ceil(0.95·2)=2 → 200。
+        // null 样本不计入样本数。
+        let metas = vec![
+            (
+                "s1".to_owned(),
+                serde_json::json!({"timeline": {"ttsDoneMs": 100}}),
+            ),
+            (
+                "s2".to_owned(),
+                serde_json::json!({"timeline": {"ttsDoneMs": 200}}),
+            ),
+            (
+                "s3".to_owned(),
+                serde_json::json!({"timeline": {"ttsDoneMs": null}}),
+            ),
+        ];
+        let summary = summarize_route("route-1", "cascade", "线路一", &metas);
+        let tts = summary
+            .stages
+            .iter()
+            .find(|stage| stage.stage == "ttsDoneMs")
+            .expect("tts stage present");
+        assert_eq!(tts.samples, 2);
+        assert_eq!(tts.p50_ms, Some(100.0));
+        assert_eq!(tts.p95_ms, Some(200.0));
+    }
+
+    #[test]
+    fn stages_keep_declaration_order() {
+        let metas = vec![(
+            "s1".to_owned(),
+            serde_json::json!({"timeline": {"ttsDoneMs": 30, "asrDoneMs": 10, "llmDoneMs": 20}}),
+        )];
+        let summary = summarize_route("route-1", "cascade", "线路一", &metas);
+        let stages: Vec<&str> = summary
+            .stages
+            .iter()
+            .map(|stage| stage.stage.as_str())
+            .collect();
+        assert_eq!(stages, ["asrDoneMs", "llmDoneMs", "ttsDoneMs"]);
     }
 }

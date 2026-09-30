@@ -59,16 +59,32 @@ pub struct DiagnosticsExportResult {
     pub exported: bool,
 }
 
-/// 单条语音线路的首响延迟与入口丢帧汇总（只读诊断）。
+/// 单阶段的最近秩百分位汇总（只读诊断）。
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct StageLatencySummary {
+    /// 时间线字段名（camelCase，如 `asrDoneMs`）。
+    pub stage: String,
+    pub samples: u32,
+    pub p50_ms: Option<f64>,
+    pub p95_ms: Option<f64>,
+}
+
+/// 单条语音线路在单一模式下的首响延迟、分阶段百分位与入口丢帧汇总（只读诊断）。
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
 pub struct RouteLatencySummary {
     pub route_id: String,
     pub route_label: String,
+    /// "cascade" | "realtime"（旧记录缺 latencyMode 时归一为 realtime）。
+    pub mode: String,
     pub samples: u32,
     pub p50_ms: Option<f64>,
     pub p95_ms: Option<f64>,
+    /// 有样本的阶段才出现在列表内，顺序固定（时间线字段声明序）。
+    pub stages: Vec<StageLatencySummary>,
     pub ingress_dropped_total: u32,
 }
 
@@ -385,6 +401,7 @@ fn generated_bindings() -> String {
         SecretStatus::decl(&config),
         DiagnosticsExportResult::decl(&config),
         DiagnosticsLatencySummary::decl(&config),
+        StageLatencySummary::decl(&config),
         RouteLatencySummary::decl(&config),
         StartupState::decl(&config),
         crate::migrate::LegacyMigrationStatus::decl(&config),
@@ -560,6 +577,7 @@ mod tests {
             "SessionCitationView",
             "TurnTimeline",
             "TurnLatencyView",
+            "StageLatencySummary",
             "SessionTranscriptEvent",
             "SessionReplyEvent",
             "SessionPlaybackControlEvent",

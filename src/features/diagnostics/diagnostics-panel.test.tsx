@@ -18,8 +18,26 @@ function deferred<T>() {
 const summary: DiagnosticsLatencySummary = {
   sessionsScanned: 12,
   routes: [
-    { routeId: "route-1", routeLabel: "阿里云实时", samples: 8, p50Ms: 320, p95Ms: 780, ingressDroppedTotal: 3 },
-    { routeId: "route-2", routeLabel: "级联线路", samples: 4, p50Ms: null, p95Ms: null, ingressDroppedTotal: 0 },
+    {
+      routeId: "route-1",
+      routeLabel: "阿里云实时",
+      mode: "realtime",
+      samples: 8,
+      p50Ms: 320,
+      p95Ms: 780,
+      stages: [{ stage: "firstAudioMs", samples: 8, p50Ms: 320, p95Ms: 780 }],
+      ingressDroppedTotal: 3,
+    },
+    {
+      routeId: "route-2",
+      routeLabel: "级联线路",
+      mode: "cascade",
+      samples: 4,
+      p50Ms: null,
+      p95Ms: null,
+      stages: [],
+      ingressDroppedTotal: 0,
+    },
   ],
 };
 
