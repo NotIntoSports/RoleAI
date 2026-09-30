@@ -3,6 +3,7 @@ import { Download, RefreshCw, Sparkles } from "lucide-react";
 
 import * as api from "../../api/commands";
 import { errorNoticeText as errorText } from "../../components/error-notice";
+import { t, useT, type DictionaryStringKey } from "../../i18n";
 import type { PracticeDimensions, PracticeReport } from "../../generated/bindings";
 import { formatDuration } from "../session/workspace-format";
 
@@ -14,11 +15,11 @@ import { formatDuration } from "../session/workspace-format";
  * 显示客观指标并允许重试（后端按同 sessionId 覆盖保存）。
  */
 
-const DIMENSION_LABELS: Array<{ key: keyof PracticeDimensions; label: string }> = [
-  { key: "contentDepth", label: "内容深度" },
-  { key: "structureClarity", label: "结构清晰" },
-  { key: "fluency", label: "表达流畅" },
-  { key: "jobFit", label: "岗位匹配" },
+const DIMENSION_LABELS: Array<{ key: keyof PracticeDimensions; labelKey: DictionaryStringKey }> = [
+  { key: "contentDepth", labelKey: "practice.report.dimensions.contentDepth" },
+  { key: "structureClarity", labelKey: "practice.report.dimensions.structureClarity" },
+  { key: "fluency", labelKey: "practice.report.dimensions.fluency" },
+  { key: "jobFit", labelKey: "practice.report.dimensions.jobFit" },
 ];
 
 function clampScore(value: number): number {
@@ -33,6 +34,7 @@ function formatScore(value: number): string {
 
 /** 四维雷达图：手写 SVG（约百行），分数 0~5 映射到半径。 */
 export function PracticeRadarChart({ dimensions }: { dimensions: PracticeDimensions }) {
+  useT();
   const width = 320;
   const height = 220;
   const center: [number, number] = [160, 104];
@@ -54,6 +56,7 @@ export function PracticeRadarChart({ dimensions }: { dimensions: PracticeDimensi
     [0, 20],
     [-14, 4],
   ];
+  const dimensionTexts = DIMENSION_LABELS.map(({ labelKey }, index) => `${t(labelKey)} ${formatScore(values[index])}`);
   return (
     <svg
       className="practice-radar"
@@ -61,7 +64,7 @@ export function PracticeRadarChart({ dimensions }: { dimensions: PracticeDimensi
       width={width}
       height={height}
       role="img"
-      aria-label={`维度雷达图：${DIMENSION_LABELS.map(({ label }, index) => `${label} ${formatScore(values[index])}`).join("，")}`}
+      aria-label={t("practice.report.radarAria", { items: dimensionTexts.join("，") })}
     >
       {[1, 2, 3, 4, 5].map((level) => (
         <polygon key={level} points={ring(level / 5)} fill="none" stroke="var(--border)" strokeWidth={level === 5 ? 1.5 : 1} />
@@ -75,13 +78,13 @@ export function PracticeRadarChart({ dimensions }: { dimensions: PracticeDimensi
         const [x, y] = point(axis, value / 5);
         return <circle key={axis} cx={x} cy={y} r={2.5} fill="var(--accent-strong)" />;
       })}
-      {DIMENSION_LABELS.map(({ label }, axis) => {
+      {DIMENSION_LABELS.map(({ labelKey }, axis) => {
         const [x, y] = point(axis, 1);
         const [dx, dy] = labelOffset[axis];
         const anchor = axis === 0 || axis === 2 ? "middle" : axis === 1 ? "start" : "end";
         return (
-          <text key={label} x={x + dx} y={y + dy} textAnchor={anchor} fontSize={11} fill="var(--text-muted)">
-            {label} {formatScore(values[axis])}
+          <text key={labelKey} x={x + dx} y={y + dy} textAnchor={anchor} fontSize={11} fill="var(--text-muted)">
+            {t(labelKey)} {formatScore(values[axis])}
           </text>
         );
       })}
@@ -105,65 +108,67 @@ function aggregateSpeechRate(report: PracticeReport): Aggregate {
 }
 
 function ObjectiveCard({ report }: { report: PracticeReport }) {
+  useT();
   const { objective } = report;
   const rate = aggregateSpeechRate(report);
   const fillers = objective.topFillers.slice(0, 5);
   return (
-    <div className="practice-objective" aria-label="客观指标">
-      <h4>客观指标（本地计算）</h4>
+    <div className="practice-objective" aria-label={t("practice.report.objectiveAria")}>
+      <h4>{t("practice.report.objectiveHeading")}</h4>
       <ul className="practice-objective-list">
         <li>
-          语速：
+          {t("practice.report.speechRateLabel")}
           {rate.chinesePerMinute !== null
-            ? `约 ${Math.round(rate.chinesePerMinute)} 字/分钟（各次回答平均）`
+            ? t("practice.report.speechRateChars", { n: Math.round(rate.chinesePerMinute) })
             : rate.englishPerMinute !== null
-              ? `约 ${Math.round(rate.englishPerMinute)} 词/分钟（各次回答平均）`
-              : "时间信息不足，暂不可用"}
+              ? t("practice.report.speechRateWords", { n: Math.round(rate.englishPerMinute) })
+              : t("practice.report.timeUnavailable")}
         </li>
         <li>
-          口头禅 Top5：
+          {t("practice.report.fillersTop5")}
           {fillers.length > 0
             ? fillers.map((hit) => `${hit.word} ×${hit.count}`).join("、")
-            : "未检测到口头禅"}
+            : t("practice.report.noFillers")}
         </li>
         <li>
-          时长分布：
+          {t("practice.report.durationSummaryLabel")}
           {objective.totalDurationSeconds !== null && objective.averageAnswerSeconds !== null
-            ? `总 ${formatDuration(Math.round(objective.totalDurationSeconds))} · 平均每次 ${formatDuration(Math.round(objective.averageAnswerSeconds))}`
-            : "时间信息不足，暂不可用"}
+            ? t("practice.report.durationSummary", { total: formatDuration(Math.round(objective.totalDurationSeconds)), average: formatDuration(Math.round(objective.averageAnswerSeconds)) })
+            : t("practice.report.timeUnavailable")}
         </li>
-        {objective.longPauses !== null && <li>回答间长停顿：{objective.longPauses} 次</li>}
+        {objective.longPauses !== null && <li>{t("practice.report.longPauses", { n: objective.longPauses })}</li>}
       </ul>
-      <p className="muted practice-objective-note">客观指标由本地转写启发式计算，仅供练习参考。</p>
+      <p className="muted practice-objective-note">{t("practice.report.objectiveNote")}</p>
     </div>
   );
 }
 
 function QuestionCard({ review }: { review: PracticeReport["perQuestion"][number] }) {
+  useT();
   const score = clampScore(review.score);
   return (
     <li className="practice-review-card">
       <div className="practice-review-head">
-        <span className="practice-review-index">第 {review.index} 题</span>
+        <span className="practice-review-index">{t("practice.report.questionIndex", { n: review.index })}</span>
         <span className="practice-review-question">{review.question}</span>
         <span className="status-badge" data-tone={score > 0 ? "success" : undefined}>
-          {score > 0 ? `${formatScore(score)} / 5` : "未评"}
+          {score > 0 ? `${formatScore(score)} / 5` : t("practice.report.notScored")}
         </span>
       </div>
       <details className="practice-review-answer">
-        <summary>我的回答（原始转写）</summary>
-        <p>{review.answer || "（本轮没有候选人回答）"}</p>
+        <summary>{t("practice.report.myAnswerSummary")}</summary>
+        <p>{review.answer || t("practice.report.noAnswer")}</p>
       </details>
       {score > 0 && (
         <div className="practice-review-body">
           {review.strengths.length > 0 && (
-            <p><strong>优点：</strong>{review.strengths.join("；")}</p>
+            <p><strong>{t("practice.report.strengths")}</strong>{review.strengths.join("；")}</p>
           )}
           {review.issues.length > 0 && (
-            <p><strong>问题：</strong>{review.issues.join("；")}</p>
+            <p><strong>{t("practice.report.issues")}</strong>{review.issues.join("；")}</p>
           )}
           {review.modelAnswer && (
-            <p><strong>改进示范：</strong>{review.modelAnswer}</p>
+            <p><strong>{t("practice.report.modelAnswer")}</strong>{review.modelAnswer}</p>
           )}
         </div>
       )}
@@ -176,6 +181,7 @@ export interface PracticeReportViewProps {
 }
 
 export function PracticeReportView({ sessionId }: PracticeReportViewProps) {
+  useT();
   const [report, setReport] = useState<PracticeReport | null>(null);
   const [phase, setPhase] = useState<"loading" | "ready" | "missing" | "error">("loading");
   const [message, setMessage] = useState("");
@@ -200,7 +206,7 @@ export function PracticeReportView({ sessionId }: PracticeReportViewProps) {
     } catch {
       setReport(null);
       setPhase("error");
-      setMessage("IPC_UNAVAILABLE：无法读取训练报告");
+      setMessage(t("practice.report.ipcReadFailed"));
     }
   }, []);
 
@@ -222,7 +228,7 @@ export function PracticeReportView({ sessionId }: PracticeReportViewProps) {
         setMessage(errorText(result.error));
       }
     } catch {
-      setMessage("IPC_UNAVAILABLE：报告生成失败");
+      setMessage(t("practice.report.ipcGenerateFailed"));
     } finally {
       setBusy(false);
     }
@@ -234,12 +240,12 @@ export function PracticeReportView({ sessionId }: PracticeReportViewProps) {
     try {
       const result = await api.exportPracticeReport(sessionId, "markdown");
       if (result.ok) {
-        setMessage(`报告已导出：${result.data.path}`);
+        setMessage(t("practice.report.exported", { path: result.data.path }));
       } else {
         setMessage(errorText(result.error));
       }
     } catch {
-      setMessage("IPC_UNAVAILABLE：报告导出失败");
+      setMessage(t("practice.report.ipcExportFailed"));
     } finally {
       setBusy(false);
     }
@@ -252,50 +258,50 @@ export function PracticeReportView({ sessionId }: PracticeReportViewProps) {
           {message}
         </p>
       )}
-      {phase === "loading" && <p className="muted" role="status">正在读取训练报告…</p>}
-      {phase === "error" && <p className="muted">报告读取失败，可稍后重试。</p>}
+      {phase === "loading" && <p className="muted" role="status">{t("practice.report.reading")}</p>}
+      {phase === "error" && <p className="muted">{t("practice.report.loadFailed")}</p>}
       {phase === "missing" && (
         <div className="practice-report-missing">
-          <p className="muted">这次训练还没有报告。</p>
+          <p className="muted">{t("practice.report.missingTitle")}</p>
           <button className="button-primary" type="button" disabled={busy} onClick={() => void handleGenerate()}>
             <Sparkles size={15} aria-hidden="true" />
-            {busy ? "正在生成报告…" : "生成训练报告"}
+            {busy ? t("practice.report.generating") : t("practice.report.generate")}
           </button>
-          <p className="muted">生成调用你配置的模型服务；报告也可以稍后在历史中重新生成。</p>
+          <p className="muted">{t("practice.report.generateNote")}</p>
         </div>
       )}
       {phase === "ready" && report && (
-        <article className="practice-report" aria-label="训练报告详情">
+        <article className="practice-report" aria-label={t("practice.report.detailsAria")}>
           <header className="practice-report-head">
             <div>
               <h4 className="practice-report-title">
-                {report.position || "模拟面试训练"} · {report.interviewerStyle}
+                {report.position || t("practice.report.untitledPosition")} · {report.interviewerStyle}
               </h4>
               <p className="muted">
-                总分 {formatScore(report.totalScore)} / 5 · {report.createdAt.slice(0, 10)}
+                {t("practice.report.totalScore", { score: formatScore(report.totalScore) })} · {report.createdAt.slice(0, 10)}
               </p>
             </div>
             <div className="practice-report-actions">
               {!report.llmAvailable && (
                 <button className="button-ghost" type="button" disabled={busy} onClick={() => void handleGenerate()}>
                   <RefreshCw size={14} aria-hidden="true" />
-                  重试生成定性点评
+                  {t("practice.report.retryQualitative")}
                 </button>
               )}
               <button className="button-ghost" type="button" disabled={busy} onClick={() => void handleExport()}>
                 <Download size={14} aria-hidden="true" />
-                导出 Markdown
+                {t("practice.report.exportMarkdown")}
               </button>
             </div>
           </header>
           {!report.llmAvailable && (
             <p className="services-message" role="alert">
-              定性点评生成失败，可重试。以下为本地客观指标。
+              {t("practice.report.qualitativeFailed")}
             </p>
           )}
           {report.topSuggestions.length > 0 && (
-            <section className="practice-report-suggestions" aria-label="改进建议">
-              <h4>最重要的三条改进建议</h4>
+            <section className="practice-report-suggestions" aria-label={t("practice.report.suggestionsAria")}>
+              <h4>{t("practice.report.suggestionsHeading")}</h4>
               <ol>
                 {report.topSuggestions.map((suggestion) => (
                   <li key={suggestion}>{suggestion}</li>
@@ -307,15 +313,15 @@ export function PracticeReportView({ sessionId }: PracticeReportViewProps) {
             <PracticeRadarChart dimensions={report.dimensions} />
             <ObjectiveCard report={report} />
           </div>
-          <section className="practice-report-questions" aria-label="逐题点评">
-            <h4>逐题点评</h4>
+          <section className="practice-report-questions" aria-label={t("practice.report.perQuestionAria")}>
+            <h4>{t("practice.report.perQuestionHeading")}</h4>
             <ul>
               {report.perQuestion.map((review) => (
                 <QuestionCard key={review.index} review={review} />
               ))}
             </ul>
           </section>
-          <footer className="practice-report-disclaimer">评分由 AI 生成，仅供练习参考</footer>
+          <footer className="practice-report-disclaimer">{t("practice.report.disclaimer")}</footer>
         </article>
       )}
     </div>

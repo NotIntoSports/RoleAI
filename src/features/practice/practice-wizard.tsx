@@ -5,18 +5,46 @@ import { ClipboardList, FileText, FolderOpen, Play, Sparkles, Trash2 } from "luc
 import * as api from "../../api/commands";
 import { EmptyState } from "../../components/empty-state";
 import { errorNoticeText as errorText } from "../../components/error-notice";
+import { t, useT, type DictionaryStringKey } from "../../i18n";
 import type { MaterialSummary, PracticePlan, PracticeQuestion } from "../../generated/bindings";
 import "../../styles/practice.css";
 
-const WIZARD_STEPS = ["岗位与资料", "面试官风格", "题量与时长", "预览并编辑题单"] as const;
+const WIZARD_STEPS: Array<{ id: string; labelKey: DictionaryStringKey }> = [
+  { id: "setup", labelKey: "practice.wizard.steps.setup" },
+  { id: "style", labelKey: "practice.wizard.steps.style" },
+  { id: "config", labelKey: "practice.wizard.steps.config" },
+  { id: "preview", labelKey: "practice.wizard.steps.preview" },
+];
 
+// 注意：value 是后端契约（generatePracticePlan interviewerStyle），必须保持原样；
+// 界面显示用 labelKey/hintKey 本地化。
 const INTERVIEWER_STYLES = [
-  { value: "面试官", hint: "常规面试：围绕岗位要求与项目经历提问。" },
-  { value: "HR", hint: "行为面试：考察动机、协作与稳定性。" },
-  { value: "严苛面试官", hint: "高压追问：直指薄弱点，考察临场应变。" },
+  { value: "面试官", labelKey: "practice.wizard.styles.interviewer.label", hintKey: "practice.wizard.styles.interviewer.hint" },
+  { value: "HR", labelKey: "practice.wizard.styles.hr.label", hintKey: "practice.wizard.styles.hr.hint" },
+  { value: "严苛面试官", labelKey: "practice.wizard.styles.strict.label", hintKey: "practice.wizard.styles.strict.hint" },
 ] as const;
 
+type InterviewerStyleValue = (typeof INTERVIEWER_STYLES)[number]["value"];
+
+// 同样：difficulty 值是后端契约，显示用 difficulties 字典。
 const DIFFICULTIES = ["基础", "标准", "进阶"] as const;
+
+type DifficultyValue = (typeof DIFFICULTIES)[number];
+
+const DIFFICULTY_LABEL_KEYS: Record<DifficultyValue, DictionaryStringKey> = {
+  基础: "practice.wizard.difficulties.basic",
+  标准: "practice.wizard.difficulties.standard",
+  进阶: "practice.wizard.difficulties.advanced",
+};
+
+function styleLabelKey(value: string): DictionaryStringKey | null {
+  return INTERVIEWER_STYLES.find((style) => style.value === value)?.labelKey ?? null;
+}
+
+function difficultyLabel(value: string): string {
+  const key = DIFFICULTY_LABEL_KEYS[value as DifficultyValue];
+  return key ? t(key) : value;
+}
 
 const MIN_QUESTIONS = 1;
 const MAX_QUESTIONS = 12;
@@ -29,6 +57,7 @@ interface PracticeWizardProps {
 }
 
 export function PracticeWizard({ materialsLink = "/materials" }: PracticeWizardProps = {}) {
+  useT();
   const [, navigate] = useLocation();
   const [step, setStep] = useState(0);
   const [position, setPosition] = useState("");
@@ -56,7 +85,7 @@ export function PracticeWizard({ materialsLink = "/materials" }: PracticeWizardP
         setMaterialsState("error");
       }
     } catch {
-      setMessage("IPC_UNAVAILABLE：无法读取本地资料");
+      setMessage(t("practice.wizard.ipcMaterialsFailed"));
       setMaterialsState("error");
     }
   }, []);
@@ -109,7 +138,7 @@ export function PracticeWizard({ materialsLink = "/materials" }: PracticeWizardP
         setMessage(errorText(result.error));
       }
     } catch {
-      setMessage("IPC_UNAVAILABLE：题单生成失败");
+      setMessage(t("practice.wizard.ipcGenerateFailed"));
     } finally {
       setBusy(false);
     }
@@ -119,7 +148,7 @@ export function PracticeWizard({ materialsLink = "/materials" }: PracticeWizardP
     event.preventDefault();
     if (!plan) return;
     if (!planEditable) {
-      setMessage("题单至少保留 1 道题目，且每道题面不能为空。");
+      setMessage(t("practice.wizard.planInvalid"));
       return;
     }
     setBusy(true);
@@ -134,7 +163,7 @@ export function PracticeWizard({ materialsLink = "/materials" }: PracticeWizardP
         setMessage(errorText(result.error));
       }
     } catch {
-      setMessage("IPC_UNAVAILABLE：题单保存失败");
+      setMessage(t("practice.wizard.ipcSaveFailed"));
     } finally {
       setBusy(false);
     }
@@ -144,7 +173,7 @@ export function PracticeWizard({ materialsLink = "/materials" }: PracticeWizardP
   async function handleStartTraining() {
     if (!plan) return;
     if (!planEditable) {
-      setMessage("题单至少保留 1 道题目，且每道题面不能为空。");
+      setMessage(t("practice.wizard.planInvalid"));
       return;
     }
     setBusy(true);
@@ -165,12 +194,12 @@ export function PracticeWizard({ materialsLink = "/materials" }: PracticeWizardP
         return;
       }
       if (result.data.kind === "blocked") {
-        setMessage(result.data.issues[0]?.code ?? "会话未就绪，请先在工作台完成会话配置。");
+        setMessage(result.data.issues[0]?.code ?? t("practice.wizard.notReadyFallback"));
         return;
       }
       navigate("/");
     } catch {
-      setMessage("IPC_UNAVAILABLE：训练启动失败");
+      setMessage(t("practice.wizard.ipcStartFailed"));
     } finally {
       setBusy(false);
     }
@@ -179,18 +208,18 @@ export function PracticeWizard({ materialsLink = "/materials" }: PracticeWizardP
   return (
     <section className="service-panel practice-wizard" aria-labelledby="practice-wizard-heading">
       <div className="library-heading">
-        <h2 id="practice-wizard-heading">训练准备</h2>
-        <span className="muted">第 {step + 1} 步，共 {WIZARD_STEPS.length} 步</span>
+        <h2 id="practice-wizard-heading">{t("practice.wizard.heading")}</h2>
+        <span className="muted">{t("practice.wizard.stepCounter", { n: step + 1, total: WIZARD_STEPS.length })}</span>
       </div>
-      <ol className="practice-steps" aria-label="向导步骤">
-        {WIZARD_STEPS.map((label, index) => (
+      <ol className="practice-steps" aria-label={t("practice.wizard.stepsAria")}>
+        {WIZARD_STEPS.map(({ id, labelKey }, index) => (
           <li
-            key={label}
+            key={id}
             data-current={index === step ? "true" : undefined}
             data-done={index < step ? "true" : undefined}
             aria-current={index === step ? "step" : undefined}
           >
-            {label}
+            {t(labelKey)}
           </li>
         ))}
       </ol>
@@ -201,63 +230,63 @@ export function PracticeWizard({ materialsLink = "/materials" }: PracticeWizardP
       )}
 
       {step === 0 && (
-        <div className="practice-step-panel" aria-label="岗位与资料">
+        <div className="practice-step-panel" aria-label={t("practice.wizard.steps.setup")}>
           <form className="service-form" onSubmit={(event) => { event.preventDefault(); if (positionValid) setStep(1); }}>
             <label>
-              岗位方向
+              {t("practice.wizard.positionLabel")}
               <input
                 value={position}
-                placeholder="例如：后端开发工程师"
+                placeholder={t("practice.wizard.positionPlaceholder")}
                 maxLength={80}
                 onChange={(event) => setPosition(event.target.value)}
               />
             </label>
-            {materialsState === "loading" && <p className="muted" role="status">正在读取本地资料…</p>}
+            {materialsState === "loading" && <p className="muted" role="status">{t("practice.wizard.materialsLoading")}</p>}
             {materialsState === "error" && (
-              <p className="muted">资料列表读取失败，可稍后在资料页重试；不选资料也能按岗位方向出题。</p>
+              <p className="muted">{t("practice.wizard.materialsError")}</p>
             )}
             {materialsState === "ready" && materials.length === 0 && (
               <EmptyState
                 className="practice-empty"
                 icon={<FolderOpen size={28} aria-hidden="true" />}
-                title="还没有资料。"
-                hint="导入岗位 JD 和个人简历，题单会更贴合你的目标。"
+                title={t("practice.wizard.emptyMaterialsTitle")}
+                hint={t("practice.wizard.emptyMaterialsHint")}
               />
             )}
             {materials.length > 0 && (
               <>
                 <label>
-                  岗位 JD（可选）
+                  {t("practice.wizard.jdLabel")}
                   <select value={jdMaterialId} onChange={(event) => setJdMaterialId(event.target.value)}>
-                    <option value="">不使用</option>
+                    <option value="">{t("practice.wizard.notUsed")}</option>
                     {materials.map((item) => (
                       <option key={item.id} value={item.id}>{item.fileName}</option>
                     ))}
                   </select>
                 </label>
                 <label>
-                  个人简历（可选）
+                  {t("practice.wizard.resumeLabel")}
                   <select value={resumeMaterialId} onChange={(event) => setResumeMaterialId(event.target.value)}>
-                    <option value="">不使用</option>
+                    <option value="">{t("practice.wizard.notUsed")}</option>
                     {materials.map((item) => (
                       <option key={item.id} value={item.id}>{item.fileName}</option>
                     ))}
                   </select>
                 </label>
                 <p className="muted practice-hint">
-                  没有合适的资料？<Link href={materialsLink}>去资料页导入 JD 或简历</Link>。
+                  {t("practice.wizard.materialsHintBefore")}<Link href={materialsLink}>{t("practice.wizard.materialsCtaLink")}</Link>{t("practice.wizard.materialsHintAfter")}
                 </p>
               </>
             )}
             {materials.length === 0 && materialsState === "ready" && (
               <p className="muted practice-hint">
-                <Link href={materialsLink}>去资料页导入 JD 或简历</Link>（可稍后再补，先按岗位方向出题也可以）。
+                <Link href={materialsLink}>{t("practice.wizard.materialsCtaLink")}</Link>{t("practice.wizard.materialsDeferredHintAfter")}
               </p>
             )}
             <div className="service-actions practice-nav">
               <span />
               <button className="button-primary" type="submit" disabled={!positionValid}>
-                下一步
+                {t("practice.wizard.next")}
               </button>
             </div>
           </form>
@@ -265,9 +294,9 @@ export function PracticeWizard({ materialsLink = "/materials" }: PracticeWizardP
       )}
 
       {step === 1 && (
-        <div className="practice-step-panel" aria-label="面试官风格">
+        <div className="practice-step-panel" aria-label={t("practice.wizard.steps.style")}>
           <fieldset className="practice-style-group">
-            <legend>选择一位 AI 面试官</legend>
+            <legend>{t("practice.wizard.stylesLegend")}</legend>
             {INTERVIEWER_STYLES.map((style) => (
               <label key={style.value} className="practice-style-option">
                 <input
@@ -277,27 +306,27 @@ export function PracticeWizard({ materialsLink = "/materials" }: PracticeWizardP
                   checked={interviewerStyle === style.value}
                   onChange={() => setInterviewerStyle(style.value)}
                 />
-                <span className="practice-style-name">{style.value}</span>
-                <span className="muted">{style.hint}</span>
+                <span className="practice-style-name">{t(style.labelKey)}</span>
+                <span className="muted">{t(style.hintKey)}</span>
               </label>
             ))}
           </fieldset>
           <div className="service-actions practice-nav">
             <button className="button-ghost" type="button" onClick={() => setStep(0)}>
-              上一步
+              {t("practice.wizard.prev")}
             </button>
             <button className="button-primary" type="button" onClick={() => setStep(2)}>
-              下一步
+              {t("practice.wizard.next")}
             </button>
           </div>
         </div>
       )}
 
       {step === 2 && (
-        <div className="practice-step-panel" aria-label="题量与时长">
+        <div className="practice-step-panel" aria-label={t("practice.wizard.steps.config")}>
           <form className="service-form" onSubmit={(event) => { event.preventDefault(); setStep(3); }}>
             <label>
-              题量（1~{MAX_QUESTIONS} 题）
+              {t("practice.wizard.questionCountLabel", { max: MAX_QUESTIONS })}
               <input
                 type="number"
                 min={MIN_QUESTIONS}
@@ -310,22 +339,22 @@ export function PracticeWizard({ materialsLink = "/materials" }: PracticeWizardP
               />
             </label>
             <label>
-              难度
+              {t("practice.wizard.difficultyLabel")}
               <select value={difficulty} onChange={(event) => setDifficulty(event.target.value)}>
                 {DIFFICULTIES.map((item) => (
-                  <option key={item} value={item}>{item}</option>
+                  <option key={item} value={item}>{difficultyLabel(item)}</option>
                 ))}
               </select>
             </label>
             <p className="muted practice-hint">
-              按每题 3~5 分钟估算，本轮训练预计约 {estimatedMinutes} 分钟（以实际对练节奏为准）。
+              {t("practice.wizard.estimatedHint", { range: estimatedMinutes })}
             </p>
             <div className="service-actions practice-nav">
               <button className="button-ghost" type="button" onClick={() => setStep(1)}>
-                上一步
+                {t("practice.wizard.prev")}
               </button>
               <button className="button-primary" type="submit">
-                下一步
+                {t("practice.wizard.next")}
               </button>
             </div>
           </form>
@@ -333,18 +362,18 @@ export function PracticeWizard({ materialsLink = "/materials" }: PracticeWizardP
       )}
 
       {step === 3 && (
-        <div className="practice-step-panel" aria-label="预览并编辑题单">
+        <div className="practice-step-panel" aria-label={t("practice.wizard.steps.preview")}>
           {!plan && (
             <div className="practice-generate">
               <p>
-                岗位：<strong>{position.trim()}</strong>
-                <span className="muted"> · 风格：{interviewerStyle} · 难度：{difficulty} · {questionCount} 题</span>
+                {t("practice.wizard.positionPrefix")}<strong>{position.trim()}</strong>
+                <span className="muted">{t("practice.wizard.styleSummary", { style: styleLabelKey(interviewerStyle) ? t(styleLabelKey(interviewerStyle)!) : interviewerStyle, difficulty: difficultyLabel(difficulty), n: questionCount })}</span>
               </p>
               <button className="button-primary" type="button" disabled={busy} onClick={() => void handleGenerate()}>
                 <Sparkles size={16} aria-hidden="true" />
-                {busy ? "正在生成题单…" : "生成题单"}
+                {busy ? t("practice.wizard.generating") : t("practice.wizard.generate")}
               </button>
-              <p className="muted">生成调用你配置的模型服务；生成后可以逐题编辑再保存。</p>
+              <p className="muted">{t("practice.wizard.generateNote")}</p>
             </div>
           )}
           {plan && (
@@ -354,7 +383,7 @@ export function PracticeWizard({ materialsLink = "/materials" }: PracticeWizardP
                   <ClipboardList size={16} aria-hidden="true" />
                   {plan.title}
                 </h3>
-                <span className="muted">{plan.questions.length} 道题</span>
+                <span className="muted">{t("practice.wizard.questionCountSuffix", { n: plan.questions.length })}</span>
               </div>
               <ol className="practice-question-list">
                 {plan.questions.map((question, index) => (
@@ -370,7 +399,7 @@ export function PracticeWizard({ materialsLink = "/materials" }: PracticeWizardP
               </ol>
               <div className="service-actions practice-nav">
                 <button className="button-ghost" type="button" disabled={busy} onClick={() => void handleGenerate()}>
-                  重新生成
+                  {t("practice.wizard.regenerate")}
                 </button>
                 <span className="practice-nav-group">
                   <button
@@ -380,14 +409,14 @@ export function PracticeWizard({ materialsLink = "/materials" }: PracticeWizardP
                     onClick={() => void handleStartTraining()}
                   >
                     <Play size={14} aria-hidden="true" />
-                    开始训练
+                    {t("practice.wizard.startTraining")}
                   </button>
                   <button className="button-primary" type="submit" disabled={busy || !planEditable}>
-                    {saved ? "已保存" : "保存题单"}
+                    {saved ? t("practice.wizard.saved") : t("practice.wizard.save")}
                   </button>
                 </span>
               </div>
-              {saved && <p className="muted" role="status">题单已保存，可直接开始训练。</p>}
+              {saved && <p className="muted" role="status">{t("practice.wizard.savedNote")}</p>}
             </form>
           )}
         </div>
@@ -409,15 +438,15 @@ function QuestionRow({ index, question, busy, onPromptChange, onRemove }: Questi
     <li className="practice-question-row">
       <div className="practice-question-head">
         <FileText size={15} aria-hidden="true" />
-        <span className="muted">第 {index + 1} 题</span>
+        <span className="muted">{t("practice.wizard.questionLabel", { n: index + 1 })}</span>
         {question.focus && <span className="status-badge">{question.focus}</span>}
-        <button className="button-ghost practice-question-remove" type="button" disabled={busy} aria-label={`删除第 ${index + 1} 题`} onClick={onRemove}>
+        <button className="button-ghost practice-question-remove" type="button" disabled={busy} aria-label={t("practice.wizard.deleteQuestionAria", { n: index + 1 })} onClick={onRemove}>
           <Trash2 size={14} aria-hidden="true" />
-          删除
+          {t("practice.wizard.delete")}
         </button>
       </div>
       <label className="practice-question-prompt">
-        <span className="muted">第 {index + 1} 题题面</span>
+        <span className="muted">{t("practice.wizard.questionPromptLabel", { n: index + 1 })}</span>
         <textarea
           value={question.prompt}
           rows={2}
@@ -426,10 +455,10 @@ function QuestionRow({ index, question, busy, onPromptChange, onRemove }: Questi
         />
       </label>
       {question.expectedPoints.length > 0 && (
-        <p className="muted practice-question-points">期望要点：{question.expectedPoints.join("、")}</p>
+        <p className="muted practice-question-points">{t("practice.wizard.expectedPoints", { points: question.expectedPoints.join("、") })}</p>
       )}
       {question.followups.length > 0 && (
-        <p className="muted practice-question-points">可能追问：{question.followups.join("、")}</p>
+        <p className="muted practice-question-points">{t("practice.wizard.followups", { points: question.followups.join("、") })}</p>
       )}
     </li>
   );
