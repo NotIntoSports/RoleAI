@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-import type { AgentCommandInput, AgentCommandResult, CommandResult, DiagnosticsLatencySummary, DiagnosticsExportResult, EmbeddingConfig, EmbeddingConfigSaveInput, EmbeddingTestResult, FoundationStatus, LegacyMigrationStatus, LegacySessionImport, LivestreamDraftInput, LivestreamGenerateInput, LivestreamRuntime, MaterialIndexResult, MaterialSearchHit, MaterialSummary, MicPcmAcceptance, ModelDiscoveryResult, ObsRuntimeStatus, PracticePlan, PracticePlanGenerateInput, PracticePlanSummary, PracticeProgress, PracticeQuestionReview, PracticeReport, PracticeReportSummary, PracticeSessionStartInput, ProviderConfig, ProviderSaveInput, ProviderTestResult, PublicConfig, RoleProfileConfig, RoleProfileCopyInput, RoleProfileSaveInput, RuntimeStatus, SecretStatus, SessionDetail, SessionExportResult, SessionStartResult, SessionSummary, SessionTurnView, StartupState, VideoFrameAcceptance, VoiceReferenceAudioSaveInput, VoiceReferenceCloneResult, VoiceReferenceSaveInput, VoiceReferenceSummary, VoiceReferenceUpdateInput, VoiceRouteConfig, VoiceRouteSaveInput, VoiceRouteTestResult } from "../generated/bindings";
+import type { AgentCommandInput, AgentCommandResult, AnswerMetrics, CommandResult, DiagnosticsLatencySummary, DiagnosticsExportResult, EmbeddingConfig, EmbeddingConfigSaveInput, EmbeddingTestResult, FoundationStatus, LegacyMigrationStatus, LegacySessionImport, LivestreamDraftInput, LivestreamGenerateInput, LivestreamRuntime, MaterialIndexResult, MaterialSearchHit, MaterialSummary, MicPcmAcceptance, ModelDiscoveryResult, ObsRuntimeStatus, PracticePlan, PracticePlanGenerateInput, PracticePlanSummary, PracticeProgress, PracticeQuestionReview, PracticeReport, PracticeReportSummary, PracticeSessionStartInput, ProviderConfig, ProviderSaveInput, ProviderTestResult, PublicConfig, RoleProfileConfig, RoleProfileCopyInput, RoleProfileSaveInput, RuntimeStatus, SecretStatus, SessionDetail, SessionExportResult, SessionStartResult, SessionSummary, SessionTurnView, StartupState, VideoFrameAcceptance, VoiceReferenceAudioSaveInput, VoiceReferenceCloneResult, VoiceReferenceSaveInput, VoiceReferenceSummary, VoiceReferenceUpdateInput, VoiceRouteConfig, VoiceRouteSaveInput, VoiceRouteTestResult } from "../generated/bindings";
 
 export function getFoundationStatus() {
   return invoke<CommandResult<FoundationStatus>>("foundation_get_status");
@@ -301,6 +301,10 @@ export function startPracticeSession(input: PracticeSessionStartInput) {
 
 export function getPracticeSessionProgress(sessionId: string) {
   return invoke<CommandResult<PracticeProgress>>("practice_session_progress", { sessionId });
+}
+
+export function getPracticeSessionTurnMetrics(sessionId: string) {
+  return invoke<CommandResult<AnswerMetrics | null>>("practice_session_turn_metrics", { sessionId });
 }
 
 export function skipPracticeQuestion(sessionId: string) {

@@ -3,13 +3,14 @@ import "@testing-library/jest-dom/vitest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as commands from "../../api/commands";
-import type { MaterialSummary, PracticePlan } from "../../generated/bindings";
+import type { MaterialSummary, PracticePlan, SessionSummary } from "../../generated/bindings";
 import { PracticeWizard } from "./practice-wizard";
 
 vi.mock("../../api/commands", () => ({
   listMaterials: vi.fn(),
   generatePracticePlan: vi.fn(),
   savePracticePlan: vi.fn(),
+  startPracticeSession: vi.fn(),
 }));
 
 function material(overrides: Partial<MaterialSummary> = {}): MaterialSummary {
@@ -43,6 +44,19 @@ function plan(overrides: Partial<PracticePlan> = {}): PracticePlan {
 }
 
 const PANEL_LABELS = ["岗位与资料", "面试官风格", "题量与时长", "预览并编辑题单"] as const;
+
+function summarySession(): SessionSummary {
+  return {
+    id: "sess-practice-1",
+    status: "listening",
+    roleProfileId: "role-1",
+    voiceRouteId: "route-1",
+    transportMode: "direct",
+    startedAt: "2026-10-01T00:00:00Z",
+    finishedAt: null,
+    updatedAt: "2026-10-01T00:00:00Z",
+  };
+}
 
 async function reachStep(index: number) {
   if (index >= 1) {
@@ -202,7 +216,58 @@ describe("PracticeWizard", () => {
     await waitFor(() => expect(commands.savePracticePlan).toHaveBeenCalledTimes(1));
     const saved = vi.mocked(commands.savePracticePlan).mock.calls[0][0];
     expect(saved.questions[0].prompt).toBe("介绍一个你主导过的项目。");
-    expect(await screen.findByText("题单已保存，可到训练时使用。")).toBeTruthy();
+    expect(await screen.findByText("题单已保存，可直接开始训练。")).toBeTruthy();
+  });
+
+  it("starts training: saves the unsaved plan first, then starts a practice session", async () => {
+    vi.mocked(commands.generatePracticePlan).mockResolvedValue({ ok: true, data: plan() });
+    vi.mocked(commands.savePracticePlan).mockImplementation(async (input) => ({ ok: true, data: input }));
+    vi.mocked(commands.startPracticeSession).mockResolvedValue({
+      ok: true,
+      data: { kind: "started", session: summarySession() },
+    });
+    render(<PracticeWizard />);
+    await reachStep(3);
+    fireEvent.click(screen.getByRole("button", { name: "生成题单" }));
+    await screen.findByText("介绍一个你负责过的项目。");
+    fireEvent.click(screen.getByRole("button", { name: "开始训练" }));
+    await waitFor(() => expect(commands.startPracticeSession).toHaveBeenCalledWith({ planId: "plan-1" }));
+    // 先保存题单（训练按已保存的题单 id 启动）。
+    expect(commands.savePracticePlan).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts training directly when the plan is already saved", async () => {
+    vi.mocked(commands.generatePracticePlan).mockResolvedValue({ ok: true, data: plan() });
+    vi.mocked(commands.savePracticePlan).mockImplementation(async (input) => ({ ok: true, data: input }));
+    vi.mocked(commands.startPracticeSession).mockResolvedValue({
+      ok: true,
+      data: { kind: "started", session: summarySession() },
+    });
+    render(<PracticeWizard />);
+    await reachStep(3);
+    fireEvent.click(screen.getByRole("button", { name: "生成题单" }));
+    await screen.findByText("介绍一个你负责过的项目。");
+    fireEvent.click(screen.getByRole("button", { name: "保存题单" }));
+    await screen.findByText("题单已保存，可直接开始训练。");
+    fireEvent.click(screen.getByRole("button", { name: "开始训练" }));
+    await waitFor(() => expect(commands.startPracticeSession).toHaveBeenCalledWith({ planId: "plan-1" }));
+    expect(commands.savePracticePlan).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces a session-start failure instead of navigating", async () => {
+    vi.mocked(commands.generatePracticePlan).mockResolvedValue({ ok: true, data: plan() });
+    vi.mocked(commands.savePracticePlan).mockImplementation(async (input) => ({ ok: true, data: input }));
+    vi.mocked(commands.startPracticeSession).mockResolvedValue({
+      ok: false,
+      error: { code: "SESSION_ROLE_REQUIRED", message: "请选择有效的会话角色", requestId: "r", retryable: false },
+    });
+    render(<PracticeWizard />);
+    await reachStep(3);
+    fireEvent.click(screen.getByRole("button", { name: "生成题单" }));
+    await screen.findByText("介绍一个你负责过的项目。");
+    fireEvent.click(screen.getByRole("button", { name: "开始训练" }));
+    const notice = await screen.findByText(/SESSION_ROLE_REQUIRED/);
+    expect(notice.className).toContain("services-message");
   });
 
   it("blocks saving when every question is removed", async () => {

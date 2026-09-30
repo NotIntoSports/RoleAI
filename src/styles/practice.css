@@ -148,3 +148,57 @@
   font-size: 12px;
   line-height: 1.6;
 }
+
+/* 训练信息条（E07）：叠加在工作台会话界面顶部。 */
+.practice-hud {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--accent-strong-soft);
+  font-size: 13px;
+}
+
+.practice-hud-progress {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.practice-hud-timer {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.practice-hud-skip {
+  padding: 2px 10px;
+  font-size: 12px;
+}
+
+.practice-hud-hints {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.practice-hud[data-finished="true"] {
+  background: var(--success-bg);
+}
+
+.practice-hud[data-finished="true"] .practice-hud-progress {
+  color: var(--success);
+}
+
+.practice-nav-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}

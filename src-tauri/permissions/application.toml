@@ -378,6 +378,11 @@ description = "Allows skipping to the next question in a running mock-interview 
 commands.allow = ["practice_session_skip"]
 
 [[permission]]
+identifier = "allow-practice-session-turn-metrics"
+description = "Allows reading the objective metrics of the latest candidate answer in a running mock-interview training session."
+commands.allow = ["practice_session_turn_metrics"]
+
+[[permission]]
 identifier = "allow-practice-report-generate"
 description = "Allows generating the structured training report (objective metrics plus optional AI review) for a finished practice session."
 commands.allow = ["practice_report_generate"]

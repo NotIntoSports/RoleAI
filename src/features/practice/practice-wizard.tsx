@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { Link } from "wouter";
-import { ClipboardList, FileText, FolderOpen, Sparkles, Trash2 } from "lucide-react";
+import { Link, useLocation } from "wouter";
+import { ClipboardList, FileText, FolderOpen, Play, Sparkles, Trash2 } from "lucide-react";
 
 import * as api from "../../api/commands";
 import { EmptyState } from "../../components/empty-state";
@@ -29,6 +29,7 @@ interface PracticeWizardProps {
 }
 
 export function PracticeWizard({ materialsLink = "/materials" }: PracticeWizardProps = {}) {
+  const [, navigate] = useLocation();
   const [step, setStep] = useState(0);
   const [position, setPosition] = useState("");
   const [jdMaterialId, setJdMaterialId] = useState("");
@@ -134,6 +135,42 @@ export function PracticeWizard({ materialsLink = "/materials" }: PracticeWizardP
       }
     } catch {
       setMessage("IPC_UNAVAILABLE：题单保存失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // 开始训练：训练按已保存的题单 id 启动，随后跳到工作台的训练界面。
+  async function handleStartTraining() {
+    if (!plan) return;
+    if (!planEditable) {
+      setMessage("题单至少保留 1 道题目，且每道题面不能为空。");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      if (!saved) {
+        const saveResult = await api.savePracticePlan(plan);
+        if (!saveResult.ok) {
+          setMessage(errorText(saveResult.error));
+          return;
+        }
+        setPlan(saveResult.data);
+        setSaved(true);
+      }
+      const result = await api.startPracticeSession({ planId: plan.id });
+      if (!result.ok) {
+        setMessage(errorText(result.error));
+        return;
+      }
+      if (result.data.kind === "blocked") {
+        setMessage(result.data.issues[0]?.code ?? "会话未就绪，请先在工作台完成会话配置。");
+        return;
+      }
+      navigate("/");
+    } catch {
+      setMessage("IPC_UNAVAILABLE：训练启动失败");
     } finally {
       setBusy(false);
     }
@@ -335,11 +372,22 @@ export function PracticeWizard({ materialsLink = "/materials" }: PracticeWizardP
                 <button className="button-ghost" type="button" disabled={busy} onClick={() => void handleGenerate()}>
                   重新生成
                 </button>
-                <button className="button-primary" type="submit" disabled={busy || !planEditable}>
-                  {saved ? "已保存" : "保存题单"}
-                </button>
+                <span className="practice-nav-group">
+                  <button
+                    className="button-ghost"
+                    type="button"
+                    disabled={busy || !planEditable}
+                    onClick={() => void handleStartTraining()}
+                  >
+                    <Play size={14} aria-hidden="true" />
+                    开始训练
+                  </button>
+                  <button className="button-primary" type="submit" disabled={busy || !planEditable}>
+                    {saved ? "已保存" : "保存题单"}
+                  </button>
+                </span>
               </div>
-              {saved && <p className="muted" role="status">题单已保存，可到训练时使用。</p>}
+              {saved && <p className="muted" role="status">题单已保存，可直接开始训练。</p>}
             </form>
           )}
         </div>

@@ -2172,6 +2172,83 @@ fn practice_session_commands_reject_non_practice_sessions() {
     assert_eq!(missing.unwrap_err_code(), "SESSION_NOT_FOUND");
 }
 
+#[test]
+fn practice_session_turn_metrics_returns_latest_answer_metrics() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = session_state(&directory, &ready_session_config());
+    let session_id = start_practice_session(&state);
+
+    let database_slot = state.database.lock().unwrap();
+    let database = database_slot.as_ref().unwrap();
+    let store = SessionStore::new(database);
+    let turns = [
+        ("你好", "【第1题】介绍一个你负责的项目"),
+        ("那个项目，就是我负责的支付网关。", "追问：最大困难是什么？"),
+        ("后来其实上线了，然后很稳定。", ""),
+        // 末轮只有面试官发言：最新回答仍应是第 3 轮的候选人文本。
+        ("", "【第2题】如何设计限流？"),
+    ];
+    for (index, (user, assistant)) in turns.iter().enumerate() {
+        store
+            .insert_turn(crate::sessions::NewTurn {
+                id: &format!("turn-m{index}"),
+                session_id: &session_id,
+                turn_index: index as i64,
+                user_text: user,
+                assistant_text: assistant,
+                materials_used: false,
+            })
+            .unwrap();
+    }
+    drop(database_slot);
+
+    let metrics = match super::practice_session_turn_metrics_cmd(&state, session_id.clone()) {
+        CommandResult::Ok { data } => data.expect("latest answer metrics"),
+        CommandResult::Err { error } => panic!("turn metrics failed: {}", error.code),
+    };
+    assert_eq!(metrics.answer_index, 2);
+    // 口头禅来自最新一条回答，而不是更早的轮次。
+    assert!(
+        metrics
+            .fillers
+            .iter()
+            .any(|hit| hit.word == "其实" && hit.count == 1)
+    );
+    assert!(
+        metrics
+            .fillers
+            .iter()
+            .any(|hit| hit.word == "然后" && hit.count == 1)
+    );
+    assert!(!metrics.fillers.iter().any(|hit| hit.word == "那个"));
+
+    // 没有任何候选人回答时返回 None。
+    let directory = tempfile::tempdir().unwrap();
+    let state = session_state(&directory, &ready_session_config());
+    let empty_session = start_practice_session(&state);
+    let none = match super::practice_session_turn_metrics_cmd(&state, empty_session) {
+        CommandResult::Ok { data } => data,
+        CommandResult::Err { error } => panic!("turn metrics failed: {}", error.code),
+    };
+    assert!(none.is_none());
+}
+
+#[test]
+fn practice_session_turn_metrics_rejects_non_practice_sessions() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = session_state(&directory, &ready_session_config());
+    let started = serde_json::to_value(super::session_start_cmd(&state, None)).unwrap();
+    let session_id = started["data"]["session"]["id"]
+        .as_str()
+        .expect("session id")
+        .to_owned();
+
+    let metrics = super::practice_session_turn_metrics_cmd(&state, session_id);
+    assert_eq!(metrics.unwrap_err_code(), "PRACTICE_SESSION_STATE_INVALID");
+    let missing = super::practice_session_turn_metrics_cmd(&state, "missing-session".into());
+    assert_eq!(missing.unwrap_err_code(), "SESSION_NOT_FOUND");
+}
+
 // ---------- practice 报告命令（mock LLM，含重试） ----------
 
 mod practice_report_mock {

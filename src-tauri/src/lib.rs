@@ -169,6 +169,7 @@ pub fn run() {
             commands::practice_session_start,
             commands::practice_session_progress,
             commands::practice_session_skip,
+            commands::practice_session_turn_metrics,
             commands::practice_report_generate,
             commands::practice_report_get,
             commands::practice_report_list,

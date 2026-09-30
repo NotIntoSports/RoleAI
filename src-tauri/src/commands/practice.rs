@@ -583,6 +583,43 @@ pub(in crate::commands) fn practice_session_skip_cmd(
     command_of(outcome)
 }
 
+/// 最近一条候选人回答的客观指标（E07 训练信息条的逐轮表达提示）。
+/// 复用 E02 的 metrics 计算，保证实时提示与训练报告同一口径；
+/// 会话还没有回答（或最近轮只是提问）时返回 None。
+pub(in crate::commands) fn practice_session_turn_metrics_cmd(
+    state: &AppState,
+    session_id: String,
+) -> CommandResult<Option<crate::practice::metrics::AnswerMetrics>> {
+    let outcome = with_session_database(state, |database| {
+        // 与 progress/skip 一致：会话缺失/非训练会话返回相同错误码。
+        session_practice_director(database, &session_id)?;
+        let turns = SessionStore::new(database)
+            .list_turns(&session_id)
+            .map_err(|_| database_busy())?;
+        let Some(index) = turns
+            .iter()
+            .rposition(|turn| !turn.user_text.trim().is_empty())
+        else {
+            return Ok(None);
+        };
+        let answers = turns
+            .iter()
+            .enumerate()
+            .map(|(position, turn)| crate::practice::metrics::AnswerInput {
+                user_text: turn.user_text.clone(),
+                started_at_ms: turn_started_at_ms(&turns, position),
+                ended_at_ms: turn_ended_at_ms(turn),
+            })
+            .collect::<Vec<_>>();
+        let metrics = crate::practice::metrics::compute_answers(
+            &answers,
+            &crate::practice::metrics::MetricsConfig::default(),
+        );
+        Ok(metrics.answers.into_iter().nth(index))
+    });
+    command_of(outcome)
+}
+
 #[tauri::command]
 pub fn practice_session_start(
     state: State<'_, AppState>,
@@ -615,6 +652,15 @@ pub fn practice_session_skip_blocking(
 
 blocking_command!(practice_session_progress, practice_session_progress_blocking(session_id: String) -> PracticeProgress);
 blocking_command!(practice_session_skip, practice_session_skip_blocking(session_id: String) -> PracticeProgress);
+
+pub fn practice_session_turn_metrics_blocking(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> CommandResult<Option<crate::practice::metrics::AnswerMetrics>> {
+    practice_session_turn_metrics_cmd(&state, session_id)
+}
+
+blocking_command!(practice_session_turn_metrics, practice_session_turn_metrics_blocking(session_id: String) -> Option<crate::practice::metrics::AnswerMetrics>);
 
 // ---------- 训练报告（E05）：客观指标 + LLM 定性点评，落库与导出 ----------
 

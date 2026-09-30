@@ -75,6 +75,7 @@
     "allow-practice-session-start",
     "allow-practice-session-progress",
     "allow-practice-session-skip",
+    "allow-practice-session-turn-metrics",
     "allow-practice-report-generate",
     "allow-practice-report-get",
     "allow-practice-report-list",
