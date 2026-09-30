@@ -2148,3 +2148,55 @@ mod voice_clone_dashscope {
         eprintln!("qwen enrollment probe: status={status} head={head:?}");
     }
 }
+
+/// 本地 OpenAI 兼容服务的模型列表发现（G06）：用环回 mock 服务器证明
+/// `OpenAiCompatibleProbe::discover_models` 能解析 Ollama / LM Studio / speaches
+/// 等 `/v1/models` 的标准 `{"object":"list","data":[...]}` 响应（Ollama 官方
+/// openai.md 文档确认其兼容层返回该形状）。
+mod local_model_discovery {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
+    use super::super::{OpenAiCompatibleProbe, ProviderEndpoint, ProviderProbe};
+
+    #[test]
+    fn discovers_models_from_local_openai_compatible_server() {
+        let body = br#"{"object":"list","data":[{"id":"qwen2.5:7b"},{"id":"nomic-embed-text"},{"id":"qwen2.5:7b"}]}"#;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            // GET 请求无 body：读到服务端收到完整头部即返回响应。
+            let _count = stream.read(&mut buffer).unwrap();
+            request.extend_from_slice(&buffer[..]);
+            assert!(request.starts_with(b"GET "));
+            assert!(String::from_utf8_lossy(&request).contains("/v1/models"));
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+            stream.write_all(body).unwrap();
+        });
+        let probe = OpenAiCompatibleProbe::new().unwrap();
+        let models = probe
+            .discover_models(
+                &ProviderEndpoint {
+                    provider_id: "local-preset-ollama".into(),
+                    base_url: format!("http://{address}/v1"),
+                },
+                // 本地服务不需要 API Key。
+                None,
+            )
+            .unwrap();
+        let ids: Vec<String> = models.into_iter().map(|model| model.id).collect();
+        // 结果排序去重（重复的 qwen2.5:7b 只保留一份）。
+        assert_eq!(ids, vec!["nomic-embed-text".to_string(), "qwen2.5:7b".to_string()]);
+    }
+}

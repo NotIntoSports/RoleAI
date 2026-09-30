@@ -43,7 +43,9 @@ impl ConfigStore {
                 config.clone()
             }
         };
-        if super::presets::ensure_role_presets(&mut config) {
+        let mut changed = super::presets::ensure_role_presets(&mut config);
+        changed |= super::presets_local::ensure_local_model_presets(&mut config);
+        if changed {
             let _guard = self.lock_writes()?;
             self.write_validated(&config)?;
             return Ok(match outcome {
