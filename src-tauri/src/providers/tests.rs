@@ -2197,6 +2197,9 @@ mod local_model_discovery {
             .unwrap();
         let ids: Vec<String> = models.into_iter().map(|model| model.id).collect();
         // 结果排序去重（重复的 qwen2.5:7b 只保留一份）。
-        assert_eq!(ids, vec!["nomic-embed-text".to_string(), "qwen2.5:7b".to_string()]);
+        assert_eq!(
+            ids,
+            vec!["nomic-embed-text".to_string(), "qwen2.5:7b".to_string()]
+        );
     }
 }

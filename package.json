@@ -15,6 +15,7 @@
     "dev:demo": "vite --config vite.demo.config.ts",
     "build:demo": "tsc -p tsconfig.tauri.json && vite build --config vite.demo.config.ts",
     "test:e2e:demo": "playwright test --config playwright.config.ts",
+    "test:e2e:desktop": "node e2e/desktop/wd-smoke.mjs",
     "screenshots": "node scripts/screenshots.mjs",
     "demo:video": "node scripts/demo-video.mjs"
   },
@@ -37,6 +38,7 @@
     "@types/react-dom": "19.2.7",
     "@vitejs/plugin-react": "6.1.1",
     "jsdom": "29.0.0",
+    "selenium-webdriver": "4.49.0",
     "typescript": "5.8.3",
     "vite": "8.2.2",
     "vitest": "5.0.0"

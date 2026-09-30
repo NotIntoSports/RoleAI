@@ -46,10 +46,27 @@ pub fn parse_isolated_startup(
     args: &[OsString],
     config_override: Option<&OsStr>,
 ) -> Result<Option<IsolatedStartup>, StartupError> {
+    const FLAG: &str = "--isolated-root";
     let mut root: Option<PathBuf> = None;
     let mut arguments = args.iter().skip(1);
     while let Some(argument) = arguments.next() {
-        if argument != OsStr::new("--isolated-root") {
+        // 等号单段形式（`--isolated-root=<path>`）：WebDriver 启动器（msedgedriver）
+        // 只会原样保留这种形式，见 startup.rs 测试 isolated_startup_accepts_inline_equals_form_for_webdriver_launchers。
+        let inline_value = argument
+            .to_str()
+            .and_then(|argument| argument.strip_prefix(FLAG))
+            .and_then(|rest| rest.strip_prefix('='));
+        if let Some(value) = inline_value {
+            if root.is_some() {
+                return Err(StartupError::DuplicateRoot);
+            }
+            if value.is_empty() {
+                return Err(StartupError::MissingRoot);
+            }
+            root = Some(PathBuf::from(value));
+            continue;
+        }
+        if argument != OsStr::new(FLAG) {
             continue;
         }
         if root.is_some() {
@@ -99,21 +116,42 @@ pub fn parse_isolated_startup(
     }))
 }
 
+/// WebDriver 自动化管线（tauri-driver → msedgedriver）的唯一自声明开关：
+/// tauri-driver 启动 msedgedriver 时固定注入（tauri-driver 源码 webdriver.rs），
+/// 正常用户与打包冒烟环境不会出现。出现时才允许官方驱动注入的两项 WebView2 覆盖。
+fn declares_webview_automation(environment: &[(OsString, OsString)]) -> bool {
+    environment.iter().any(|(key, value)| {
+        key.eq_ignore_ascii_case("TAURI_WEBVIEW_AUTOMATION") && !value.is_empty()
+    })
+}
+
 pub fn validate_isolated_webview_environment(
     isolated: &IsolatedStartup,
     environment: &[(OsString, OsString)],
 ) -> Result<(), StartupError> {
+    let automation = declares_webview_automation(environment);
     for (key, value) in environment {
         let key = key.to_string_lossy().to_ascii_uppercase();
         if !key.starts_with("WEBVIEW2_") {
             continue;
         }
-        if key == "WEBVIEW2_USER_DATA_FOLDER"
-            && equivalent_path_with_missing_leaf(
+        if key == "WEBVIEW2_USER_DATA_FOLDER" {
+            if equivalent_path_with_missing_leaf(
                 &PathBuf::from(value),
                 &isolated.webview_data_directory,
-            )
-        {
+            ) {
+                continue;
+            }
+            // msedgedriver 的自动化 profile（scoped_dir 临时目录）与隔离目录不同，
+            // 只在显式自动化声明下放行；webview 数据仍落在启动方的临时目录里。
+            if automation {
+                continue;
+            }
+            return Err(StartupError::WebviewOverride);
+        }
+        // --enable-automation / --remote-debugging-port 等自动化浏览器参数，
+        // 仅在显式自动化声明下放行；其余 WEBVIEW2_* 覆盖一律拒绝。
+        if key == "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS" && automation {
             continue;
         }
         return Err(StartupError::WebviewOverride);
@@ -313,6 +351,59 @@ mod tests {
         }
     }
 
+    // 红灯先行（lane-I I02，配套 isolated_startup_accepts_inline_equals_form_for_webdriver_launchers）：
+    // tauri-driver → msedgedriver 的官方自动化管线会为被测应用注入
+    // WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS（--enable-automation/--remote-debugging-port 等）
+    // 与 WEBVIEW2_USER_DATA_FOLDER（msedgedriver 临时 profile，实测见 e2e 探针）。
+    // 只有 msedgedriver 会设置 TAURI_WEBVIEW_AUTOMATION（tauri-driver 源码 webdriver.rs），
+    // 以它为开关放行这两项；非自动化环境维持原有的严格校验语义。
+    #[test]
+    fn isolated_startup_allows_official_webdriver_automation_webview_env() {
+        let directory = tempfile::tempdir().unwrap();
+        let isolated = parse_isolated_startup(
+            &isolated_args(directory.path().canonicalize().unwrap()),
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        let automation = |extra: &[(OsString, OsString)]| {
+            let mut environment = vec![(
+                OsString::from("TAURI_WEBVIEW_AUTOMATION"),
+                OsString::from("true"),
+            )];
+            environment.extend(extra.iter().cloned());
+            environment
+        };
+
+        let injected = automation(&[
+            (
+                OsString::from("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"),
+                OsString::from("--enable-automation --remote-debugging-port=0"),
+            ),
+            (
+                OsString::from("WEBVIEW2_USER_DATA_FOLDER"),
+                OsString::from("C:\\Windows\\Temp\\scoped_dir_msedgedriver"),
+            ),
+        ]);
+        assert!(validate_isolated_webview_environment(&isolated, &injected).is_ok());
+
+        // 自动化声明也不放行其余 WEBVIEW2_* 覆盖。
+        let hostile = automation(&[(
+            OsString::from("WEBVIEW2_BROWSER_EXECUTABLE_FOLDER"),
+            OsString::from("C:\\Windows\\Temp\\fake-runtime"),
+        )]);
+        assert!(validate_isolated_webview_environment(&isolated, &hostile).is_err());
+
+        // 没有自动化声明时保持严格：同样两条注入必须拒绝。
+        assert!(
+            validate_isolated_webview_environment(
+                &isolated,
+                &injected.iter().skip(1).cloned().collect::<Vec<_>>()
+            )
+            .is_err()
+        );
+    }
+
     #[test]
     fn isolated_startup_rejects_webview_overrides_except_its_exact_data_folder() {
         let directory = tempfile::tempdir().unwrap();
@@ -337,5 +428,43 @@ mod tests {
             requested_root.join("webview").into_os_string(),
         )];
         assert!(validate_isolated_webview_environment(&isolated, &exact_folder).is_ok());
+    }
+
+    // 红灯先行（lane-I I02）：msedgedriver 官方 WebDriver 管线启动被测应用时，
+    // 只会原样保留 `--flag=value` 单段参数；`--isolated-root <path>` 两段形式里
+    // 的松散路径会被 Chromium 命令行解析改写（实测加 `--` 前缀、重排、小写）。
+    // 因此隔离启动必须同时接受等号形式，桌面端 WebDriver e2e 才能建立隔离会话。
+    #[test]
+    fn isolated_startup_accepts_inline_equals_form_for_webdriver_launchers() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let inline = vec![
+            OsString::from("app"),
+            OsString::from(format!("--isolated-root={}", root.display())),
+        ];
+        let isolated = parse_isolated_startup(&inline, None).unwrap().unwrap();
+        assert_eq!(isolated.root, root);
+        assert_eq!(isolated.paths.config_path, root.join("config/local.json"));
+
+        // 两种形式混用视为重复指定。
+        let mixed = vec![
+            OsString::from("app"),
+            OsString::from(format!("--isolated-root={}", root.display())),
+            OsString::from("--isolated-root"),
+            root.into_os_string(),
+        ];
+        assert!(parse_isolated_startup(&mixed, None).is_err());
+
+        // 空值与缺路径同样报错。
+        let empty = vec![OsString::from("app"), OsString::from("--isolated-root=")];
+        assert!(parse_isolated_startup(&empty, None).is_err());
+
+        // 前缀撞车不是隔离参数（如 --isolated-rootx）。
+        let prefix = vec![
+            OsString::from("app"),
+            OsString::from("--isolated-rootx"),
+            OsString::from("value"),
+        ];
+        assert!(parse_isolated_startup(&prefix, None).unwrap().is_none());
     }
 }
