@@ -86,6 +86,9 @@ pub fn run() {
             })
             .build(),
     );
+    // 应用内手动检查更新（G07）：设置页按钮触发 check()；公钥未配置时
+    // 插件在 check 阶段报错，前端捕获后显示「未配置更新源」，不影响启动。
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     let builder = if isolated.is_none() {
         builder.plugin(tauri_plugin_single_instance::init(|app, _, _| {
             if let Some(window) = app.get_webview_window("main") {
