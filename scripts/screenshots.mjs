@@ -119,8 +119,10 @@ async function captureAll(outDir, deviceScaleFactor) {
       await page.getByRole("button", { name: "开始语音会话" }).click();
       await page.getByText("接下来看缓存", { exact: false }).first().waitFor({ timeout: 60_000 });
       await page.waitForTimeout(800);
-      // 展开第 1 轮的瀑布条明细表。
-      await page.getByRole("button", { name: /第 1 轮延迟/ }).click();
+      // 展开首个有数据的轮次瀑布条明细表。
+      // （第 1 轮是开场白，不产生时间线数据；从第 2 轮起才有延迟瀑布条，
+      //   合并修正 M：原选择器 /第 1 轮延迟/ 永远匹配不到，见波次 2 报告。）
+      await page.getByRole("button", { name: /轮延迟/ }).first().click();
       await page.getByText("分阶段耗时").first().waitFor({ timeout: 5_000 });
       await page.waitForTimeout(300);
       await page.screenshot({ path: shotPath("latency-waterfall.png") });
@@ -227,7 +229,8 @@ async function captureAll(outDir, deviceScaleFactor) {
     // 延迟诊断（lane-F F05：诊断区升级为性能面板）。
     await gotoApp(page, "&category=diagnostics#/settings");
     await page.getByText("性能面板").waitFor();
-    await page.getByText("演示实时线路（端到端）").waitFor({ timeout: 15_000 });
+    // 性能面板上线路名会出现多次（线路区/分阶段区/最近轮区），取首个即可。
+    await page.getByText("演示实时线路（端到端）").first().waitFor({ timeout: 15_000 });
     await page.waitForTimeout(400);
     await page.screenshot({ path: shotPath("diagnostics.png") });
     reportSize("diagnostics.png");
