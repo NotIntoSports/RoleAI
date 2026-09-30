@@ -12,7 +12,21 @@ export type SecretStatus = { reference: string, configured: boolean, };
 
 export type DiagnosticsExportResult = { exported: boolean, };
 
-export type DiagnosticsLatencySummary = { sessionsScanned: number, routes: Array<RouteLatencySummary>, };
+export type DiagnosticsLatencySummary = { sessionsScanned: number, routes: Array<RouteLatencySummary>, 
+/**
+ * 最近（至多 50）轮的总延迟样本，最新在前。
+ */
+recentTurns: Array<TurnLatencySample>, };
+
+export type TurnLatencySample = { routeId: string, mode: string, 
+/**
+ * 单轮总延迟：优先 latencyMsFirstAudio，缺省用时间线首末锚点跨度。
+ */
+totalMs: number | null, 
+/**
+ * turn_meta 事件落库时间（ISO 字符串）。
+ */
+createdAt: string, };
 
 export type StageLatencySummary = { 
 /**

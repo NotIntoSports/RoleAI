@@ -5,11 +5,11 @@
   "files": {
     "src-tauri/capabilities/main.json": "d6d5c5024ed6ba3b71c3f33a2a17c1dc10e25c2e359f8a7548c8531a95e90de7",
     "src-tauri/src/lib.rs": "006783156d21148ec1c2ae744b6e41c8a90afea597c3f2cd5a495085aa382dcd",
-    "src-tauri/src/contracts.rs": "087b8ea89ec0cef6afa4c86af1ecb3dc4ec187953b405ef2a610fd6b27e5dc83",
+    "src-tauri/src/contracts.rs": "7bcf24fa11b7ddbe8056df5fa3ae3a4187cc05fd1634a0cfd27c09046c433d9d",
     "src-tauri/src/commands/mod.rs": "4c5990949684161feeda331fff36e69929a192612c353c36132c45e81164e1d6",
     "src-tauri/tauri.conf.json": "7cbaa279bb71a156cfb3563d2a935fbf859a21728ec11e6e886b5e0aaae6c219",
     "src/api/commands.ts": "4c4122b96439ade9811f282537ca14e73bca61c31f6417b584fba6191eef7c13",
-    "src/generated/bindings.ts": "dca94817cff9d233528eb1ea6fa4fd12e845bb442938df0ca7796db3b8d89b1a",
+    "src/generated/bindings.ts": "8b3c8b22522ae3917c673f7c1913100341912cb6597f2b51b62dc9967e6bb916",
     "tests/tauri/shell-contract.test.mjs": "7a9e13b97754f371ec3e95d3c01cc888394e007207ea16371768574e09ed452f",
     "src-tauri/tests/security_contract.rs": "22e42bfb76980bd585e6b012585207d39a1a8848b707336b0ebbc14f7dfb7ea3",
     "src-tauri/src/commands/config.rs": "26d3dcc5ed93c6211566883a463759a9da7f4298eb07665bcfc5c0c1a9f7004a",
@@ -18,6 +18,6 @@
     "src-tauri/src/commands/livestream.rs": "5c53e92c2a24c94ad2cbf5719021c421ad4be0e482e09a4b9818f7023aa35c83",
     "src-tauri/src/commands/obs.rs": "42cc148ed5b6d8a78506a40ea2a272400112abfb586a397488b78a4df0dbf43b",
     "src-tauri/src/commands/voice.rs": "1c5d8fc589feeea832d21621526992e3854e341285add22a8dc8b390dcf48ba0",
-    "src-tauri/src/commands/system.rs": "cf988fb3c058ecbe6bd03665d974b7e0abd400c01fdfe80519666568c4254726"
+    "src-tauri/src/commands/system.rs": "9a9fb9c54287c846cffa7474c9bcfc3b3fd18d503f28015c33d06d0e43062112"
   }
 }

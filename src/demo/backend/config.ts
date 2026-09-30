@@ -71,7 +71,20 @@ export function handleConfigCommand(cmd: string, payload: Record<string, unknown
                 ],
           ingressDroppedTotal: 0,
         }));
-      const summary: DiagnosticsLatencySummary = { sessionsScanned: 3, routes };
+      const summary: DiagnosticsLatencySummary = {
+        sessionsScanned: 3,
+        routes,
+        recentTurns: routes.flatMap((route, routeIndex) =>
+          Array.from({ length: routeIndex === 0 ? 8 : 5 }, (_, turnIndex) => ({
+            routeId: route.routeId,
+            mode: route.mode,
+            totalMs: route.p50Ms === null ? null : route.p50Ms + ((turnIndex * 47) % 240) - 120,
+            createdAt: new Date(
+              Date.UTC(2026, 8, 30, 10, routeIndex * 10 + turnIndex, 0),
+            ).toISOString(),
+          })),
+        ),
+      };
       return ok(summary);
     }
     case "diagnostics_export":

@@ -181,3 +181,15 @@
 .voice-recorder > button {
   justify-self: start;
 }
+
+/* —— 性能面板（lane-F F05）—— */
+.latency-sparkline {
+  display: block;
+  color: var(--accent-strong, #4a7db3);
+}
+
+.section-subheading {
+  margin: 16px 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+}

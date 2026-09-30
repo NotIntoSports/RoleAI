@@ -670,20 +670,25 @@ pub fn diagnostics_latency_summary_blocking(
         std::collections::BTreeMap::new();
     let mut sessions_scanned: u32 = 0;
     let mut turns_collected: usize = 0;
+    let mut recent_turns: Vec<crate::contracts::TurnLatencySample> = Vec::new();
     'sessions: for session in sessions.iter().take(limit) {
         let events = match store.list_events(&session.id) {
             Ok(events) => events,
             Err(_) => return service_error("DIAGNOSTICS_OPERATION_FAILED", "无法读取会话事件"),
         };
-        let turn_metas: Vec<serde_json::Value> = events
+        let turn_events: Vec<(&str, serde_json::Value)> = events
             .iter()
             .filter(|event| event.kind == "turn_meta")
-            .filter_map(|event| serde_json::from_str(&event.payload).ok())
+            .filter_map(|event| {
+                serde_json::from_str(&event.payload)
+                    .ok()
+                    .map(|meta| (event.created_at.as_str(), meta))
+            })
             .collect();
-        if !turn_metas.is_empty() {
+        if !turn_events.is_empty() {
             sessions_scanned += 1;
         }
-        for meta in turn_metas.iter().rev() {
+        for (created_at, meta) in turn_events.iter().rev() {
             if turns_collected >= TURN_SAMPLE_CAP {
                 break 'sessions;
             }
@@ -693,10 +698,18 @@ pub fn diagnostics_latency_summary_blocking(
                 .unwrap_or("realtime")
                 .to_owned();
             groups
-                .entry((session.voice_route_id.clone(), mode))
+                .entry((session.voice_route_id.clone(), mode.clone()))
                 .or_default()
                 .push((session.id.clone(), meta.clone()));
             turns_collected += 1;
+            if recent_turns.len() < RECENT_TURN_SAMPLE_CAP {
+                recent_turns.push(crate::contracts::TurnLatencySample {
+                    route_id: session.voice_route_id.clone(),
+                    mode: mode.clone(),
+                    total_ms: turn_total_latency_ms(meta),
+                    created_at: (*created_at).to_owned(),
+                });
+            }
         }
     }
     let routes = groups
@@ -709,8 +722,32 @@ pub fn diagnostics_latency_summary_blocking(
         data: DiagnosticsLatencySummary {
             sessions_scanned,
             routes,
+            recent_turns,
         },
     }
+}
+
+/// 性能面板折线保留的最近轮数。
+const RECENT_TURN_SAMPLE_CAP: usize = 50;
+
+/// 单轮总延迟：优先既有 latencyMsFirstAudio（泵：speech_stopped → 首包；
+/// 级联：轮次起点 → TTS 完成），缺省退回时间线首末锚点跨度。
+fn turn_total_latency_ms(meta: &serde_json::Value) -> Option<f64> {
+    if let Some(total) = meta.get("latencyMsFirstAudio").and_then(|value| value.as_f64()) {
+        return Some(total);
+    }
+    let timeline = meta.get("timeline")?;
+    let values: Vec<f64> = timeline
+        .as_object()?
+        .values()
+        .filter_map(|value| value.as_f64())
+        .collect();
+    let min = values.iter().copied().fold(f64::INFINITY, f64::min);
+    let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    if values.is_empty() || max < min {
+        return None;
+    }
+    Some(max - min)
 }
 
 /// 分阶段汇总覆盖的时间线字段（固定顺序 = 时间线字段声明序）。
@@ -951,5 +988,21 @@ mod latency_summary_tests {
             .map(|stage| stage.stage.as_str())
             .collect();
         assert_eq!(stages, ["asrDoneMs", "llmDoneMs", "ttsDoneMs"]);
+    }
+
+    #[test]
+    fn turn_total_prefers_first_audio_and_falls_back_to_timeline_span() {
+        assert_eq!(
+            turn_total_latency_ms(&serde_json::json!({"latencyMsFirstAudio": 320})),
+            Some(320.0)
+        );
+        assert_eq!(
+            turn_total_latency_ms(&serde_json::json!({
+                "timeline": {"asrDoneMs": 50, "llmFirstTokenMs": 120, "ttsDoneMs": 480}
+            })),
+            Some(430.0)
+        );
+        assert_eq!(turn_total_latency_ms(&serde_json::json!({"timeline": {}})), None);
+        assert_eq!(turn_total_latency_ms(&serde_json::json!({})), None);
     }
 }

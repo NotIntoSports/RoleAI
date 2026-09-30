@@ -88,6 +88,19 @@ pub struct RouteLatencySummary {
     pub ingress_dropped_total: u32,
 }
 
+/// 单轮延迟样本（性能面板最近 50 轮折线用，只读诊断）。
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct TurnLatencySample {
+    pub route_id: String,
+    pub mode: String,
+    /// 单轮总延迟：优先 latencyMsFirstAudio，缺省用时间线首末锚点跨度。
+    pub total_ms: Option<f64>,
+    /// turn_meta 事件落库时间（ISO 字符串）。
+    pub created_at: String,
+}
+
 /// 按语音线路汇总的最近会话首响延迟概览（只读诊断）。
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -95,6 +108,8 @@ pub struct RouteLatencySummary {
 pub struct DiagnosticsLatencySummary {
     pub sessions_scanned: u32,
     pub routes: Vec<RouteLatencySummary>,
+    /// 最近（至多 50）轮的总延迟样本，最新在前。
+    pub recent_turns: Vec<TurnLatencySample>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
@@ -401,6 +416,7 @@ fn generated_bindings() -> String {
         SecretStatus::decl(&config),
         DiagnosticsExportResult::decl(&config),
         DiagnosticsLatencySummary::decl(&config),
+        TurnLatencySample::decl(&config),
         StageLatencySummary::decl(&config),
         RouteLatencySummary::decl(&config),
         StartupState::decl(&config),

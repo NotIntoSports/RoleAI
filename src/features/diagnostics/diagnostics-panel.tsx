@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { EmptyState } from "../../components/empty-state";
 import { ErrorNotice } from "../../components/error-notice";
@@ -13,6 +13,15 @@ export type { DiagnosticsLatencySummary, RouteLatencySummary };
 // 面板每次拉取的会话扫描上限；与后端 getDiagnosticsLatencySummary 的 limit 参数对应，联调时可调整。
 const DEFAULT_LIMIT = 20;
 
+const MODE_LABELS: Record<string, string> = {
+  realtime: "实时",
+  cascade: "级联",
+};
+
+function modeLabel(mode: string): string {
+  return MODE_LABELS[mode] ?? mode;
+}
+
 type PanelState =
   | { kind: "loading" }
   | { kind: "ready"; data: DiagnosticsLatencySummary }
@@ -26,8 +35,42 @@ interface DiagnosticsPanelProps {
   exportDiagnostics?: (destination: string) => Promise<unknown>;
 }
 
+interface SparklineProps {
+  samples: Array<{ totalMs: number }>;
+}
+
+/** 最近 N 轮总延迟折线：纯 SVG polyline，与瀑布条同一「不引入图表库」方案。 */
+export function LatencySparkline({ samples }: SparklineProps) {
+  if (samples.length < 2) return null;
+  const width = 240;
+  const height = 48;
+  const max = Math.max(...samples.map((sample) => sample.totalMs));
+  const min = Math.min(...samples.map((sample) => sample.totalMs));
+  const span = Math.max(max - min, 1);
+  const points = samples
+    .map((sample, index) => {
+      const x = (index / (samples.length - 1)) * width;
+      const y = height - 2 - ((sample.totalMs - min) / span) * (height - 4);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+  return (
+    <svg
+      className="latency-sparkline"
+      width={width}
+      height={height}
+      role="img"
+      aria-label={`最近 ${samples.length} 轮总延迟折线，范围 ${Math.round(min)}～${Math.round(max)} 毫秒`}
+      viewBox={`0 0 ${width} ${height}`}
+    >
+      <polyline points={points} fill="none" stroke="currentColor" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
 export function DiagnosticsPanel({ loadSummary }: DiagnosticsPanelProps) {
   const [state, setState] = useState<PanelState>({ kind: "loading" });
+  const [selectedEntry, setSelectedEntry] = useState(0);
   const epochRef = useRef(0);
   const latencyWaterfallEnabled = useLatencyWaterfallPreference();
 
@@ -45,10 +88,23 @@ export function DiagnosticsPanel({ loadSummary }: DiagnosticsPanelProps) {
     load();
   }, [load]);
 
+  const routes = state.kind === "ready" ? state.data.routes : [];
+  const entry = routes[selectedEntry] ?? routes[0];
+  // 选中线路的最近轮总延迟样本（折线从旧到新：接口最新在前，展示时反转）。
+  const recentSamples = useMemo(() => {
+    if (state.kind !== "ready" || !entry) return [];
+    return state.data.recentTurns
+      .filter((sample) => sample.routeId === entry.routeId && sample.mode === entry.mode)
+      .filter((sample) => sample.totalMs !== null)
+      .slice(0, 50)
+      .map((sample) => ({ totalMs: sample.totalMs as number }))
+      .reverse();
+  }, [state, entry]);
+
   const busy = state.kind === "loading";
   return (
     <section className="service-panel diagnostics-panel" aria-labelledby="diagnostics-panel-heading">
-      <h3 className="section-heading" id="diagnostics-panel-heading">诊断延迟</h3>
+      <h3 className="section-heading" id="diagnostics-panel-heading">性能面板</h3>
       <label className="diagnostics-waterfall-toggle">
         <input
           type="checkbox"
@@ -68,29 +124,74 @@ export function DiagnosticsPanel({ loadSummary }: DiagnosticsPanelProps) {
           hint="开始语音会话后，这里会显示各语音线路的延迟与丢帧统计。"
         />
       )}
-      {state.kind === "ready" && state.data.routes.length > 0 && (
-        <table className="diagnostics-table">
-          <thead>
-            <tr>
-              <th scope="col">线路</th>
-              <th scope="col">样本数</th>
-              <th scope="col">P50（毫秒）</th>
-              <th scope="col">P95（毫秒）</th>
-              <th scope="col">累计丢帧</th>
-            </tr>
-          </thead>
-          <tbody>
-            {state.data.routes.map((route) => (
-              <tr key={route.routeId}>
-                <td>{route.routeLabel}</td>
-                <td>{route.samples}</td>
-                <td>{route.p50Ms ?? "—"}</td>
-                <td>{route.p95Ms ?? "—"}</td>
-                <td>{route.ingressDroppedTotal}</td>
+      {state.kind === "ready" && state.data.routes.length > 0 && entry && (
+        <>
+          <table className="diagnostics-table">
+            <thead>
+              <tr>
+                <th scope="col">线路</th>
+                <th scope="col">模式</th>
+                <th scope="col">样本数</th>
+                <th scope="col">首响 P50（毫秒）</th>
+                <th scope="col">首响 P95（毫秒）</th>
+                <th scope="col">累计丢帧</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {state.data.routes.map((route, index) => (
+                <tr key={`${route.routeId}-${route.mode}`}>
+                  <td>{route.routeLabel}</td>
+                  <td>{modeLabel(route.mode)}</td>
+                  <td>{route.samples}</td>
+                  <td>{route.p50Ms ?? "—"}</td>
+                  <td>{route.p95Ms ?? "—"}</td>
+                  <td>{route.ingressDroppedTotal}</td>
+                  <td>
+                    <button
+                      type="button"
+                      className="button-ghost"
+                      aria-pressed={index === selectedEntry}
+                      onClick={() => setSelectedEntry(index)}
+                    >
+                      {index === selectedEntry ? "查看中" : "查看"}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <h4 className="section-subheading">分阶段延迟（{entry.routeLabel} · {modeLabel(entry.mode)}）</h4>
+          {entry.stages.length === 0 ? (
+            <p className="muted">该线路暂无分阶段时间线数据（旧记录或纯文本轮）。</p>
+          ) : (
+            <table className="diagnostics-table" aria-label="分阶段延迟百分位">
+              <thead>
+                <tr>
+                  <th scope="col">阶段</th>
+                  <th scope="col">样本数</th>
+                  <th scope="col">P50（毫秒）</th>
+                  <th scope="col">P95（毫秒）</th>
+                </tr>
+              </thead>
+              <tbody>
+                {entry.stages.map((stage) => (
+                  <tr key={stage.stage}>
+                    <td>{stage.stage}</td>
+                    <td>{stage.samples}</td>
+                    <td>{stage.p50Ms ?? "—"}</td>
+                    <td>{stage.p95Ms ?? "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          <h4 className="section-subheading">最近 50 轮总延迟（{entry.routeLabel} · {modeLabel(entry.mode)}）</h4>
+          {recentSamples.length >= 2 ? (
+            <LatencySparkline samples={recentSamples} />
+          ) : (
+            <p className="muted">该线路暂无足够的最近轮样本（至少 2 轮才画折线）。</p>
+          )}
+        </>
       )}
       <button type="button" disabled={busy} onClick={load}>刷新</button>
     </section>
