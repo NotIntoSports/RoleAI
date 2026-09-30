@@ -205,7 +205,11 @@ export type PracticeQuestionReview = { index: number, question: string, answer: 
 
 export type PracticeReport = { sessionId: string, planId: string, position: string, interviewerStyle: string, llmAvailable: boolean, totalScore: number, dimensions: PracticeDimensions, perQuestion: Array<PracticeQuestionReview>, topSuggestions: Array<string>, objective: PracticeMetrics, createdAt: string, };
 
-export type PracticeReportSummary = { sessionId: string, planId: string, position: string, interviewerStyle: string, totalScore: number, createdAt: string, };
+export type PracticeReportSummary = { sessionId: string, planId: string, position: string, interviewerStyle: string, totalScore: number, dimensions: PracticeDimensions, 
+/**
+ * 报告内客观指标的总回答时长；时间信息不全时为 None。
+ */
+durationSeconds: number | null, createdAt: string, };
 
 export type ObsRuntimeStatus = { connected: boolean, sceneReady: boolean, browserSourceReady: boolean, virtualCameraActive: boolean, errorCode: string | null, };
 

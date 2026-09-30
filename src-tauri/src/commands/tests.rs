@@ -2399,6 +2399,11 @@ fn practice_report_generate_success_and_roundtrip() {
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].session_id, session_id);
     assert!((list[0].total_score - 3.5).abs() < f64::EPSILON);
+    // 历史列表直接携带维度分与总时长（E09 成长曲线用）：维度来自 dimensions_json；
+    // 种子轮次时间戳相同 → 首答时长不可用 → 总时长不可用。
+    assert!((list[0].dimensions.content_depth - 4.0).abs() < f64::EPSILON);
+    assert!((list[0].dimensions.job_fit - 3.0).abs() < f64::EPSILON);
+    assert!(list[0].duration_seconds.is_none());
 }
 
 #[test]

@@ -1,40 +1,48 @@
 import { useCallback, useEffect, useState } from "react";
-import { ClipboardList } from "lucide-react";
+import { ClipboardList, History } from "lucide-react";
 
 import * as api from "../../api/commands";
 import { EmptyState } from "../../components/empty-state";
+import type { PracticeReportSummary } from "../../generated/bindings";
+import { PracticeHistorySection } from "../../features/practice/practice-history";
 import { PracticeReportView } from "../../features/practice/practice-report";
 import { PracticeWizard } from "../../features/practice/practice-wizard";
 import { PageShell } from "../page-shell";
 
-export function PracticePage() {
-  // 报告区默认展示最近一次已生成的训练报告；训练历史（E09）提供逐条选择。
-  const [latestSessionId, setLatestSessionId] = useState<string | null>(null);
-  const [phase, setPhase] = useState<"loading" | "ready" | "empty">("loading");
+const EMPTY_REPORT_HINT =
+  "完成一次模拟面试训练并生成报告后，这里会展示总分、维度评分与逐题点评。";
 
-  const loadLatest = useCallback(async () => {
-    setPhase("loading");
+export function PracticePage() {
+  // 报告区默认展示最近一次训练；历史列表（E09）可切换任意一份报告。
+  const [reports, setReports] = useState<PracticeReportSummary[] | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+
+  const loadReports = useCallback(async () => {
     try {
       const result = await api.listPracticeReports();
-      if (result.ok && result.data.length > 0) {
-        setLatestSessionId(result.data[0].sessionId);
-        setPhase("ready");
-      } else if (result.ok) {
-        setLatestSessionId(null);
-        setPhase("empty");
+      if (result.ok) {
+        setReports(result.data);
+        setSelectedSessionId(result.data[0]?.sessionId ?? null);
+        setLoadFailed(false);
       } else {
-        setLatestSessionId(null);
-        setPhase("empty");
+        setReports(null);
+        setLoadFailed(true);
       }
     } catch {
-      setLatestSessionId(null);
-      setPhase("empty");
+      setReports(null);
+      setLoadFailed(true);
     }
   }, []);
 
   useEffect(() => {
-    void loadLatest();
-  }, [loadLatest]);
+    void loadReports();
+  }, [loadReports]);
+
+  const loading = reports === null && !loadFailed;
+  const showEmpty = loadFailed || (reports !== null && reports.length === 0);
+  const hasReports = !!reports && reports.length > 0;
+  const isLatest = hasReports && !!selectedSessionId && reports[0].sessionId === selectedSessionId;
 
   return (
     <>
@@ -46,19 +54,35 @@ export function PracticePage() {
             <ClipboardList size={16} aria-hidden="true" />
             训练报告
           </h2>
-          {phase === "ready" && <span className="muted">最近一次训练</span>}
+          {hasReports && <span className="muted">{isLatest ? "最近一次训练" : "来自历史选择"}</span>}
         </div>
-        {phase === "loading" && <p className="muted" role="status">正在读取训练报告…</p>}
-        {phase === "empty" && (
+        {loading && <p className="muted" role="status">正在读取训练报告…</p>}
+        {showEmpty && (
           <EmptyState
             className="practice-empty"
             icon={<ClipboardList size={28} aria-hidden="true" />}
             title="还没有训练报告。"
-            hint="完成一次模拟面试训练并生成报告后，这里会展示总分、维度评分与逐题点评。"
+            hint={EMPTY_REPORT_HINT}
           />
         )}
-        {phase === "ready" && latestSessionId && <PracticeReportView sessionId={latestSessionId} />}
+        {hasReports && selectedSessionId && <PracticeReportView key={selectedSessionId} sessionId={selectedSessionId} />}
       </section>
+      {hasReports && reports && (
+        <section className="service-panel practice-history-section" aria-labelledby="practice-history-heading">
+          <div className="library-heading">
+            <h2 id="practice-history-heading">
+              <History size={16} aria-hidden="true" />
+              训练历史与成长曲线
+            </h2>
+            <span className="muted">共 {reports.length} 次训练</span>
+          </div>
+          <PracticeHistorySection
+            reports={reports}
+            selectedSessionId={selectedSessionId}
+            onSelect={setSelectedSessionId}
+          />
+        </section>
+      )}
     </>
   );
 }

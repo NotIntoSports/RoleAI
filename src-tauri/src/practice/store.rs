@@ -168,17 +168,35 @@ impl<'a> PracticeReportStore<'a> {
     pub fn list(&self) -> Result<Vec<PracticeReportSummary>, DatabaseError> {
         self.database.with_connection(|connection| {
             let mut statement = connection.prepare(
-                "SELECT id, plan_id, position, interviewer_style, total_score, created_at
+                "SELECT id, plan_id, position, interviewer_style, total_score,
+                        dimensions_json, objective_json, created_at
                  FROM practice_reports ORDER BY created_at DESC, id",
             )?;
             let rows = statement.query_map([], |row| {
+                // 成长曲线与历史列表直接取维度分与总时长；损坏 JSON 按未评/不可用降级。
+                let dimensions = row
+                    .get::<_, String>(5)
+                    .ok()
+                    .and_then(|json| serde_json::from_str(&json).ok())
+                    .unwrap_or_default();
+                let duration_seconds = row
+                    .get::<_, String>(6)
+                    .ok()
+                    .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
+                    .and_then(|value| {
+                        value
+                            .get("totalDurationSeconds")
+                            .and_then(|total| total.as_f64())
+                    });
                 Ok(PracticeReportSummary {
                     session_id: row.get(0)?,
                     plan_id: row.get(1)?,
                     position: row.get(2)?,
                     interviewer_style: row.get(3)?,
                     total_score: row.get::<_, f64>(4).unwrap_or(0.0),
-                    created_at: row.get(5)?,
+                    dimensions,
+                    duration_seconds,
+                    created_at: row.get(7)?,
                 })
             })?;
             rows.collect()

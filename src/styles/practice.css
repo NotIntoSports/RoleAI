@@ -347,3 +347,95 @@
   font-size: 12px;
   color: var(--text-muted);
 }
+
+/* 训练历史与成长曲线（E09）。 */
+.practice-history-section {
+  margin-top: 20px;
+}
+
+.practice-history {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.practice-growth {
+  margin: 0;
+  flex: none;
+}
+
+.practice-growth svg {
+  max-width: 100%;
+}
+
+.practice-growth-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.practice-growth-legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.practice-growth-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 3px;
+  border-radius: 2px;
+}
+
+.practice-history-list {
+  flex: 1 1 260px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+
+.practice-history-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-muted);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.practice-history-item:hover {
+  border-color: var(--border-strong);
+}
+
+.practice-history-item[data-selected="true"] {
+  border-color: var(--accent-strong);
+  background: var(--accent-strong-soft);
+}
+
+.practice-history-position {
+  font-weight: 600;
+  flex: 1 1 140px;
+  min-width: 0;
+}
+
+.practice-history-score {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.practice-history-meta {
+  font-size: 12px;
+}

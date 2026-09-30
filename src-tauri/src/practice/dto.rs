@@ -159,7 +159,8 @@ pub struct PracticeReport {
     pub created_at: String,
 }
 
-/// 报告列表条目（按 created_at 倒序，用于成长曲线）。
+/// 报告列表条目（按 created_at 倒序，用于成长曲线与训练历史）。
+/// dimensions / duration 供 E09 历史列表与成长曲线直接使用，避免逐条拉全量报告。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
@@ -169,5 +170,10 @@ pub struct PracticeReportSummary {
     pub position: String,
     pub interviewer_style: String,
     pub total_score: f64,
+    #[serde(default)]
+    pub dimensions: PracticeDimensions,
+    /// 报告内客观指标的总回答时长；时间信息不全时为 None。
+    #[serde(default)]
+    pub duration_seconds: Option<f64>,
     pub created_at: String,
 }
