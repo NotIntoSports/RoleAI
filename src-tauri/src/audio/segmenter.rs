@@ -285,6 +285,72 @@ mod tests {
         assert!(vad.take().is_some());
         assert!(vad.take().is_none());
     }
+
+    /// 话轮长度必须逐帧精确：预卷 10 帧（含激活前 7 静音 + 前 3 有声）
+    /// + 激活后 9 有声 + 35 静音 = 54 帧。这是起点去抖（voiced_run 达到
+    /// START_FRAMES 才激活）、预卷上限截断与激活时序的唯一长度观测面。
+    #[test]
+    fn utterance_length_is_exact_preroll_plus_speech() {
+        let mut vad = UtteranceSegmenter::default();
+        for _ in 0..50 {
+            vad.ingest(&frame(0), false); // 静音：只填预卷，不激活
+        }
+        for _ in 0..12 {
+            vad.ingest(&frame(2000), false);
+        }
+        for _ in 0..35 {
+            vad.ingest(&frame(0), false);
+        }
+        let utterance = vad.take().expect("utterance");
+        assert_eq!(
+            utterance.len(),
+            (PRE_ROLL_FRAMES + (12 - START_FRAMES) + END_SILENCE_FRAMES) * FRAME_BYTES,
+            "话轮必须是预卷 10 帧 + 激活后 9 有声 + 35 静音 = 54 帧"
+        );
+    }
+
+    /// 复位必须把状态彻底清零（队列、丢弃计数、pending、预卷、激活标记），
+    /// 复位后与全新实例逐字节一致；trait 对象侧 ready/dropped/reset 转发
+    /// 一并钉住（这三条 dyn 路径此前没有任何断言经过）。
+    #[test]
+    fn reset_returns_to_fresh_state_and_trait_forwarding_is_honest() {
+        let mut vad = UtteranceSegmenter::default();
+        // 先制造一次队列溢出：3 轮话轮只留 2 个，dropped 必须为 1（dyn 转发）。
+        for _ in 0..3 {
+            for _ in 0..12 {
+                vad.ingest(&frame(2000), false);
+            }
+            for _ in 0..35 {
+                vad.ingest(&frame(0), false);
+            }
+        }
+        let seg: &mut dyn SpeechSegmenter = &mut vad;
+        assert_eq!(seg.dropped(), 1, "trait dropped 转发");
+        assert!(seg.ready(), "trait ready 转发");
+        seg.reset();
+        assert!(!seg.ready(), "复位后不得再有排队话轮");
+        assert_eq!(seg.dropped(), 0, "复位必须清零丢弃计数");
+        assert!(seg.take().is_none(), "复位必须清空话轮队列");
+        // 复位后连续两轮话轮都必须与全新实例逐字节一致（钉住 finish 后的状态清理）。
+        let mut fresh = UtteranceSegmenter::default();
+        for round in 0..2 {
+            for _ in 0..12 {
+                seg.ingest(&frame(2000), false);
+                fresh.ingest(&frame(2000), false);
+            }
+            for _ in 0..35 {
+                seg.ingest(&frame(0), false);
+                fresh.ingest(&frame(0), false);
+            }
+            assert_eq!(
+                seg.take(),
+                fresh.take(),
+                "第 {} 轮：复位后行为必须与全新实例一致",
+                round + 1
+            );
+            assert!(seg.take().is_none() && fresh.take().is_none());
+        }
+    }
     #[test]
     fn echo_suppression_discards_partial_and_complete_echo() {
         let mut vad = UtteranceSegmenter::default();

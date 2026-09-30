@@ -576,4 +576,99 @@ mod tests {
             .join("\n");
         assert!(!joined.contains(&"第一段".repeat(2)));
     }
+
+    /// 清洗边界：单字符行（哼声/散字）必须整行丢弃，两字符行必须保留，
+    /// 空行保留为段落分隔——三者的判定窗口恰好卡在 chars().count() < 2。
+    #[test]
+    fn clean_text_drops_single_char_lines_but_keeps_two_char_lines() {
+        let text = "首段内容\n甲\n乙乙\n\n次段内容";
+        let chunks = chunk_text("钱八", &text);
+        assert_eq!(chunks.len(), 2, "空行必须保住两个段落");
+        assert!(
+            chunks[0].content.contains("乙乙") && !chunks[0].content.contains('甲'),
+            "两字符行必须保留、单字符行必须丢弃：{}",
+            chunks[0].content
+        );
+    }
+
+    /// 无段头分块的子弹回退只发生在"整段只有一个块"时：多段落正文保持
+    /// 段落切块，不得被子弹项列表顶掉；且单个子弹项不构成回退条件。
+    #[test]
+    fn bullet_fallback_requires_single_block_and_multiple_items() {
+        let multi_paragraph = "甲段说明\n\n• 乙项\n• 丙项\n• 丁项";
+        let chunks = chunk_text("孙九", multi_paragraph);
+        assert_eq!(chunks.len(), 2, "多段落正文必须按段落切，不得退化为逐子弹项");
+        assert!(chunks[0].content.contains("甲段") && !chunks[0].content.contains('•'));
+
+        let single_bullet = "甲段说明\n\n• 乙项";
+        let chunks = chunk_text("孙九", single_bullet);
+        assert_eq!(chunks.len(), 2);
+        assert!(
+            chunks[1].content.contains('•'),
+            "单个子弹项必须留在原块内，不得顶掉段落块"
+        );
+    }
+
+    /// 教育背景不走经历日期拆分：只有经历类段头按日期行切块，
+    /// 其它段头保持"首行标题 + 整段"单块形态。
+    #[test]
+    fn education_section_is_not_split_by_date_lines() {
+        let text = "教育背景\n2018.09-2022.06 某大学 本科\n主修计算机科学与技术";
+        let chunks = chunk_text("吴十", &text);
+        assert_eq!(chunks.len(), 1, "教育背景不得按日期行拆成多块");
+        assert!(chunks[0].content.contains("主修计算机科学与技术"));
+    }
+
+    /// 硬切优先落在预算窗口内的空行边界（\n\n）上：首块止于空行前，
+    /// 次块从空行后开始；非首块必须携带段首上下文且上下文恰好出现一次；
+    /// 字符偏移必须重新定位到清洗文本的真实位置。
+    #[test]
+    fn hard_split_prefers_blank_line_boundary_in_lookback() {
+        let text = format!("[会议纪要]\n{}\n\n{}", "甲".repeat(1900), "乙".repeat(1200));
+        let chunks = chunk_text("周七", &text);
+        assert_eq!(chunks.len(), 2, "甲/乙 两段必须切成两块");
+        assert!(
+            chunks[0].content.contains('甲') && !chunks[0].content.contains('乙'),
+            "首块不得跨过空行边界"
+        );
+        assert!(
+            chunks[1].content.contains('乙') && !chunks[1].content.contains('甲'),
+            "次块必须从空行之后开始"
+        );
+        for chunk in &chunks {
+            assert!(
+                chunk.content.matches("[周七").count() == 1,
+                "段首上下文必须恰好一次：{}",
+                &chunk.content[..chunk.content.len().min(40)]
+            );
+        }
+        assert_eq!(chunks[0].start_char, 0, "首块从清洗文本开头开始");
+        assert!(
+            chunks[1].start_char > 0 && chunks[1].end_char - chunks[1].start_char == 1200,
+            "次块偏移必须定位到乙段真实位置（1200 字）"
+        );
+    }
+
+    /// 无空行可切时回退到句读边界：回溯窗内从后往前找第一个 。！？；
+    /// 叠标点（！！）只认收尾的那个；切点必须落在标点之后而不是标点前。
+    #[test]
+    fn hard_split_falls_back_to_sentence_break_and_skips_doubled_punctuation() {
+        let text = format!("[会议纪要]\n{}完。成！！{}", "甲".repeat(1900), "乙".repeat(100));
+        let chunks = chunk_text("周七", &text);
+        assert_eq!(chunks.len(), 2, "长文必须切两块");
+        assert!(
+            chunks[0].content.contains("完。") && chunks[0].content.contains('！'),
+            "首块必须包含第一句与第一个叹号"
+        );
+        assert!(
+            !chunks[0].content.contains("！！") && !chunks[0].content.contains('乙'),
+            "切点必须落在叠叹号之间，不得把乙段并进首块"
+        );
+        assert!(
+            chunks[1].content.starts_with("[周七")
+                && chunks[1].content.contains('乙')
+                && !chunks[1].content.contains("完。"),
+            "次块必须带上下文且从第二个叹号后开始"
+        );
+    }
 }
