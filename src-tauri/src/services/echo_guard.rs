@@ -265,6 +265,50 @@ mod tests {
         assert_eq!(normalize("三万"), "30000");
     }
 
+    /// 数字归一化的进位合成必须覆盖千/万/亿跨段：十二亿三千四百五十六万
+    /// 七千八百九十 → 1234567890（含此前未测的 七/千/亿 三个字素）。
+    #[test]
+    fn numeral_positional_composition_spans_yi_wan_qian() {
+        assert_eq!(
+            normalize("十二亿三千四百五十六万七千八百九十"),
+            "1234567890"
+        );
+        assert_eq!(normalize("七千"), "7000");
+        assert_eq!(normalize("三亿"), "300000000");
+        assert_eq!(normalize("两千零一十"), "2010");
+    }
+
+    /// 超过 u64 的数位串不得 panic 也不得清零：换算失败时原样保留汉字，
+    /// 让比对退化为字面匹配（两侧归一化路径一致，判定仍成立）。
+    #[test]
+    fn numeral_overflow_degrades_to_verbatim_characters() {
+        let overflow = "九".repeat(21);
+        assert_eq!(normalize(&overflow), overflow);
+        assert_eq!(normalize("九千九百九十九亿"), "999900000000");
+    }
+
+    /// 无包含关系的近似回声靠 bigram Dice 命中：同句仅年份差一位，
+    /// dice≈0.93 ≥ 0.85 → 回声；日期多处不同 dice≈0.53 → 放行。
+    #[test]
+    fn near_identical_text_without_containment_uses_dice() {
+        let spoken = vec!["现在是2026年9月28日，星期一。".to_string()];
+        // 无包含（互不为子串）、仅单字差异 → 必须走 Dice 通道命中。
+        assert!(is_echo("现在是2027年9月28日，星期一。", &spoken));
+        // 差异过大：低于阈值放行（真人换日期追问不误吞）。
+        assert!(!is_echo("现在是2027年3月18日，星期五。", &spoken));
+    }
+
+    /// 最近播报列表里的过短条目（如「好的」）只跳过自身，不得中断
+    /// 对后续条目的比对，也不得把判定直接判负。
+    #[test]
+    fn short_spoken_entries_are_skipped_not_fatal() {
+        let spoken = vec![
+            "好的".to_string(),
+            "现在是2026年9月28日，星期一。".to_string(),
+        ];
+        assert!(is_echo("现在是二零二六年九月二十八日星期一。", &spoken));
+    }
+
     #[test]
     fn gate_timers_expire_on_drain_deadline_or_force_open() {
         let now = Instant::now();
