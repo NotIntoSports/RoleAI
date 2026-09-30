@@ -25,6 +25,8 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     include: ["src/**/*.test.{ts,tsx}"],
+    // 测试环境默认语言钉为 zh-CN（jsdom 固定 navigator.language=en-US）。
+    setupFiles: ["./src/i18n/test-setup.ts"],
     passWithNoTests: true,
   },
 });

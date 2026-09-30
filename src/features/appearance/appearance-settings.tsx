@@ -1,4 +1,5 @@
 import { Monitor, Moon, Sun } from "lucide-react";
+import { parseLanguagePreference, setLanguagePreference, useLanguagePreference, useT } from "../../i18n";
 import { setThemePreference, useThemePreference } from "./theme";
 
 const options = [
@@ -7,8 +8,16 @@ const options = [
   { value: "dark", label: "深色", description: "柔和、专注的深色界面", Icon: Moon },
 ] as const;
 
+const languageOptions = [
+  { value: "system", labelKey: "settings.appearance.language.system" },
+  { value: "zh-CN", labelKey: "settings.appearance.language.simplifiedChinese" },
+  { value: "en", labelKey: "settings.appearance.language.english" },
+] as const;
+
 export function AppearanceSettings() {
+  const t = useT();
   const preference = useThemePreference();
+  const language = useLanguagePreference();
   return (
     <section className="appearance-settings" aria-labelledby="appearance-heading">
       <div className="section-heading"><h2 id="appearance-heading">外观</h2><p className="muted">选择适合你的工作环境，偏好会保存在本机。</p></div>
@@ -22,6 +31,18 @@ export function AppearanceSettings() {
             <span className="theme-option-description">{description}</span>
           </label>
         ))}
+      </fieldset>
+      <fieldset className="appearance-language">
+        <legend className="sr-only">{t("settings.appearance.language.legend")}</legend>
+        <label>
+          {t("settings.appearance.language.legend")}
+          <select value={language} onChange={(event) => setLanguagePreference(parseLanguagePreference(event.target.value))}>
+            {languageOptions.map(({ value, labelKey }) => (
+              <option key={value} value={value}>{t(labelKey)}</option>
+            ))}
+          </select>
+        </label>
+        <p className="muted">{t("settings.appearance.language.note")}</p>
       </fieldset>
       <p className="appearance-note muted">外观设置立即生效；选择「跟随系统」时会自动响应系统主题变化。</p>
     </section>
