@@ -313,6 +313,83 @@ mod tests {
         assert!(vad.take().is_none());
     }
 
+    /// 短于最小说话时长（200ms）的噪声突刺必须整段丢弃，不产出空话轮，
+    /// 也不计入队列丢弃计数（丢弃只统计队列溢出）。
+    #[test]
+    fn short_noise_burst_below_min_speech_is_discarded() {
+        let mut vad = UtteranceSegmenter::default();
+        for _ in 0..5 {
+            vad.ingest(&frame(2000), false);
+        }
+        for _ in 0..35 {
+            vad.ingest(&frame(0), false);
+        }
+        assert!(!vad.ready(), "不足 10 个有声帧的话轮必须丢弃");
+        assert!(vad.take().is_none());
+        assert_eq!(vad.dropped(), 0, "丢弃计数只反映队列溢出");
+        // 丢弃后状态必须复位：紧接的正常话轮仍可提交。
+        for _ in 0..12 {
+            vad.ingest(&frame(2000), false);
+        }
+        for _ in 0..35 {
+            vad.ingest(&frame(0), false);
+        }
+        assert!(vad.ready());
+    }
+
+    /// 真实采集按任意块界送字节：同一帧被拆到两次 ingest 也必须产生
+    /// 与整帧送入完全相同的话轮，不丢样、不重复。
+    #[test]
+    fn unaligned_ingest_boundaries_produce_identical_utterances() {
+        let mut aligned = UtteranceSegmenter::default();
+        let mut split = UtteranceSegmenter::default();
+        let speech: Vec<u8> = (0..12).flat_map(|_| frame(2000)).collect();
+        let silence: Vec<u8> = (0..35).flat_map(|_| frame(0)).collect();
+        for _ in 0..12 {
+            aligned.ingest(&frame(2000), false);
+        }
+        for _ in 0..35 {
+            aligned.ingest(&frame(0), false);
+        }
+        // 7 字节这种与 16bit 样本不对齐的边界也要稳。
+        for chunk in speech.chunks(7) {
+            split.ingest(chunk, false);
+        }
+        for chunk in silence.chunks(5) {
+            split.ingest(chunk, false);
+        }
+        assert_eq!(split.take(), aligned.take(), "拆块送入的话轮必须逐字节一致");
+        assert!(split.take().is_none() && aligned.take().is_none());
+    }
+
+    /// 25 秒封顶：持续说话无静音也必须在 MAX_UTTERANCE_FRAMES 处强制收束，
+    /// 话轮长度恰为上限，多余语音开启新话轮而不是被吞。
+    #[test]
+    fn sustained_speech_is_capped_at_max_utterance_frames() {
+        let mut vad = UtteranceSegmenter::default();
+        for _ in 0..1300 {
+            vad.ingest(&frame(2000), false);
+        }
+        assert!(vad.ready(), "达到 25s 封顶必须立即收束出话轮");
+        let capped = vad.take().expect("capped utterance");
+        assert_eq!(
+            capped.len(),
+            MAX_UTTERANCE_FRAMES * FRAME_BYTES,
+            "话轮必须恰好停在上限帧数"
+        );
+    }
+
+    /// `CaptureState` 派生 `Debug` 走这条手工实现：不得 panic，也不得泄漏 PCM。
+    #[test]
+    fn debug_impl_hides_pcm_and_reports_type_name() {
+        let mut vad = UtteranceSegmenter::default();
+        vad.ingest(&frame(2000), false);
+        let boxed: Box<dyn SpeechSegmenter> = Box::new(vad);
+        let text = format!("{boxed:?}");
+        assert!(text.contains("SpeechSegmenter"), "实际输出：{text}");
+        assert!(!text.contains("2000"), "调试输出不得包含样本数据");
+    }
+
     // 工厂语义由进程级环境变量决定，两个工厂用例与跨模块管线用例共用
     // `factory_test_support` 的锁串行执行，避免并行互扰。
     #[test]
