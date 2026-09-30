@@ -18,6 +18,7 @@ import { handleConfigCommand } from "./config";
 import { handleLiveSessionCommand, liveRuntimeStatus } from "./live-commands";
 import { handleLivestreamCommand } from "./livestream";
 import { handleMaterialCommand } from "./materials";
+import { handlePracticeCommand, resetPracticeState } from "./practice";
 import { handleProviderCommand } from "./providers";
 import { handleRecordCommand } from "./records";
 import { handleRoleCommand } from "./roles";
@@ -88,7 +89,7 @@ function handleMeetingAndAudio(cmd: string): unknown {
   }
 }
 
-/** 领域分发：config / roles / providers / voice / 资料 / 记录 / 会议与音频 / 其余兜底。 */
+/** 领域分发：config / roles / providers / voice / 资料 / 记录 / 会议与音频 / 模拟面试训练 / 其余兜底。 */
 function dispatch(cmd: string, payload: Record<string, unknown>): unknown {
   return (
     handleConfigCommand(cmd, payload) ??
@@ -98,6 +99,7 @@ function dispatch(cmd: string, payload: Record<string, unknown>): unknown {
     handleMaterialCommand(cmd, payload) ??
     handleRecordCommand(cmd, payload) ??
     handleLivestreamCommand(cmd, payload) ??
+    handlePracticeCommand(cmd, payload) ??
     handleMeetingAndAudio(cmd) ??
     err("DEMO_NOT_IMPLEMENTED", `在线演示尚未模拟该能力（${cmd}）`)
   );
@@ -130,6 +132,7 @@ export function handleDemoInvoke(cmd: string, payload?: DemoPayload): unknown {
 export function installDemoResetHook(): void {
   (window as { __roleaiDemoReset?: () => void }).__roleaiDemoReset = () => {
     resetDemoState();
+    resetPracticeState();
     window.location.reload();
   };
   // 读取一次状态，保证首次渲染前种子已就绪。

@@ -33,14 +33,15 @@ function formatScore(value: number): string {
 
 /** 四维雷达图：手写 SVG（约百行），分数 0~5 映射到半径。 */
 export function PracticeRadarChart({ dimensions }: { dimensions: PracticeDimensions }) {
-  const size = 200;
-  const center = size / 2;
-  const radius = 70;
+  const width = 320;
+  const height = 220;
+  const center: [number, number] = [160, 104];
+  const radius = 72;
   const values = DIMENSION_LABELS.map(({ key }) => clampScore(dimensions[key]));
   // 轴序：上、右、下、左（数学角度 90° → 0° → 270° → 180°）。
   const point = (axis: number, ratio: number): [number, number] => {
     const angle = (90 - axis * 90) * (Math.PI / 180);
-    return [center + radius * ratio * Math.cos(angle), center - radius * ratio * Math.sin(angle)];
+    return [center[0] + radius * ratio * Math.cos(angle), center[1] - radius * ratio * Math.sin(angle)];
   };
   const ring = (ratio: number) =>
     [0, 1, 2, 3].map((axis) => point(axis, ratio).map((v) => v.toFixed(1)).join(",")).join(" ");
@@ -48,17 +49,17 @@ export function PracticeRadarChart({ dimensions }: { dimensions: PracticeDimensi
     .map((value, axis) => point(axis, value / 5).map((v) => v.toFixed(1)).join(","))
     .join(" ");
   const labelOffset: Array<[number, number]> = [
-    [0, -10],
-    [10, 4],
-    [0, 16],
-    [-10, 4],
+    [0, -12],
+    [14, 4],
+    [0, 20],
+    [-14, 4],
   ];
   return (
     <svg
       className="practice-radar"
-      viewBox={`0 0 ${size} ${size}`}
-      width={size}
-      height={size}
+      viewBox={`0 0 ${width} ${height}`}
+      width={width}
+      height={height}
       role="img"
       aria-label={`维度雷达图：${DIMENSION_LABELS.map(({ label }, index) => `${label} ${formatScore(values[index])}`).join("，")}`}
     >
@@ -67,7 +68,7 @@ export function PracticeRadarChart({ dimensions }: { dimensions: PracticeDimensi
       ))}
       {[0, 1, 2, 3].map((axis) => {
         const [x, y] = point(axis, 1);
-        return <line key={axis} x1={center} y1={center} x2={x} y2={y} stroke="var(--border)" />;
+        return <line key={axis} x1={center[0]} y1={center[1]} x2={x} y2={y} stroke="var(--border)" />;
       })}
       <polygon points={dataPolygon} fill="var(--accent-strong-soft)" stroke="var(--accent-strong)" strokeWidth={1.5} />
       {values.map((value, axis) => {
