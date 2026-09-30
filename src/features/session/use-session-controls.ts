@@ -3,6 +3,7 @@ import type { Dispatch, FormEvent, SetStateAction } from "react";
 import * as api from "../../api/commands";
 import { createAudioContextForOutput, type WebAudioPlayer } from "./web-audio-player";
 import type { VideoShareKind } from "./video-sharer";
+import { t } from "../../i18n";
 import { errorText, humanizeRemoteError } from "./workspace-format";
 import type {
   AgentCommandInput,
@@ -125,7 +126,7 @@ export function useSessionControls({
       else setMessage("");
       return true;
     } catch {
-      setMessage("IPC_UNAVAILABLE：本地操作失败");
+      setMessage(t("session.ipc.operateFailed"));
       return false;
     } finally {
       setBusy(false);
@@ -153,8 +154,8 @@ export function useSessionControls({
       return;
     }
     try {
-      if (inputSource === "meeting" && !meetingPid) { setConfigurationOpen(true); setMessage("请刷新并选择会议进程。"); return; }
-      if (inputSource === "meeting" && !virtualAudio?.installed) { setConfigurationOpen(true); setMessage(virtualAudio?.rebootRequired ? "请重启 Windows，使虚拟声卡生效后再开始会议。" : "请先安装并自动配置虚拟声卡。"); return; }
+      if (inputSource === "meeting" && !meetingPid) { setConfigurationOpen(true); setMessage(t("session.controls.selectMeetingProcess")); return; }
+      if (inputSource === "meeting" && !virtualAudio?.installed) { setConfigurationOpen(true); setMessage(virtualAudio?.rebootRequired ? t("session.controls.rebootForMeeting") : t("session.controls.installVirtualAudioFirst")); return; }
       const result = roleProfileId && voiceRouteId
         ? await api.startSession({ roleProfileId, voiceRouteId, allowWebSearch: allowWebSearch && canSearch, allowBargeIn, ...(inputSource === "meeting" ? { meetingPid: Number(meetingPid) } : {}), ...(outputDeviceId ? { outputDeviceId } : {}) })
         : await api.startSession();
@@ -194,7 +195,7 @@ export function useSessionControls({
       await refresh(result.data.session.id, true);
     } catch {
       setConfigurationOpen(true);
-      setMessage("IPC_UNAVAILABLE：本地操作失败");
+      setMessage(t("session.ipc.operateFailed"));
     } finally {
       setBusy(false);
     }
@@ -261,7 +262,7 @@ export function useSessionControls({
       }
       await refresh();
     } catch {
-      setMessage("IPC_UNAVAILABLE：本地操作失败");
+      setMessage(t("session.ipc.operateFailed"));
     } finally {
       setBusy(false);
     }
@@ -295,7 +296,7 @@ export function useSessionControls({
       setMessage(
         error instanceof Error && error.message
           ? humanizeRemoteError(error.message)
-          : "发送失败，请重试。",
+          : t("session.controls.sendFailed"),
       );
     }
     await refresh();

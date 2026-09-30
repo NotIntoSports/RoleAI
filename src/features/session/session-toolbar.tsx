@@ -7,37 +7,39 @@ import type {
   RoleScenario,
   VirtualAudioPreparation,
 } from "../../generated/bindings";
+import { t, useT } from "../../i18n";
 
-const PHASE_LABELS: Record<string, string> = {
-  idle: "未开始",
-  preparing: "准备中",
-  listening: "聆听中",
-  thinking: "思考中",
-  speaking: "回复中",
-  stopping: "停止中",
-  recovering: "恢复中",
-  blocked: "需要处理",
-  completed: "已结束",
-  failed: "会话异常",
+const PHASE_KEYS = ["idle", "preparing", "listening", "thinking", "speaking", "stopping", "recovering", "blocked", "completed", "failed"] as const;
+type KnownPhase = (typeof PHASE_KEYS)[number];
+
+const MODE_KEYS = ["ai_active", "operator_speaking", "paused", "muted"] as const;
+type KnownMode = (typeof MODE_KEYS)[number];
+
+const MEETING_NAME_KEYS: Record<string, "session.meetingNames.teams" | "session.meetingNames.ms-teams" | "session.meetingNames.wemeet" | "session.meetingNames.feishu" | "session.meetingNames.lark" | "session.meetingNames.dingtalk" | "session.meetingNames.zoom"> = {
+  "teams.exe": "session.meetingNames.teams", "ms-teams.exe": "session.meetingNames.ms-teams",
+  "wemeetapp.exe": "session.meetingNames.wemeet", "feishu.exe": "session.meetingNames.feishu", "lark.exe": "session.meetingNames.lark",
+  "dingtalk.exe": "session.meetingNames.dingtalk", "zoom.exe": "session.meetingNames.zoom",
 };
 
-const MODE_LABELS: Record<string, string> = {
-  ai_active: "AI 应答",
-  operator_speaking: "人工接管",
-  paused: "已暂停",
-  muted: "已静音",
-};
+const PREPARATION_KEYS = ["checking", "downloading", "verifying", "authorizing", "installing", "rechecking"] as const;
+type KnownPreparation = (typeof PREPARATION_KEYS)[number];
 
-const MEETING_NAMES: Record<string, string> = {
-  "teams.exe": "Microsoft Teams", "ms-teams.exe": "Microsoft Teams",
-  "wemeetapp.exe": "腾讯会议", "feishu.exe": "飞书", "lark.exe": "Lark",
-  "dingtalk.exe": "钉钉", "zoom.exe": "Zoom",
-};
+function phaseLabel(phase: string): string {
+  return (PHASE_KEYS as readonly string[]).includes(phase) ? t(`session.phases.${phase as KnownPhase}`) : phase;
+}
 
-const PREPARATION_PHASES: Record<string, string> = {
-  checking: "检测安装环境", downloading: "下载安装包", verifying: "校验安装包和签名",
-  authorizing: "等待 Windows 管理员授权", installing: "安装驱动", rechecking: "重新检测音频端点",
-};
+function modeLabel(mode: string): string {
+  return (MODE_KEYS as readonly string[]).includes(mode) ? t(`session.modes.${mode as KnownMode}`) : mode;
+}
+
+function meetingName(processName: string): string {
+  const key = MEETING_NAME_KEYS[processName.toLowerCase()];
+  return key ? t(key) : processName;
+}
+
+function preparationLabel(phase: string): string {
+  return (PREPARATION_KEYS as readonly string[]).includes(phase) ? t(`session.preparation.${phase as KnownPreparation}`) : phase;
+}
 
 interface SessionToolbarProps {
   config: PublicConfig | null;
@@ -117,73 +119,74 @@ export function SessionToolbar({
   onTriggerAssistant,
   assistantPending,
 }: SessionToolbarProps) {
+  useT();
   const meetingGating = active && inputSource === "meeting" && selectedRoleScenario === "meetingAssistant";
   return (
     <header className="session-toolbar">
       <div className="session-toolbar-meta">
-        <h2 id="workspace-session-heading">当前会话</h2>
+        <h2 id="workspace-session-heading">{t("session.toolbar.heading")}</h2>
         <span className="status-badge" data-active={active}>
-          {PHASE_LABELS[phase] ?? phase}
+          {phaseLabel(phase)}
         </span>
-        {realtimeStatus === "reconnecting" && <span className="status-badge" data-active={active}>语音重连中…</span>}
-        {realtimeStatus === "failed" && <span className="status-badge" data-active={false}>语音连接失败</span>}
-        <span className="session-mode">{MODE_LABELS[mode] ?? mode}</span>
+        {realtimeStatus === "reconnecting" && <span className="status-badge" data-active={active}>{t("session.toolbar.reconnecting")}</span>}
+        {realtimeStatus === "failed" && <span className="status-badge" data-active={false}>{t("session.toolbar.connectFailed")}</span>}
+        <span className="session-mode">{modeLabel(mode)}</span>
         {/* 会话配置 fieldset 在会话进行中整体禁用，按钮必须放外面才可点。 */}
         {meetingGating && (
-          <button type="button" className="button-primary" data-pending={assistantPending} disabled={busy} onClick={onTriggerAssistant}>让助手回答</button>
+          <button type="button" className="button-primary" data-pending={assistantPending} disabled={busy} onClick={onTriggerAssistant}>{t("session.toolbar.triggerAssistant")}</button>
         )}
       </div>
       {/* 门控常驻提示：放在「会话配置」折叠区之外，会话进行中始终可见。 */}
       {meetingGating && (
-        <p className="session-gating-hint">会议助手模式：普通讨论只转写，说出“会议助手”或点「让助手回答」才会回答。</p>
+        <p className="session-gating-hint">{t("session.toolbar.gatingHint")}</p>
       )}
       <div className="session-config-heading">
-        <span className="session-config-summary">{inputSource === "meeting" ? "会议音频" : "本机麦克风"} · {config?.speech.voiceRoutes.find((route) => route.id === voiceRouteId)?.name ?? "尚未选择语音线路"}</span>
-        <button type="button" className="button-ghost" aria-expanded={configurationOpen} aria-controls="session-configuration" onClick={() => setConfigurationOpen(!configurationOpen)}><Wrench size={15} aria-hidden="true" />会话配置<ChevronDown size={14} aria-hidden="true" /></button>
+        <span className="session-config-summary">{inputSource === "meeting" ? t("session.toolbar.meetingAudio") : t("session.toolbar.localMic")} · {config?.speech.voiceRoutes.find((route) => route.id === voiceRouteId)?.name ?? t("session.toolbar.noRouteSelected")}</span>
+        <button type="button" className="button-ghost" aria-expanded={configurationOpen} aria-controls="session-configuration" onClick={() => setConfigurationOpen(!configurationOpen)}><Wrench size={15} aria-hidden="true" />{t("session.toolbar.configToggle")}<ChevronDown size={14} aria-hidden="true" /></button>
       </div>
       <div id="session-configuration" className="session-configuration" hidden={!configurationOpen}>
-        {!config && <p className="muted">尚未读取到会话配置，请到“服务”和“设置”检查线路与角色。</p>}
+        {!config && <p className="muted">{t("session.toolbar.noConfigLoaded")}</p>}
         {config && <fieldset disabled={busy || active} className="session-selection">
-          <legend>本场会话配置</legend>
-          <label>输入来源<select value={inputSource} onChange={(event) => { setInputSource(event.target.value); if (event.target.value === "meeting") { void refreshMeetings(); void refreshVirtualAudio(); } }}>
-            <option value="mic">本机麦克风</option><option value="meeting">会议音频</option>
+          <legend>{t("session.toolbar.fieldsetLegend")}</legend>
+          <label>{t("session.toolbar.inputSource")}<select value={inputSource} onChange={(event) => { setInputSource(event.target.value); if (event.target.value === "meeting") { void refreshMeetings(); void refreshVirtualAudio(); } }}>
+            <option value="mic">{t("session.toolbar.localMic")}</option><option value="meeting">{t("session.toolbar.meetingAudio")}</option>
           </select></label>
-          {inputSource === "mic" && <small>不用会议或直播：直接对麦克风说话，检测到停顿自动提交给角色；AI 播报时自动抑制回声。{micActive ? "麦克风已开启。" : ""}</small>}
+          {inputSource === "mic" && <small>{t("session.toolbar.micHint")}{micActive ? t("session.toolbar.micActiveNote") : ""}</small>}
           {inputSource === "meeting" && <>
-            <label>会议进程<select value={meetingPid} onChange={(event) => setMeetingPid(event.target.value)}>
-              <option value="">请选择会议进程</option>
-              {meetingProcesses.map((process) => <option key={process.pid} value={process.pid}>{MEETING_NAMES[process.name.toLowerCase()] ?? process.name} · {process.title} · {process.pid}</option>)}
+            <label>{t("session.toolbar.meetingProcess")}<select value={meetingPid} onChange={(event) => setMeetingPid(event.target.value)}>
+              <option value="">{t("session.toolbar.pickMeeting")}</option>
+              {meetingProcesses.map((process) => <option key={process.pid} value={process.pid}>{meetingName(process.name)} · {process.title} · {process.pid}</option>)}
             </select></label>
-            <button type="button" onClick={() => void refreshMeetings()}>刷新会议进程</button>
-            <small>仅采集所选会议的音频，不采集屏幕。请告知参会者 AI 参与和转写；检测停顿后自动提交完整语句。</small>
-            {selectedRoleScenario === "meetingAssistant" && <small>会议助手普通讨论只转写；被点名，或按 Ctrl+Alt+A 时才回答。</small>}
+            <button type="button" onClick={() => void refreshMeetings()}>{t("session.toolbar.refreshMeetings")}</button>
+            <small>{t("session.toolbar.meetingPrivacyNote")}</small>
+            {selectedRoleScenario === "meetingAssistant" && <small>{t("session.toolbar.meetingAssistantNote")}</small>}
             {virtualAudio?.state === "missing" && <div className="preflight-card" role="alert">
-              <span>检测到缺少虚拟声卡，是否安装并自动配置？</span>
-              <button type="button" disabled={installingAudio || audioRetryBlocked} onClick={() => void installVirtualAudio()}>{installingAudio ? "正在安装…" : "是，自动安装"}</button>
+              <span>{t("session.toolbar.installAsk")}</span>
+              <button type="button" disabled={installingAudio || audioRetryBlocked} onClick={() => void installVirtualAudio()}>{installingAudio ? t("session.toolbar.installingNow") : t("session.toolbar.installYes")}</button>
             </div>}
-            {installingAudio && <p role="status">{PREPARATION_PHASES[audioPreparationPhase]}… 请勿重复启动安装。</p>}
-            {audioAttempted && !installingAudio && !virtualAudio?.installed && <small>最近安装步骤：{PREPARATION_PHASES[audioPreparationPhase]}。{audioRetryBlocked ? "请先重新检测，确认没有仍在运行的安装任务。" : "失败说明见页面提示；再次安装前会重新检查驱动状态。"}</small>}
+            {installingAudio && <p role="status">{t("session.toolbar.preparingNotice", { phase: preparationLabel(audioPreparationPhase) })}</p>}
+            {audioAttempted && !installingAudio && !virtualAudio?.installed && <small>{t("session.toolbar.lastInstallStep", { phase: preparationLabel(audioPreparationPhase) })} {audioRetryBlocked ? t("session.toolbar.retryBlockedNote") : t("session.toolbar.retryAllowedNote")}</small>}
             {!installingAudio && virtualAudio && !virtualAudio.installed && !["missing", "reboot_required"].includes(virtualAudio.state) && <div className="preflight-card" role="alert">{virtualAudio.detail}</div>}
-            <button type="button" disabled={installingAudio} onClick={() => void refreshVirtualAudio()}>重新检测虚拟声卡</button>
-            {virtualAudio?.rebootRequired && <div className="preflight-card" role="alert">虚拟声卡驱动已安装，需要重启 Windows 后继续。软件不会自动重启电脑。</div>}
-            {virtualAudio?.installed && <small>虚拟声卡端点已就绪，将自动绑定音频线路；尚不代表会议对方已能听到声音。</small>}
+            <button type="button" disabled={installingAudio} onClick={() => void refreshVirtualAudio()}>{t("session.toolbar.recheckAudio")}</button>
+            {virtualAudio?.rebootRequired && <div className="preflight-card" role="alert">{t("session.toolbar.rebootRequired")}</div>}
+            {virtualAudio?.installed && <small>{t("session.toolbar.virtualAudioReady")}</small>}
           </>}
-          {inputSource !== "meeting" && <><label>语音输出<select value={outputDeviceId} onChange={(event) => setOutputDeviceId(event.target.value)}>
-            <option value="">系统默认输出</option>
+          {inputSource !== "meeting" && <><label>{t("session.toolbar.voiceOutput")}<select value={outputDeviceId} onChange={(event) => setOutputDeviceId(event.target.value)}>
+            <option value="">{t("session.toolbar.systemDefault")}</option>
             {audioOutputs.map((device) => <option key={device.id} value={device.id}>{device.name}</option>)}
           </select></label>
-          <button type="button" onClick={() => void refreshAudioOutputs()}>刷新音频设备</button>
-            <small>本机麦克风使用 WebView 全双工播放和浏览器回声消除；所选输出同时作为原生兜底设备。</small>
+          <button type="button" onClick={() => void refreshAudioOutputs()}>{t("session.toolbar.refreshAudioDevices")}</button>
+            <small>{t("session.toolbar.micOutputNote")}</small>
           </>}
 
-          <label>语音线路<select value={voiceRouteId} onChange={(event) => setVoiceRouteId(event.target.value)}>
-            <option value="">请选择语音线路</option>
+          <label>{t("session.toolbar.voiceRoute")}<select value={voiceRouteId} onChange={(event) => setVoiceRouteId(event.target.value)}>
+            <option value="">{t("session.toolbar.pickRoute")}</option>
             {config.speech.voiceRoutes.filter((route) => route.configVersion > 0).map((route) => <option key={route.id} value={route.id}>{route.name} · {route.llmModelId ?? route.e2eModelId}</option>)}
           </select></label>
-          <label><input type="checkbox" disabled={!canSearch} checked={allowWebSearch && canSearch} onChange={(event) => setAllowWebSearch(event.target.checked)} />允许本场联网搜索（可能产生费用）</label>
-          {!canSearch && <small>联网问答：端到端线路需 DashScope Qwen3.8-Omni 系模型；级联线路需在模型供应商设置中选择支持的搜索协议。</small>}
-          <label><input type="checkbox" disabled={busy || active} checked={allowBargeIn} onChange={(event) => setAllowBargeIn(event.target.checked)} />允许语音打断（说话即可停止 AI 播报）</label>
-          <small>采集会议音频的会话会自动关闭打断；本机麦克风会话随时生效。</small>
+          <label><input type="checkbox" disabled={!canSearch} checked={allowWebSearch && canSearch} onChange={(event) => setAllowWebSearch(event.target.checked)} />{t("session.toolbar.allowWebSearch")}</label>
+          {!canSearch && <small>{t("session.toolbar.webSearchNote")}</small>}
+          <label><input type="checkbox" disabled={busy || active} checked={allowBargeIn} onChange={(event) => setAllowBargeIn(event.target.checked)} />{t("session.toolbar.allowBargeIn")}</label>
+          <small>{t("session.toolbar.bargeInNote")}</small>
         </fieldset>}
       </div>
     </header>

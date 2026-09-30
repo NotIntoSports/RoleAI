@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 
 import * as api from "../../api/commands";
+import { t } from "../../i18n";
 import type { MicStreamCallbacks, MicStreamController } from "./mic-recorder";
 import {
   WebAudioPlayer,
@@ -60,14 +61,14 @@ export function useSessionMedia({
         void resolveWebAudioSinkId(outputName).then((sinkId) => {
           if (disposed) return;
           if (!sinkId) {
-            setMessage("未在浏览器中找到所选输出设备，已使用系统默认输出。");
+            setMessage(t("session.controls.outputNotFound"));
             return;
           }
           return target.setSinkId!(sinkId).then(() => {
             audioDiagnostics.sinkId = sinkId;
           });
         }).catch(() => {
-          if (!disposed) setMessage("切换输出设备失败，已使用系统默认输出。");
+          if (!disposed) setMessage(t("session.controls.outputSwitchFailed"));
         });
       }
     }
@@ -77,7 +78,7 @@ export function useSessionMedia({
         if (disposed || modeRef.current !== "ai_active") return;
         void api.pushMicPcm(pcm, sampleRate).then((result) => {
           if (!disposed && !result.ok) setMessage(errorText(result.error));
-        }).catch(() => { if (!disposed) setMessage("IPC_UNAVAILABLE：麦克风数据发送失败"); });
+        }).catch(() => { if (!disposed) setMessage(t("session.ipc.micPushFailed")); });
       },
       onError: (micError) => { if (!disposed) setMessage(micError); },
       onLevel: (level) => { if (!disposed) setMicLevel(level); },
@@ -86,7 +87,7 @@ export function useSessionMedia({
     streamer.start().catch(() => {
       if (disposed) return;
       setMicActive(false);
-      setMessage("无法访问麦克风，请检查系统麦克风权限后重试。");
+      setMessage(t("session.controls.micUnavailable"));
     });
     return () => {
       disposed = true;

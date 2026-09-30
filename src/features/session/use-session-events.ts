@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 
 import * as api from "../../api/commands";
+import { t } from "../../i18n";
 import { audioDiagnostics, decodePcm16Base64, type WebAudioPlayer } from "./web-audio-player";
 import { errorText } from "./workspace-format";
 import type { RoleScenario, RuntimeStatus, SessionReplyEvent, SessionTranscriptEvent } from "../../generated/bindings";
@@ -62,7 +63,7 @@ export function useSessionEvents({
         if (!result.ok) setMessage(errorText(result.error));
         else return refresh();
       })
-      .catch(() => setMessage("快捷提问失败，请回到工作台重试。"))
+      .catch(() => setMessage(t("session.controls.triggerAssistantFailed")))
       .finally(() => { hotkeyInFlight.current = false; });
   }, [refresh, setMessage]);
 
@@ -162,7 +163,7 @@ export function useSessionEvents({
           if (!disposed) triggerAssistant();
         }));
       } catch {
-        if (!disposed) setMessage("全局快捷键事件不可用；仍可在工作台点击提问。");
+          if (!disposed) setMessage(t("session.controls.hotkeyUnavailable"));
       }
     })();
     return () => {

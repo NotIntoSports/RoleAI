@@ -4,43 +4,43 @@ import { ArrowLeft, ArrowUpRight, Download, MessageSquare, Quote, Trash2 } from 
 import * as api from "../../api/commands";
 import { EmptyState } from "../../components/empty-state";
 import { errorNoticeText as errorText } from "../../components/error-notice";
+import { t, useLanguage, useT } from "../../i18n";
 import type { CommandResult, SessionDetail, SessionSummary } from "../../generated/bindings";
 import "../../styles/library.css";
 
-const sessionStatus: Record<string, string> = {
-  idle: "未开始",
-  preparing: "准备中",
-  listening: "聆听中",
-  thinking: "思考中",
-  speaking: "朗读中",
-  paused: "已暂停",
-  stopping: "结束中",
-  completed: "已完成",
-  recovering: "恢复中",
-  blocked: "需处理",
-  failed: "失败",
-  interrupted: "已中断",
-};
+const RECORD_STATUS_KEYS = [
+  "idle", "preparing", "listening", "thinking", "speaking", "paused", "stopping",
+  "completed", "recovering", "blocked", "failed", "interrupted",
+] as const;
+type KnownRecordStatus = (typeof RECORD_STATUS_KEYS)[number];
 
-function sessionDate(session: SessionSummary) {
+function recordStatusLabel(status: string): string {
+  return (RECORD_STATUS_KEYS as readonly string[]).includes(status)
+    ? t(`session.recordStatus.${status as KnownRecordStatus}`)
+    : status;
+}
+
+function sessionDate(session: SessionSummary, language: string) {
   const value = session.startedAt ?? session.updatedAt;
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value || "时间未知";
-  return date.toLocaleString("zh-CN", {
+  if (Number.isNaN(date.getTime())) return value || t("session.records.unknownTime");
+  return date.toLocaleString(language === "en" ? "en-US" : "zh-CN", {
     year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
   });
 }
 
 function roleLabel(roleProfileId: string, names: Record<string, string>) {
   const id = roleProfileId.trim();
-  if (!id) return "未指定";
-  return names[id] || "已删除角色";
+  if (!id) return t("session.records.unspecifiedRole");
+  return names[id] || t("session.records.deletedRole");
 }
 
 export function RecordsList() {
+  useT();
+  const language = useLanguage();
   const [items, setItems] = useState<SessionSummary[]>([]);
   const [detail, setDetail] = useState<SessionDetail | null>(null);
-  const [message, setMessage] = useState("正在读取会话记录…");
+  const [message, setMessage] = useState(() => t("session.records.reading"));
   const [busy, setBusy] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -60,7 +60,7 @@ export function RecordsList() {
         );
       }
       if (sessionsResult.status !== "fulfilled") {
-        setMessage("IPC_UNAVAILABLE：无法读取会话记录");
+        setMessage(t("session.ipc.recordsUnavailable"));
         return;
       }
       if (sessionsResult.value.ok) {
@@ -71,7 +71,7 @@ export function RecordsList() {
         setMessage(errorText(sessionsResult.value.error));
       }
     } catch {
-      setMessage("IPC_UNAVAILABLE：无法读取会话记录");
+      setMessage(t("session.ipc.recordsUnavailable"));
     }
   }, []);
 
@@ -92,7 +92,7 @@ export function RecordsList() {
       return true;
     } catch {
       await reload();
-      setMessage("IPC_UNAVAILABLE：本地操作失败");
+      setMessage(t("session.ipc.operateFailed"));
       return false;
     } finally {
       setBusy(false);
@@ -110,7 +110,7 @@ export function RecordsList() {
       setDetail(result.data);
       setMessage("");
     } catch {
-      setMessage("IPC_UNAVAILABLE：本地操作失败");
+      setMessage(t("session.ipc.operateFailed"));
     } finally {
       setBusy(false);
     }
@@ -127,7 +127,7 @@ export function RecordsList() {
       }
       setMessage(result.data.path);
     } catch {
-      setMessage("IPC_UNAVAILABLE：本地操作失败");
+      setMessage(t("session.ipc.operateFailed"));
     } finally {
       setBusy(false);
     }
@@ -142,9 +142,9 @@ export function RecordsList() {
         setMessage(errorText(result.error));
         return;
       }
-      setMessage(format === "csv" ? `延迟数据已导出：${result.data.path}` : `时间线已导出（Perfetto / chrome://tracing 可打开）：${result.data.path}`);
+      setMessage(format === "csv" ? t("session.records.latencyExported", { path: result.data.path }) : t("session.records.traceExported", { path: result.data.path }));
     } catch {
-      setMessage("IPC_UNAVAILABLE：本地操作失败");
+      setMessage(t("session.ipc.operateFailed"));
     } finally {
       setBusy(false);
     }
@@ -153,8 +153,8 @@ export function RecordsList() {
   return (
     <section className="service-panel records-list" aria-labelledby="records-list-heading">
       <div className="library-heading">
-        <h2 id="records-list-heading">会话记录</h2>
-        {loaded && !detail && <span className="muted">{items.length} 次会话</span>}
+        <h2 id="records-list-heading">{t("session.records.heading")}</h2>
+        {loaded && !detail && <span className="muted">{t("session.records.countLabel", { n: items.length })}</span>}
       </div>
       {message && (
         <p className="services-message" role="status">
@@ -162,72 +162,72 @@ export function RecordsList() {
         </p>
       )}
       {detail ? (
-        <section className="record-detail" aria-label="会话详情" aria-busy={busy}>
+        <section className="record-detail" aria-label={t("session.records.detailRegion")} aria-busy={busy}>
           <div className="record-detail-toolbar">
             <button className="button-ghost" disabled={busy} type="button" onClick={() => setDetail(null)}>
               <ArrowLeft size={16} aria-hidden="true" />
-              返回列表
+              {t("session.records.backToList")}
             </button>
-            <div className="service-actions" aria-label="导出会话">
+            <div className="service-actions" aria-label={t("session.records.exportGroup")}>
               <button className="button-ghost" disabled={busy} type="button" onClick={() => void exportRecord("markdown")}>
                 <Download size={15} aria-hidden="true" />
-                导出 Markdown
+                {t("session.records.exportMarkdown")}
               </button>
               <button className="button-ghost" disabled={busy} type="button" onClick={() => void exportRecord("json")}>
-                导出 JSON
+                {t("session.records.exportJson")}
               </button>
               <button className="button-ghost" disabled={busy} type="button" onClick={() => void exportRecord("text")}>
-                导出文本
+                {t("session.records.exportText")}
               </button>
               <button
                 className="button-ghost"
                 disabled={busy}
                 type="button"
-                aria-label="导出延迟数据 CSV"
+                aria-label={t("session.records.latencyCsvAria")}
                 onClick={() => void exportLatency("csv")}
               >
-                导出延迟数据
+                {t("session.records.latencyCsv")}
               </button>
               <button
                 className="button-ghost"
                 disabled={busy}
                 type="button"
-                aria-label="导出时间线 Chrome Trace JSON"
+                aria-label={t("session.records.traceAria")}
                 onClick={() => void exportLatency("trace")}
               >
-                导出时间线
+                {t("session.records.trace")}
               </button>
             </div>
           </div>
           <header className="record-detail-heading">
             <div className="library-heading">
-              <h3><time dateTime={detail.session.startedAt ?? detail.session.updatedAt}>{sessionDate(detail.session)}</time></h3>
+              <h3><time dateTime={detail.session.startedAt ?? detail.session.updatedAt}>{sessionDate(detail.session, language)}</time></h3>
               <span className="status-badge" data-tone={detail.session.status === "failed" ? "danger" : "neutral"}>
-                {sessionStatus[detail.session.status] ?? detail.session.status}
+                {recordStatusLabel(detail.session.status)}
               </span>
             </div>
-            <p className="library-meta">角色 {roleLabel(detail.session.roleProfileId, roleNames)}</p>
-            <p className="record-id">会话 ID <code>{detail.session.id}</code></p>
+            <p className="library-meta">{t("session.records.rolePrefix", { name: roleLabel(detail.session.roleProfileId, roleNames) })}</p>
+            <p className="record-id">{t("session.records.sessionPrefix", { id: detail.session.id })} <code>{detail.session.id}</code></p>
           </header>
-          {detail.turns.length === 0 && <EmptyState title="本次会话还没有对话内容。" />}
+          {detail.turns.length === 0 && <EmptyState title={t("session.records.emptyTurns")} />}
           {detail.turns.map((item) => (
-            <article className="record-turn" key={item.id} aria-label={`回合 ${item.turnIndex + 1}`}>
-              <h3>回合 {item.turnIndex + 1}</h3>
-              <section className="record-message record-user" aria-label="用户内容">
-                <h4>你</h4>
-                <p>{item.userText || "本轮没有用户内容。"}</p>
+            <article className="record-turn" key={item.id} aria-label={t("session.records.turnLabel", { n: item.turnIndex + 1 })}>
+              <h3>{t("session.records.turnLabel", { n: item.turnIndex + 1 })}</h3>
+              <section className="record-message record-user" aria-label={t("session.records.userAria")}>
+                <h4>{t("session.records.userHeading")}</h4>
+                <p>{item.userText || t("session.records.userEmpty")}</p>
               </section>
-              <section className="record-message record-assistant" aria-label="AI 回复">
-                <h4>AI 助手</h4>
-                <p>{item.assistantText || "本轮没有 AI 回复。"}</p>
+              <section className="record-message record-assistant" aria-label={t("session.records.assistantAria")}>
+                <h4>{t("session.records.assistantHeading")}</h4>
+                <p>{item.assistantText || t("session.records.assistantEmpty")}</p>
               </section>
-              <section className="record-citations" aria-label="资料引用">
-                {!item.materialsUsed && <p className="muted">本轮未使用资料</p>}
-                {item.citations.length > 0 && <h4><Quote size={14} aria-hidden="true" />引用片段</h4>}
+              <section className="record-citations" aria-label={t("session.records.citationsAria")}>
+                {!item.materialsUsed && <p className="muted">{t("session.records.noMaterials")}</p>}
+                {item.citations.length > 0 && <h4><Quote size={14} aria-hidden="true" />{t("session.records.citationsHeading")}</h4>}
                 {item.citations.map((citation) => (
                   <blockquote key={`${citation.materialId}-${citation.chunkId}`}>
                     <p>{citation.snippet}</p>
-                    <footer>资料 ID <code>{citation.materialId}</code></footer>
+                    <footer>{t("session.records.sourcePrefix", { id: citation.materialId })} <code>{citation.materialId}</code></footer>
                   </blockquote>
                 ))}
               </section>
@@ -235,31 +235,31 @@ export function RecordsList() {
           ))}
         </section>
       ) : (
-        <div className="library-rows" aria-label="会话列表" aria-busy={busy}>
+        <div className="library-rows" aria-label={t("session.records.listAria")} aria-busy={busy}>
           {loaded && items.length === 0 && (
             <EmptyState
               className="library-empty"
               icon={<MessageSquare size={28} aria-hidden="true" />}
-              title="还没有记录。"
-              hint="在工作台开始会话后，可在这里回看对话。"
+              title={t("session.records.emptyTitle")}
+              hint={t("session.records.emptyHint")}
             />
           )}
           {items.map((item) => (
             <article className="library-row" key={item.id}>
               <div className="library-file-icon"><MessageSquare size={20} aria-hidden="true" /></div>
               <div className="library-row-content">
-                <h3><time dateTime={item.startedAt ?? item.updatedAt}>{sessionDate(item)}</time></h3>
+                <h3><time dateTime={item.startedAt ?? item.updatedAt}>{sessionDate(item, language)}</time></h3>
                 <div className="library-meta">
                   <span className="status-badge" data-tone={item.status === "failed" ? "danger" : "neutral"}>
-                    {sessionStatus[item.status] ?? item.status}
+                    {recordStatusLabel(item.status)}
                   </span>
-                  <span>角色 {roleLabel(item.roleProfileId, roleNames)}</span>
+                  <span>{t("session.records.rolePrefix", { name: roleLabel(item.roleProfileId, roleNames) })}</span>
                 </div>
-                <p className="record-id">会话 ID <code>{item.id}</code></p>
+                <p className="record-id">{t("session.records.sessionPrefix", { id: item.id })} <code>{item.id}</code></p>
               </div>
               <div className="service-actions library-row-actions">
                 <button className="button-ghost" disabled={busy} type="button" onClick={() => void openDetail(item.id)}>
-                  查看
+                  {t("session.records.view")}
                   <ArrowUpRight size={15} aria-hidden="true" />
                 </button>
                 <button
@@ -271,17 +271,17 @@ export function RecordsList() {
                       setPendingDelete(item.id);
                       return;
                     }
-                    void run(() => api.deleteSession(item.id), "记录已删除").then(() => {
+                    void run(() => api.deleteSession(item.id), t("session.records.deleteSuccess")).then(() => {
                       setPendingDelete(null);
                     });
                   }}
                 >
                   <Trash2 size={15} aria-hidden="true" />
-                  {pendingDelete === item.id ? "确认删除" : "删除"}
+                  {pendingDelete === item.id ? t("session.records.confirmDelete") : t("session.records.delete")}
                 </button>
                 {pendingDelete === item.id && (
                   <button className="button-ghost" disabled={busy} type="button" onClick={() => setPendingDelete(null)}>
-                    取消
+                    {t("session.records.cancel")}
                   </button>
                 )}
               </div>
