@@ -134,7 +134,7 @@ fn clip_line(value: &str) -> String {
 
 /// 剥掉 markdown 代码围栏（```json ... ``` 或 ``` ... ```）。
 /// 没有围栏时原样返回（trim 后）。
-fn strip_code_fence(text: &str) -> String {
+pub(crate) fn strip_code_fence(text: &str) -> String {
     let trimmed = text.trim();
     let Some(rest) = trimmed.strip_prefix("```") else {
         return trimmed.to_owned();
@@ -152,7 +152,7 @@ fn strip_code_fence(text: &str) -> String {
 }
 
 /// 取首个 `{` 到最后一个 `}` 之间的子串（模型在 JSON 前后夹说明文字时的兜底）。
-fn extract_json_object(text: &str) -> String {
+pub(crate) fn extract_json_object(text: &str) -> String {
     match (text.find('{'), text.rfind('}')) {
         (Some(start), Some(end)) if start < end => text[start..=end].to_owned(),
         _ => text.trim().to_owned(),

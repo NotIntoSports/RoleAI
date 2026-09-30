@@ -615,3 +615,316 @@ pub fn practice_session_skip_blocking(
 
 blocking_command!(practice_session_progress, practice_session_progress_blocking(session_id: String) -> PracticeProgress);
 blocking_command!(practice_session_skip, practice_session_skip_blocking(session_id: String) -> PracticeProgress);
+
+// ---------- 训练报告（E05）：客观指标 + LLM 定性点评，落库与导出 ----------
+
+fn turn_started_at_ms(turns: &[crate::sessions::SessionTurn], index: usize) -> Option<i64> {
+    if index == 0 {
+        return None;
+    }
+    chrono::DateTime::parse_from_rfc3339(&turns[index - 1].created_at)
+        .ok()
+        .map(|time| time.timestamp_millis())
+}
+
+fn turn_ended_at_ms(turn: &crate::sessions::SessionTurn) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(&turn.created_at)
+        .ok()
+        .map(|time| time.timestamp_millis())
+}
+
+/// 收集报告输入：题单（可选）、按题分组的转写、客观指标。
+struct ReportInputs {
+    plan: Option<PracticePlan>,
+    grouped: Vec<(usize, String, String)>,
+    metrics: crate::practice::metrics::PracticeMetrics,
+}
+
+fn collect_report_inputs(
+    database: &crate::database::Database,
+    session_id: &str,
+) -> Result<ReportInputs, PublicError> {
+    let store = SessionStore::new(database);
+    if store
+        .get(session_id)
+        .map_err(|_| database_busy())?
+        .is_none()
+    {
+        return Err(PublicError::new(
+            "SESSION_NOT_FOUND",
+            "Session not found",
+            false,
+        ));
+    }
+    let events = practice_meta_events(database, session_id)?;
+    let plan_id = events
+        .iter()
+        .rev()
+        .find_map(|(_, payload)| {
+            serde_json::from_str::<serde_json::Value>(payload)
+                .ok()?
+                .get("planId")?
+                .as_str()
+                .map(str::to_owned)
+        })
+        .ok_or_else(|| {
+            PublicError::new(
+                "PRACTICE_SESSION_STATE_INVALID",
+                "该会话不是模拟面试训练",
+                false,
+            )
+        })?;
+    let plan = load_plan(database, &plan_id).ok();
+    let turns = store.list_turns(session_id).map_err(|_| database_busy())?;
+    if turns.is_empty() {
+        return Err(PublicError::new(
+            "PRACTICE_SESSION_STATE_INVALID",
+            "会话还没有可评价的转写",
+            false,
+        ));
+    }
+    let grouped = crate::practice::report::group_answers_by_question(
+        &turns,
+        plan.as_ref().map(|plan| plan.questions.as_slice()),
+    );
+    let answers = turns
+        .iter()
+        .enumerate()
+        .map(|(index, turn)| crate::practice::metrics::AnswerInput {
+            user_text: turn.user_text.clone(),
+            started_at_ms: turn_started_at_ms(&turns, index),
+            ended_at_ms: turn_ended_at_ms(turn),
+        })
+        .collect::<Vec<_>>();
+    let metrics = crate::practice::metrics::compute_answers(
+        &answers,
+        &crate::practice::metrics::MetricsConfig::default(),
+    );
+    Ok(ReportInputs {
+        plan,
+        grouped,
+        metrics,
+    })
+}
+
+fn build_report(
+    session_id: &str,
+    inputs: ReportInputs,
+    review: Option<(
+        Vec<PracticeQuestionReview>,
+        PracticeDimensions,
+        f64,
+        Vec<String>,
+    )>,
+) -> PracticeReport {
+    let now = chrono::Utc::now().to_rfc3339();
+    let llm_available = review.is_some();
+    let (mut per_question, dimensions, total_score, top_suggestions) =
+        review.unwrap_or((Vec::new(), PracticeDimensions::default(), 0.0, Vec::new()));
+    // 把题面/回答与 LLM 点评按题号合并；LLM 没点评到的题保留空点评（score 0 = 未评）。
+    for (number, question, answer) in &inputs.grouped {
+        let existing = per_question
+            .iter_mut()
+            .find(|review| review.index == *number);
+        match existing {
+            Some(review) => {
+                review.question = question.clone();
+                review.answer = answer.clone();
+            }
+            None => per_question.push(PracticeQuestionReview {
+                index: *number,
+                question: question.clone(),
+                answer: answer.clone(),
+                score: 0.0,
+                strengths: Vec::new(),
+                issues: Vec::new(),
+                model_answer: String::new(),
+            }),
+        }
+    }
+    per_question.sort_by_key(|review| review.index);
+    PracticeReport {
+        session_id: session_id.to_owned(),
+        plan_id: inputs
+            .plan
+            .as_ref()
+            .map(|plan| plan.id.clone())
+            .unwrap_or_default(),
+        position: inputs
+            .plan
+            .as_ref()
+            .map(|plan| plan.position.clone())
+            .unwrap_or_default(),
+        interviewer_style: inputs
+            .plan
+            .as_ref()
+            .map(|plan| plan.interviewer_style.clone())
+            .unwrap_or_default(),
+        llm_available,
+        total_score,
+        dimensions,
+        per_question,
+        top_suggestions,
+        objective: inputs.metrics,
+        created_at: now,
+    }
+}
+
+pub(in crate::commands) fn practice_report_generate_cmd(
+    state: &AppState,
+    session_id: String,
+) -> CommandResult<PracticeReport> {
+    let inputs = {
+        let outcome = with_session_database(state, |database| {
+            collect_report_inputs(database, &session_id)
+        });
+        match outcome {
+            Ok(inputs) => inputs,
+            Err(error) => return CommandResult::Err { error },
+        }
+    };
+
+    // LLM 通道与题单生成相同；失败重试一次，两次失败落"仅客观指标"的兜底报告。
+    let config = match state.config.load() {
+        Ok(config) => public_view(&config),
+        Err(error) => return service_error(error.code(), "模型配置不可用"),
+    };
+    let route = match active_voice_route(&config) {
+        Some(route) if route.mode == crate::config::VoiceRouteMode::Cascaded => route,
+        _ => return service_error("PRACTICE_MODEL_REQUIRED", "请选择可用的级联语音线路"),
+    };
+    let provider_id = route.llm_provider_id.clone().unwrap_or_default();
+    let model_id = route.llm_model_id.clone().unwrap_or_default();
+    if provider_id.is_empty() || model_id.is_empty() {
+        return service_error("PRACTICE_MODEL_REQUIRED", "训练模型尚未配置");
+    }
+    let Some(provider) = config
+        .models
+        .providers
+        .iter()
+        .find(|item| item.id == provider_id)
+    else {
+        return service_error("PRACTICE_MODEL_REQUIRED", "训练模型供应商不存在");
+    };
+    let secret = match read_provider_secret(state, &config, Some(&provider_id)) {
+        Ok(secret) => secret,
+        Err(error) => return CommandResult::Err { error },
+    };
+    let model = match OpenAiCompatibleCascade::new() {
+        Ok(model) => model,
+        Err(_) => return service_error("PRACTICE_MODEL_REQUIRED", "无法初始化训练模型"),
+    };
+    let endpoint = ProviderEndpoint {
+        provider_id: provider.id.clone(),
+        base_url: provider.base_url.clone(),
+    };
+    let messages = crate::practice::report::build_review_messages(
+        &inputs
+            .plan
+            .as_ref()
+            .map(|plan| plan.position.clone())
+            .unwrap_or_default(),
+        &inputs
+            .plan
+            .as_ref()
+            .map(|plan| plan.interviewer_style.clone())
+            .unwrap_or_default(),
+        &inputs.grouped,
+    );
+    let review = crate::practice::report::generate_review_with_model(
+        &model,
+        &endpoint,
+        secret.as_deref().map(|value| value.as_str()),
+        &model_id,
+        &messages,
+    )
+    .ok();
+
+    let report = build_report(&session_id, inputs, review);
+    let outcome = with_session_database(state, |database| {
+        crate::practice::store::PracticeReportStore::new(database)
+            .save(&report)
+            .map_err(|_| PublicError::new("DATABASE_OPERATION_FAILED", "报告保存失败", false))
+    });
+    command_of(outcome.map(|()| report))
+}
+
+pub(in crate::commands) fn practice_report_get_cmd(
+    state: &AppState,
+    session_id: String,
+) -> CommandResult<PracticeReport> {
+    let outcome = with_session_database(state, |database| {
+        crate::practice::store::PracticeReportStore::new(database)
+            .get(&session_id)
+            .map_err(|_| database_busy())?
+            .ok_or_else(|| PublicError::new("PRACTICE_REPORT_NOT_FOUND", "训练报告不存在", false))
+    });
+    command_of(outcome)
+}
+
+pub(in crate::commands) fn practice_report_list_cmd(
+    state: &AppState,
+) -> CommandResult<Vec<PracticeReportSummary>> {
+    let outcome = with_session_database(state, |database| {
+        crate::practice::store::PracticeReportStore::new(database)
+            .list()
+            .map_err(|_| database_busy())
+    });
+    command_of(outcome)
+}
+
+pub(in crate::commands) fn practice_report_export_cmd(
+    state: &AppState,
+    session_id: String,
+    format: String,
+) -> CommandResult<SessionExportResult> {
+    let Some(format) = SessionExportFormat::from_name(&format) else {
+        return service_error("SESSION_EXPORT_FORMAT_INVALID", "Unsupported export format");
+    };
+    let outcome = with_session_database(state, |database| {
+        let export_root = state.paths.data_directory.join("exports");
+        crate::sessions::export::export_practice_report(database, &session_id, format, &export_root)
+            .map_err(|error| PublicError::new(error.code(), "报告导出失败", false))
+            .map(|path| SessionExportResult {
+                path: path.to_string_lossy().into_owned(),
+            })
+    });
+    command_of(outcome)
+}
+
+#[tauri::command]
+pub fn practice_report_generate(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> CommandResult<PracticeReport> {
+    practice_report_generate_cmd(&state, session_id)
+}
+
+pub fn practice_report_get_blocking(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> CommandResult<PracticeReport> {
+    practice_report_get_cmd(&state, session_id)
+}
+
+pub fn practice_report_list_blocking(
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<PracticeReportSummary>> {
+    practice_report_list_cmd(&state)
+}
+
+pub fn practice_report_export_blocking(
+    state: State<'_, AppState>,
+    session_id: String,
+    format: String,
+) -> CommandResult<SessionExportResult> {
+    let _guard = match service_guard(&state) {
+        Ok(guard) => guard,
+        Err(error) => return error,
+    };
+    practice_report_export_cmd(&state, session_id, format)
+}
+
+blocking_command!(practice_report_get, practice_report_get_blocking(session_id: String) -> PracticeReport);
+blocking_command!(practice_report_list, practice_report_list_blocking() -> Vec<PracticeReportSummary>);
+blocking_command!(practice_report_export, practice_report_export_blocking(session_id: String, format: String) -> SessionExportResult);

@@ -28,7 +28,8 @@ use crate::{
     },
     error::PublicError,
     practice::{
-        PracticePlan, PracticePlanGenerateInput, PracticePlanSummary, PracticeProgress,
+        PracticeDimensions, PracticePlan, PracticePlanGenerateInput, PracticePlanSummary,
+        PracticeProgress, PracticeQuestionReview, PracticeReport, PracticeReportSummary,
         PracticeSessionStartInput,
     },
     providers::{

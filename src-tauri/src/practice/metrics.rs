@@ -4,6 +4,8 @@
 //! 回答时长、语速（中文字/分钟、英文词/分钟）、口头禅统计（词表可配置）、
 //! 长停顿次数（仅当时间信息齐全时计算，否则标记不可用）、
 //! 结构信号与 STAR 覆盖提示（启发式，报告里必须写明"仅供参考"）。
+//!
+//! 结果结构体同时导出 ts_rs 绑定（PracticeReport.objective 直接内嵌给前端）。
 
 /// 单条回答的输入：用户回答文本 + 可选的起止毫秒时间戳。
 /// 时间戳来自会话轮次的 `created_at`（RFC3339 由命令层换算成毫秒）；
@@ -31,21 +33,27 @@ impl AnswerInput {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct FillerHit {
     pub word: String,
     pub count: usize,
 }
 
 /// 语速：中文字/分钟与英文词/分钟。仅当回答时长可计算且大于零时给出。
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct SpeechRate {
     pub chinese_per_minute: f64,
     pub english_per_minute: f64,
 }
 
 /// 结构信号类型（启发式，只作为练习提示）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub enum StructureKind {
     /// 开题（首先/第一/背景是）
     Opening,
@@ -57,14 +65,18 @@ pub enum StructureKind {
     Result,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct StructureSignal {
     pub kind: StructureKind,
     pub marker: String,
 }
 
 /// STAR 结构覆盖提示（启发式）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub enum StarCoverage {
     Situation,
     Task,
@@ -72,7 +84,9 @@ pub enum StarCoverage {
     Result,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct AnswerMetrics {
     pub answer_index: usize,
     /// 回答时长（秒）；时间信息缺失或起止倒挂时为 None（不可用）。
@@ -86,7 +100,9 @@ pub struct AnswerMetrics {
 }
 
 /// 训练整体指标。`long_pauses` 为 None 表示时间信息不全、不可用。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct PracticeMetrics {
     pub answers: Vec<AnswerMetrics>,
     pub total_duration_seconds: Option<f64>,

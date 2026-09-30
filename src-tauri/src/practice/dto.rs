@@ -102,3 +102,72 @@ pub struct PracticeProgress {
     pub followup_limit: u32,
     pub finished: bool,
 }
+
+/// 报告的四个维度评分（1～5；LLM 不可用时为 0 表示未评）。
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct PracticeDimensions {
+    pub content_depth: f64,
+    pub structure_clarity: f64,
+    pub fluency: f64,
+    pub job_fit: f64,
+}
+
+impl Default for PracticeDimensions {
+    fn default() -> Self {
+        Self {
+            content_depth: 0.0,
+            structure_clarity: 0.0,
+            fluency: 0.0,
+            job_fit: 0.0,
+        }
+    }
+}
+
+/// 单题点评（题目与回答由本地转写补全；评分与点评来自 LLM）。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct PracticeQuestionReview {
+    #[ts(type = "number")]
+    pub index: usize,
+    pub question: String,
+    pub answer: String,
+    pub score: f64,
+    pub strengths: Vec<String>,
+    pub issues: Vec<String>,
+    pub model_answer: String,
+}
+
+/// 一份完整的训练报告（落库与前端展示共用同一结构）。
+/// `llm_available` 为 false 时定性部分为空，前端显示"定性点评生成失败，可重试"。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct PracticeReport {
+    pub session_id: String,
+    pub plan_id: String,
+    pub position: String,
+    pub interviewer_style: String,
+    pub llm_available: bool,
+    pub total_score: f64,
+    pub dimensions: PracticeDimensions,
+    pub per_question: Vec<PracticeQuestionReview>,
+    pub top_suggestions: Vec<String>,
+    pub objective: crate::practice::metrics::PracticeMetrics,
+    pub created_at: String,
+}
+
+/// 报告列表条目（按 created_at 倒序，用于成长曲线）。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct PracticeReportSummary {
+    pub session_id: String,
+    pub plan_id: String,
+    pub position: String,
+    pub interviewer_style: String,
+    pub total_score: f64,
+    pub created_at: String,
+}

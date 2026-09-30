@@ -5,7 +5,9 @@ use rusqlite::{OptionalExtension, params};
 
 use crate::database::{Database, DatabaseError};
 
-use super::dto::{PracticePlan, PracticePlanSummary, PracticeQuestion};
+use super::dto::{
+    PracticePlan, PracticePlanSummary, PracticeQuestion, PracticeReport, PracticeReportSummary,
+};
 
 pub struct PracticePlanStore<'a> {
     database: &'a Database,
@@ -92,6 +94,94 @@ impl<'a> PracticePlanStore<'a> {
             let deleted =
                 connection.execute("DELETE FROM practice_plans WHERE id = ?1", params![id])?;
             Ok(deleted > 0)
+        })
+    }
+}
+
+/// 训练报告落库：整份报告存 `report_json`，total_score / dimensions_json
+/// 同时落列以便列表排序与后续按维度筛选。
+pub struct PracticeReportStore<'a> {
+    database: &'a Database,
+}
+
+impl<'a> PracticeReportStore<'a> {
+    pub fn new(database: &'a Database) -> Self {
+        Self { database }
+    }
+
+    /// 保存（按会话 id upsert：同一会话重复生成覆盖旧报告）。
+    pub fn save(&self, report: &PracticeReport) -> Result<(), DatabaseError> {
+        let report_json = serde_json::to_string(report).map_err(|_| DatabaseError::Operation)?;
+        let dimensions_json =
+            serde_json::to_string(&report.dimensions).map_err(|_| DatabaseError::Operation)?;
+        let objective_json =
+            serde_json::to_string(&report.objective).map_err(|_| DatabaseError::Operation)?;
+        self.database.with_connection(|connection| {
+            connection.execute(
+                "INSERT INTO practice_reports(
+                    id, plan_id, position, interviewer_style,
+                    total_score, dimensions_json, objective_json, report_json, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                 ON CONFLICT(id) DO UPDATE SET
+                    plan_id = excluded.plan_id,
+                    position = excluded.position,
+                    interviewer_style = excluded.interviewer_style,
+                    total_score = excluded.total_score,
+                    dimensions_json = excluded.dimensions_json,
+                    objective_json = excluded.objective_json,
+                    report_json = excluded.report_json,
+                    created_at = excluded.created_at",
+                params![
+                    report.session_id,
+                    report.plan_id,
+                    report.position,
+                    report.interviewer_style,
+                    report.total_score,
+                    dimensions_json,
+                    objective_json,
+                    report_json,
+                    report.created_at,
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn get(&self, session_id: &str) -> Result<Option<PracticeReport>, DatabaseError> {
+        let raw = self.database.with_connection(|connection| {
+            connection
+                .query_row(
+                    "SELECT report_json FROM practice_reports WHERE id = ?1",
+                    params![session_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+        })?;
+        match raw {
+            Some(json) => serde_json::from_str(&json)
+                .map(Some)
+                .map_err(|_| DatabaseError::Operation),
+            None => Ok(None),
+        }
+    }
+
+    pub fn list(&self) -> Result<Vec<PracticeReportSummary>, DatabaseError> {
+        self.database.with_connection(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT id, plan_id, position, interviewer_style, total_score, created_at
+                 FROM practice_reports ORDER BY created_at DESC, id",
+            )?;
+            let rows = statement.query_map([], |row| {
+                Ok(PracticeReportSummary {
+                    session_id: row.get(0)?,
+                    plan_id: row.get(1)?,
+                    position: row.get(2)?,
+                    interviewer_style: row.get(3)?,
+                    total_score: row.get::<_, f64>(4).unwrap_or(0.0),
+                    created_at: row.get(5)?,
+                })
+            })?;
+            rows.collect()
         })
     }
 }

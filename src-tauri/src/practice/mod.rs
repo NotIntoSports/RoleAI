@@ -6,9 +6,11 @@ pub mod director;
 pub mod dto;
 pub mod metrics;
 pub mod plan;
+pub mod report;
 pub mod store;
 
 pub use self::dto::{
-    PracticePlan, PracticePlanGenerateInput, PracticePlanSummary, PracticeProgress,
-    PracticeQuestion, PracticeSessionStartInput,
+    PracticeDimensions, PracticePlan, PracticePlanGenerateInput, PracticePlanSummary,
+    PracticeProgress, PracticeQuestion, PracticeQuestionReview, PracticeReport,
+    PracticeReportSummary, PracticeSessionStartInput,
 };

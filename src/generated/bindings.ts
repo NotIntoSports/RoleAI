@@ -177,6 +177,36 @@ export type PracticeSessionStartInput = { planId: string, roleProfileId?: string
 
 export type PracticeProgress = { planId: string, questionIndex: number, totalQuestions: number, followupsUsed: number, followupLimit: number, finished: boolean, };
 
+export type PracticeMetrics = { answers: Array<AnswerMetrics>, totalDurationSeconds: number | null, averageAnswerSeconds: number | null, 
+/**
+ * 跨回答的长停顿次数（相邻回答之间的静默超过阈值）。
+ */
+longPauses: number | null, topFillers: Array<FillerHit>, };
+
+export type AnswerMetrics = { answerIndex: number, 
+/**
+ * 回答时长（秒）；时间信息缺失或起止倒挂时为 None（不可用）。
+ */
+durationSeconds: number | null, chineseChars: number, englishWords: number, speechRate: SpeechRate | null, fillers: Array<FillerHit>, structureSignals: Array<StructureSignal>, starCoverage: Array<StarCoverage>, };
+
+export type FillerHit = { word: string, count: number, };
+
+export type SpeechRate = { chinesePerMinute: number, englishPerMinute: number, };
+
+export type StructureKind = "opening" | "enumeration" | "closing" | "result";
+
+export type StructureSignal = { kind: StructureKind, marker: string, };
+
+export type StarCoverage = "situation" | "task" | "action" | "result";
+
+export type PracticeDimensions = { contentDepth: number, structureClarity: number, fluency: number, jobFit: number, };
+
+export type PracticeQuestionReview = { index: number, question: string, answer: string, score: number, strengths: Array<string>, issues: Array<string>, modelAnswer: string, };
+
+export type PracticeReport = { sessionId: string, planId: string, position: string, interviewerStyle: string, llmAvailable: boolean, totalScore: number, dimensions: PracticeDimensions, perQuestion: Array<PracticeQuestionReview>, topSuggestions: Array<string>, objective: PracticeMetrics, createdAt: string, };
+
+export type PracticeReportSummary = { sessionId: string, planId: string, position: string, interviewerStyle: string, totalScore: number, createdAt: string, };
+
 export type ObsRuntimeStatus = { connected: boolean, sceneReady: boolean, browserSourceReady: boolean, virtualCameraActive: boolean, errorCode: string | null, };
 
 export type CommandResult<T> = { ok: true; data: T } | { ok: false; error: PublicError };

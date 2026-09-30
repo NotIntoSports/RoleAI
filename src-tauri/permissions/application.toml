@@ -376,3 +376,23 @@ commands.allow = ["practice_session_progress"]
 identifier = "allow-practice-session-skip"
 description = "Allows skipping to the next question in a running mock-interview training session."
 commands.allow = ["practice_session_skip"]
+
+[[permission]]
+identifier = "allow-practice-report-generate"
+description = "Allows generating the structured training report (objective metrics plus optional AI review) for a finished practice session."
+commands.allow = ["practice_report_generate"]
+
+[[permission]]
+identifier = "allow-practice-report-get"
+description = "Allows reading one stored practice training report."
+commands.allow = ["practice_report_get"]
+
+[[permission]]
+identifier = "allow-practice-report-list"
+description = "Allows listing stored practice training reports for the growth curve."
+commands.allow = ["practice_report_list"]
+
+[[permission]]
+identifier = "allow-practice-report-export"
+description = "Allows exporting a practice training report as a local Markdown file."
+commands.allow = ["practice_report_export"]

@@ -2171,3 +2171,207 @@ fn practice_session_commands_reject_non_practice_sessions() {
     let missing = super::practice_session_progress_cmd(&state, "missing-session".into());
     assert_eq!(missing.unwrap_err_code(), "SESSION_NOT_FOUND");
 }
+
+// ---------- practice 报告命令（mock LLM，含重试） ----------
+
+mod practice_report_mock {
+    use std::{
+        io::{Read, Write},
+        net::{TcpListener, TcpStream},
+        thread,
+    };
+
+    /// 按顺序响应多次 chat.completions 请求（每次响应后断开连接）。
+    pub(in crate::commands::tests) fn serve_chat_sequence(bodies: Vec<String>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            for body in bodies {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                if drain(&mut stream).is_err() {
+                    return;
+                }
+                let message =
+                    serde_json::json!({ "choices": [{ "message": { "content": body } }] });
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    message.to_string().len(),
+                    message
+                );
+                if stream.write_all(response.as_bytes()).is_err() {
+                    return;
+                }
+            }
+        });
+        format!("http://{address}/v1")
+    }
+
+    fn drain(stream: &mut TcpStream) -> std::io::Result<()> {
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
+        let mut received = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        let header_end = loop {
+            let count = stream.read(&mut buffer)?;
+            if count == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "request ended early",
+                ));
+            }
+            received.extend_from_slice(&buffer[..count]);
+            if let Some(position) = received.windows(4).position(|part| part == b"\r\n\r\n") {
+                break position + 4;
+            }
+        };
+        let headers = String::from_utf8_lossy(&received[..header_end]).to_string();
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().ok())?
+            })
+            .unwrap_or(0);
+        while received.len() - header_end < content_length {
+            let count = stream.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            received.extend_from_slice(&buffer[..count]);
+        }
+        Ok(())
+    }
+}
+
+fn review_json() -> String {
+    serde_json::json!({
+        "perQuestion": [
+            {"index": 1, "score": 4, "strengths": ["结构清晰"], "issues": ["缺少量化"], "modelAnswer": "补充 p99 数字"}
+        ],
+        "dimensions": {"contentDepth": 4, "structureClarity": 3.5, "fluency": 4, "jobFit": 3},
+        "totalScore": 3.5,
+        "topSuggestions": ["补充量化结果", "先讲结论", "控制语速"]
+    })
+    .to_string()
+}
+
+/// 开一场训练会话并写入两问的转写（含【第X题】标注）。
+fn seed_finished_practice_session(state: &AppState) -> String {
+    let session_id = start_practice_session(state);
+    let database_slot = state.database.lock().unwrap();
+    let database = database_slot.as_ref().unwrap();
+    let store = SessionStore::new(database);
+    let turns = [
+        ("你好", "【第1题】介绍一个你负责的项目"),
+        ("我负责支付网关，用令牌桶限流。", "追问：效果如何？"),
+        ("p99 下降 30%。", "【第2题】如何设计限流？"),
+        ("先限后熔。", ""),
+    ];
+    for (index, (user, assistant)) in turns.iter().enumerate() {
+        store
+            .insert_turn(crate::sessions::NewTurn {
+                id: &format!("turn-r{index}"),
+                session_id: &session_id,
+                turn_index: index as i64,
+                user_text: user,
+                assistant_text: assistant,
+                materials_used: false,
+            })
+            .unwrap();
+    }
+    drop(database_slot);
+    session_id
+}
+
+#[test]
+fn practice_report_generate_success_and_roundtrip() {
+    let directory = tempfile::tempdir().unwrap();
+    let base_url = practice_report_mock::serve_chat_sequence(vec![review_json()]);
+    let state = practice_llm_state(&directory, &base_url);
+    let session_id = seed_finished_practice_session(&state);
+
+    let report = match super::practice_report_generate_cmd(&state, session_id.clone()) {
+        CommandResult::Ok { data } => data,
+        CommandResult::Err { error } => panic!("generate failed: {} {}", error.code, error.message),
+    };
+    assert!(report.llm_available);
+    assert!((report.total_score - 3.5).abs() < f64::EPSILON);
+    assert_eq!(report.per_question.len(), 2);
+    assert_eq!(report.per_question[0].question, "介绍一个你负责的项目");
+    assert!(report.per_question[0].answer.contains("支付网关"));
+    assert!((report.per_question[0].score - 4.0).abs() < f64::EPSILON);
+    assert_eq!(report.per_question[1].score, 0.0); // LLM 未点评第 2 题 → 未评
+    assert_eq!(report.top_suggestions.len(), 3);
+    assert_eq!(report.plan_id, "plan-e4");
+    assert_eq!(report.position, "后端工程师");
+    // 客观指标来自本地计算：语速/时长可算（首答缺时间戳 → 时长不可用也算合规）。
+    assert_eq!(report.objective.answers.len(), 4);
+
+    // 落库后 get/list 都能读到。
+    let fetched = match super::practice_report_get_cmd(&state, session_id.clone()) {
+        CommandResult::Ok { data } => data,
+        CommandResult::Err { error } => panic!("get failed: {}", error.code),
+    };
+    assert_eq!(fetched, report);
+    let list = match super::practice_report_list_cmd(&state) {
+        CommandResult::Ok { data } => data,
+        CommandResult::Err { error } => panic!("list failed: {}", error.code),
+    };
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].session_id, session_id);
+    assert!((list[0].total_score - 3.5).abs() < f64::EPSILON);
+}
+
+#[test]
+fn practice_report_generate_retries_after_invalid_json() {
+    let directory = tempfile::tempdir().unwrap();
+    let base_url =
+        practice_report_mock::serve_chat_sequence(vec!["第一次是垃圾输出".into(), review_json()]);
+    let state = practice_llm_state(&directory, &base_url);
+    let session_id = seed_finished_practice_session(&state);
+
+    let report = match super::practice_report_generate_cmd(&state, session_id) {
+        CommandResult::Ok { data } => data,
+        CommandResult::Err { error } => panic!("generate failed: {}", error.code),
+    };
+    assert!(report.llm_available, "重试后成功即为可用");
+    assert!((report.total_score - 3.5).abs() < f64::EPSILON);
+}
+
+#[test]
+fn practice_report_generate_double_failure_falls_back_to_objective_only() {
+    let directory = tempfile::tempdir().unwrap();
+    let base_url =
+        practice_report_mock::serve_chat_sequence(vec!["垃圾一".into(), "垃圾二".into()]);
+    let state = practice_llm_state(&directory, &base_url);
+    let session_id = seed_finished_practice_session(&state);
+
+    let report = match super::practice_report_generate_cmd(&state, session_id.clone()) {
+        CommandResult::Ok { data } => data,
+        CommandResult::Err { error } => panic!("generate failed: {}", error.code),
+    };
+    assert!(!report.llm_available);
+    assert_eq!(report.total_score, 0.0);
+    assert!(report.top_suggestions.is_empty());
+    assert!(report.dimensions.content_depth == 0.0);
+    // 客观指标仍然可用并落库。
+    assert_eq!(report.objective.answers.len(), 4);
+
+    let exported =
+        match super::practice_report_export_cmd(&state, session_id.clone(), "markdown".into()) {
+            CommandResult::Ok { data } => data,
+            CommandResult::Err { error } => panic!("export failed: {}", error.code),
+        };
+    let content = std::fs::read_to_string(&exported.path).unwrap();
+    assert!(content.contains("定性点评生成失败，可重试"));
+    assert!(content.contains("评分由 AI 生成，仅供练习参考"));
+
+    // 非法导出格式被拒绝。
+    let bad_format = super::practice_report_export_cmd(&state, session_id, "json".into());
+    assert_eq!(
+        bad_format.unwrap_err_code(),
+        "SESSION_EXPORT_FORMAT_INVALID"
+    );
+}
