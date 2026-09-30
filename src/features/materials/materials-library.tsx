@@ -5,12 +5,13 @@ import * as api from "../../api/commands";
 import { EmptyState } from "../../components/empty-state";
 import { errorNoticeText as errorText } from "../../components/error-notice";
 import type { CommandResult, MaterialSearchHit, MaterialSummary } from "../../generated/bindings";
+import { t, useT, type DictionaryStringKey } from "../../i18n";
 import "../../styles/library.css";
 
-const materialStatus: Record<string, string> = {
-  text_ready: "文本就绪",
-  vector_ready: "已建索引",
-  failed: "处理失败",
+const materialStatusKeys: Record<string, DictionaryStringKey> = {
+  text_ready: "materials.status.text_ready",
+  vector_ready: "materials.status.vector_ready",
+  failed: "materials.status.failed",
 };
 
 export interface MaterialsLibraryProps {
@@ -18,9 +19,10 @@ export interface MaterialsLibraryProps {
 }
 
 export function MaterialsLibrary({ selectPath }: MaterialsLibraryProps) {
+  useT();
   const [items, setItems] = useState<MaterialSummary[]>([]);
   const [hits, setHits] = useState<MaterialSearchHit[]>([]);
-  const [message, setMessage] = useState("正在读取本地资料…");
+  const [message, setMessage] = useState(() => t("materials.reading"));
   const [busy, setBusy] = useState(false);
   const [path, setPath] = useState("");
   const [query, setQuery] = useState("");
@@ -39,7 +41,7 @@ export function MaterialsLibrary({ selectPath }: MaterialsLibraryProps) {
         setMessage(errorText(result.error));
       }
     } catch {
-      setMessage("IPC_UNAVAILABLE：无法读取本地资料");
+      setMessage(t("materials.ipc.listFailed"));
     }
   }, []);
 
@@ -60,7 +62,7 @@ export function MaterialsLibrary({ selectPath }: MaterialsLibraryProps) {
       return true;
     } catch {
       await reload();
-      setMessage("IPC_UNAVAILABLE：本地操作失败");
+      setMessage(t("materials.ipc.operateFailed"));
       return false;
     } finally {
       setBusy(false);
@@ -69,7 +71,7 @@ export function MaterialsLibrary({ selectPath }: MaterialsLibraryProps) {
 
   async function submitImport(event: FormEvent) {
     event.preventDefault();
-    await run(() => api.importMaterial(path.trim()), "资料已导入");
+    await run(() => api.importMaterial(path.trim()), t("materials.imported"));
   }
 
   async function submitSearch(event: FormEvent) {
@@ -85,7 +87,7 @@ export function MaterialsLibrary({ selectPath }: MaterialsLibraryProps) {
       setHasSearched(true);
       setMessage("");
     } catch {
-      setMessage("IPC_UNAVAILABLE：本地操作失败");
+      setMessage(t("materials.ipc.operateFailed"));
     } finally {
       setBusy(false);
     }
@@ -100,8 +102,8 @@ export function MaterialsLibrary({ selectPath }: MaterialsLibraryProps) {
   return (
     <section className="service-panel materials-library" aria-labelledby="materials-library-heading">
       <div className="library-heading">
-        <h2 id="materials-library-heading">资料库</h2>
-        {loaded && <span className="muted">{items.length} 份资料</span>}
+        <h2 id="materials-library-heading">{t("materials.heading")}</h2>
+        {loaded && <span className="muted">{t("materials.countSuffix", { n: items.length })}</span>}
       </div>
       {message && (
         <p className="services-message" role="status">
@@ -109,46 +111,46 @@ export function MaterialsLibrary({ selectPath }: MaterialsLibraryProps) {
         </p>
       )}
       <div className="library-toolbar">
-        <form className="service-form library-search" role="search" aria-label="搜索资料" onSubmit={submitSearch}>
+        <form className="service-form library-search" role="search" aria-label={t("materials.searchFormAria")} onSubmit={submitSearch}>
           <label className="library-search-field">
-            <span className="library-sr-only">检索词</span>
+            <span className="library-sr-only">{t("materials.searchFieldLabel")}</span>
             <Search size={16} aria-hidden="true" />
-            <input value={query} placeholder="搜索资料内容…" onChange={(event) => setQuery(event.target.value)} />
+            <input value={query} placeholder={t("materials.searchPlaceholder")} onChange={(event) => setQuery(event.target.value)} />
           </label>
           <button className="button-primary" disabled={busy} type="submit">
-            搜索
+            {t("materials.searchAction")}
           </button>
         </form>
         <button
           className="button-ghost"
           disabled={busy}
           type="button"
-          onClick={() => void run(() => api.indexMaterials(), "索引已重建")}
+          onClick={() => void run(() => api.indexMaterials(), t("materials.indexRebuilt"))}
         >
           <RefreshCw size={16} aria-hidden="true" />
-          重建索引
+          {t("materials.rebuildIndex")}
         </button>
       </div>
       <details className="library-import">
         <summary>
           <Upload size={16} aria-hidden="true" />
-          导入资料
+          {t("materials.importSummary")}
           <ChevronDown className="library-disclosure-icon" size={16} aria-hidden="true" />
         </summary>
         <form className="service-form library-import-form" onSubmit={submitImport}>
           <label>
-            文件路径
-            <input type="text" value={path} placeholder="输入本地文件的完整路径" onChange={(event) => setPath(event.target.value)} />
+            {t("materials.pathLabel")}
+            <input type="text" value={path} placeholder={t("materials.pathPlaceholder")} onChange={(event) => setPath(event.target.value)} />
           </label>
           <div className="service-actions">
             {selectPath && (
               <button className="button-ghost" disabled={busy} type="button" onClick={() => void pickPath()}>
                 <FolderOpen size={16} aria-hidden="true" />
-                选择文件
+                {t("materials.pickFile")}
               </button>
             )}
             <button className="button-primary" disabled={busy} type="submit">
-              导入
+              {t("materials.importAction")}
             </button>
           </div>
         </form>
@@ -156,15 +158,15 @@ export function MaterialsLibrary({ selectPath }: MaterialsLibraryProps) {
       {hasSearched && (
         <section className="library-results" aria-labelledby="material-results-heading">
           <div className="library-heading">
-            <h3 id="material-results-heading">检索结果</h3>
-            <span className="muted">{hits.length} 个片段</span>
+            <h3 id="material-results-heading">{t("materials.resultsHeading")}</h3>
+            <span className="muted">{t("materials.hitsCount", { n: hits.length })}</span>
           </div>
-          {hits.length === 0 && <EmptyState title="未找到匹配内容，试试其他关键词。" />}
+          {hits.length === 0 && <EmptyState title={t("materials.noHits")} />}
           {hits.map((item) => (
             <article className="library-search-hit" key={item.chunkId}>
               <div className="library-hit-source">
                 <FileText size={15} aria-hidden="true" />
-                <span className="muted">来源</span>
+                <span className="muted">{t("materials.sourceLabel")}</span>
                 <h4>{item.fileName}</h4>
                 {item.section && <span className="muted">{item.section}</span>}
               </div>
@@ -173,13 +175,13 @@ export function MaterialsLibrary({ selectPath }: MaterialsLibraryProps) {
           ))}
         </section>
       )}
-      <div className="library-rows" aria-label="已导入资料" aria-busy={busy}>
+      <div className="library-rows" aria-label={t("materials.listAria")} aria-busy={busy}>
         {loaded && items.length === 0 && (
           <EmptyState
             className="library-empty"
             icon={<FolderOpen size={28} aria-hidden="true" />}
-            title="还没有资料。"
-            hint="导入本地文件，让助手参考你的资料回答。"
+            title={t("materials.emptyTitle")}
+            hint={t("materials.emptyHint")}
           />
         )}
         {items.map((item) => (
@@ -189,9 +191,9 @@ export function MaterialsLibrary({ selectPath }: MaterialsLibraryProps) {
               <h3>{item.fileName}</h3>
               <div className="library-meta">
                 <span className="status-badge" data-tone={item.status === "failed" ? "danger" : "neutral"}>
-                  {materialStatus[item.status] ?? item.status}
+                  {materialStatusKeys[item.status] ? t(materialStatusKeys[item.status]) : item.status}
                 </span>
-                <span>{item.chunkCount} 个切片</span>
+                <span>{t("materials.chunkCount", { n: item.chunkCount })}</span>
               </div>
             </div>
             <div className="service-actions library-row-actions">
@@ -204,17 +206,17 @@ export function MaterialsLibrary({ selectPath }: MaterialsLibraryProps) {
                     setPendingDelete(item.id);
                     return;
                   }
-                  void run(() => api.deleteMaterial(item.id), "资料已删除").then(() => {
+                  void run(() => api.deleteMaterial(item.id), t("materials.deleted")).then(() => {
                     setPendingDelete(null);
                   });
                 }}
               >
                 <Trash2 size={15} aria-hidden="true" />
-                {pendingDelete === item.id ? "确认删除" : "删除"}
+                {pendingDelete === item.id ? t("materials.confirmDelete") : t("materials.delete")}
               </button>
               {pendingDelete === item.id && (
                 <button className="button-ghost" disabled={busy} type="button" onClick={() => setPendingDelete(null)}>
-                  取消
+                  {t("materials.cancel")}
                 </button>
               )}
             </div>
