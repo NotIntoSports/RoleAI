@@ -71,3 +71,34 @@ pub struct PracticePlanGenerateInput {
     pub question_count: u8,
     pub difficulty: String,
 }
+
+/// 开始训练：注入题单 overlay 并启动一次普通会话。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(rename_all = "camelCase")]
+pub struct PracticeSessionStartInput {
+    pub plan_id: String,
+    #[serde(default)]
+    #[ts(optional)]
+    pub role_profile_id: Option<String>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub voice_route_id: Option<String>,
+}
+
+/// 训练进度（E07 信息条与报告页共用）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct PracticeProgress {
+    pub plan_id: String,
+    #[ts(type = "number")]
+    pub question_index: usize,
+    #[ts(type = "number")]
+    pub total_questions: usize,
+    #[ts(type = "number")]
+    pub followups_used: u32,
+    #[ts(type = "number")]
+    pub followup_limit: u32,
+    pub finished: bool,
+}

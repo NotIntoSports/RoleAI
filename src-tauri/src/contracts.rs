@@ -444,6 +444,8 @@ fn generated_bindings() -> String {
         crate::practice::PracticePlan::decl(&config),
         crate::practice::PracticePlanSummary::decl(&config),
         crate::practice::PracticePlanGenerateInput::decl(&config),
+        crate::practice::PracticeSessionStartInput::decl(&config),
+        crate::practice::PracticeProgress::decl(&config),
         crate::obs::ObsRuntimeStatus::decl(&config),
         CommandResult::<FoundationStatus>::decl(&config),
     ];
@@ -559,6 +561,8 @@ mod tests {
             "PracticePlan",
             "PracticePlanSummary",
             "PracticePlanGenerateInput",
+            "PracticeSessionStartInput",
+            "PracticeProgress",
             "ObsRuntimeStatus",
         ] {
             assert!(

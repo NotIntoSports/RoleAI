@@ -2,11 +2,13 @@
 //! 本模块不承载 Tauri 命令（命令在 crate::commands::practice），
 //! 纯计算与数据结构放在这里以便完全单测。
 
+pub mod director;
 pub mod dto;
 pub mod metrics;
 pub mod plan;
 pub mod store;
 
 pub use self::dto::{
-    PracticePlan, PracticePlanGenerateInput, PracticePlanSummary, PracticeQuestion,
+    PracticePlan, PracticePlanGenerateInput, PracticePlanSummary, PracticeProgress,
+    PracticeQuestion, PracticeSessionStartInput,
 };

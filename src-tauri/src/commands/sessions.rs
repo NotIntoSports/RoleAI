@@ -9,7 +9,9 @@ pub(super) const EVENT_SESSION_REPLY: &str = "session:reply:v1";
 pub(super) const EVENT_SESSION_AUDIO: &str = "session:audio:v1";
 pub(super) const EVENT_SESSION_PLAYBACK_CONTROL: &str = "session:playback-control:v1";
 
-fn session_service_error<T: ts_rs::TS>(error: SessionServiceError) -> CommandResult<T> {
+pub(in crate::commands) fn session_service_error<T: ts_rs::TS>(
+    error: SessionServiceError,
+) -> CommandResult<T> {
     if let SessionServiceError::Realtime(ref realtime) = error {
         return CommandResult::Err {
             error: PublicError::new(

@@ -1753,6 +1753,8 @@ fn session_start_rollback_keeps_routing_when_restore_fails() {
 // ---------- practice 题单命令（mock LLM） ----------
 
 use crate::contracts::CommandResult;
+use crate::contracts::SessionStartResult;
+use crate::sessions::SessionStore;
 
 mod practice_mock {
     use std::{
@@ -1988,4 +1990,184 @@ impl<T: serde::Serialize + ts_rs::TS> PracticeResultExt for CommandResult<T> {
             CommandResult::Err { error } => error.code.clone(),
         }
     }
+}
+
+fn practice_sample_plan() -> crate::practice::PracticePlan {
+    crate::practice::PracticePlan {
+        id: "plan-e4".into(),
+        title: "后端一面".into(),
+        position: "后端工程师".into(),
+        interviewer_style: "严苛面试官".into(),
+        difficulty: "standard".into(),
+        questions: vec![
+            crate::practice::PracticeQuestion {
+                prompt: "介绍一个你负责的项目".into(),
+                focus: "项目深度".into(),
+                expected_points: vec!["背景".into()],
+                followups: vec![],
+            },
+            crate::practice::PracticeQuestion {
+                prompt: "如何设计限流".into(),
+                focus: String::new(),
+                expected_points: vec![],
+                followups: vec![],
+            },
+        ],
+        created_at: "2026-10-01T00:00:00Z".into(),
+        updated_at: "2026-10-01T00:00:00Z".into(),
+    }
+}
+
+fn start_practice_session(state: &AppState) -> String {
+    let database_slot = state.database.lock().unwrap();
+    let database = database_slot.as_ref().unwrap();
+    crate::practice::store::PracticePlanStore::new(database)
+        .save(&practice_sample_plan())
+        .unwrap();
+    drop(database_slot);
+    let result = super::practice_session_start_cmd(
+        state,
+        crate::practice::PracticeSessionStartInput {
+            plan_id: "plan-e4".into(),
+            role_profile_id: None,
+            voice_route_id: None,
+        },
+    );
+    match result {
+        CommandResult::Ok {
+            data: SessionStartResult::Started { session },
+        } => session.id,
+        other => panic!(
+            "expected started, got {}",
+            serde_json::to_string(&other).unwrap()
+        ),
+    }
+}
+
+#[test]
+fn practice_session_start_injects_plan_and_records_event() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = session_state(&directory, &ready_session_config());
+    let session_id = start_practice_session(&state);
+
+    let database_slot = state.database.lock().unwrap();
+    let database = database_slot.as_ref().unwrap();
+    let events = SessionStore::new(database)
+        .list_events(&session_id)
+        .unwrap();
+    let practice_meta = events
+        .iter()
+        .find(|event| event.kind == "practice_meta")
+        .expect("practice_meta event");
+    let payload: serde_json::Value = serde_json::from_str(&practice_meta.payload).unwrap();
+    drop(database_slot);
+    assert_eq!(payload["planId"], "plan-e4");
+    assert_eq!(payload["action"], "start");
+    assert_eq!(payload["questionIndex"], 0);
+
+    // 已在会话中的状态下再次开始训练：会话服务拒绝（一个会话端口）。
+    let second = super::practice_session_start_cmd(
+        &state,
+        crate::practice::PracticeSessionStartInput {
+            plan_id: "plan-e4".into(),
+            role_profile_id: None,
+            voice_route_id: None,
+        },
+    );
+    assert_eq!(second.unwrap_err_code(), "SESSION_ALREADY_ACTIVE");
+}
+
+#[test]
+fn practice_session_start_unknown_plan_is_not_found() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = session_state(&directory, &ready_session_config());
+    let result = super::practice_session_start_cmd(
+        &state,
+        crate::practice::PracticeSessionStartInput {
+            plan_id: "no-such-plan".into(),
+            role_profile_id: None,
+            voice_route_id: None,
+        },
+    );
+    assert_eq!(result.unwrap_err_code(), "PRACTICE_PLAN_NOT_FOUND");
+}
+
+#[test]
+fn practice_session_progress_and_skip_track_question_flow() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = session_state(&directory, &ready_session_config());
+    let session_id = start_practice_session(&state);
+
+    let progress = match super::practice_session_progress_cmd(&state, session_id.clone()) {
+        CommandResult::Ok { data } => data,
+        CommandResult::Err { error } => panic!("progress failed: {}", error.code),
+    };
+    assert_eq!(progress.question_index, 0);
+    assert_eq!(progress.total_questions, 2);
+    assert!(!progress.finished);
+
+    // 跳过 → 进入第 2 题，且提示写入滚动摘要。
+    let skipped = match super::practice_session_skip_cmd(&state, session_id.clone()) {
+        CommandResult::Ok { data } => data,
+        CommandResult::Err { error } => panic!("skip failed: {}", error.code),
+    };
+    assert_eq!(skipped.question_index, 1);
+
+    let database_slot = state.database.lock().unwrap();
+    let database = database_slot.as_ref().unwrap();
+    let (summary, _) = SessionStore::new(database)
+        .context_summary(&session_id)
+        .unwrap()
+        .expect("summary note");
+    assert!(summary.contains("候选人请求跳过"), "{summary}");
+    assert!(summary.contains("第2题"), "{summary}");
+    drop(database_slot);
+
+    // 转写标注兜底：事件未动时按最新【第X题】标注前进。
+    let database_slot = state.database.lock().unwrap();
+    let database = database_slot.as_ref().unwrap();
+    let store = SessionStore::new(database);
+    let turns = store.list_turns(&session_id).unwrap();
+    store
+        .insert_turn(crate::sessions::NewTurn {
+            id: "turn-marker-1",
+            session_id: &session_id,
+            turn_index: turns.len() as i64,
+            user_text: "回答",
+            assistant_text: "【第2题】如何设计限流？",
+            materials_used: false,
+        })
+        .unwrap();
+    drop(database_slot);
+    let progressed = match super::practice_session_progress_cmd(&state, session_id.clone()) {
+        CommandResult::Ok { data } => data,
+        CommandResult::Err { error } => panic!("progress failed: {}", error.code),
+    };
+    assert_eq!(progressed.question_index, 1);
+
+    // 再次跳过 → 全部题目完成。
+    let finished = match super::practice_session_skip_cmd(&state, session_id.clone()) {
+        CommandResult::Ok { data } => data,
+        CommandResult::Err { error } => panic!("skip failed: {}", error.code),
+    };
+    assert!(finished.finished);
+}
+
+#[test]
+fn practice_session_commands_reject_non_practice_sessions() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = session_state(&directory, &ready_session_config());
+    let started = serde_json::to_value(super::session_start_cmd(&state, None)).unwrap();
+    let session_id = started["data"]["session"]["id"]
+        .as_str()
+        .expect("session id")
+        .to_owned();
+
+    let progress = super::practice_session_progress_cmd(&state, session_id.clone());
+    assert_eq!(progress.unwrap_err_code(), "PRACTICE_SESSION_STATE_INVALID");
+    let skip = super::practice_session_skip_cmd(&state, session_id.clone());
+    assert_eq!(skip.unwrap_err_code(), "PRACTICE_SESSION_STATE_INVALID");
+
+    let missing = super::practice_session_progress_cmd(&state, "missing-session".into());
+    assert_eq!(missing.unwrap_err_code(), "SESSION_NOT_FOUND");
 }

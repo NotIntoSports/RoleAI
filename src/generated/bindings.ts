@@ -173,6 +173,10 @@ export type PracticePlanSummary = { id: string, title: string, position: string,
 
 export type PracticePlanGenerateInput = { position: string, jdMaterialId?: string, resumeMaterialId?: string, interviewerStyle: string, questionCount: number, difficulty: string, };
 
+export type PracticeSessionStartInput = { planId: string, roleProfileId?: string, voiceRouteId?: string, };
+
+export type PracticeProgress = { planId: string, questionIndex: number, totalQuestions: number, followupsUsed: number, followupLimit: number, finished: boolean, };
+
 export type ObsRuntimeStatus = { connected: boolean, sceneReady: boolean, browserSourceReady: boolean, virtualCameraActive: boolean, errorCode: string | null, };
 
 export type CommandResult<T> = { ok: true; data: T } | { ok: false; error: PublicError };

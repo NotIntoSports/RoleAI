@@ -27,7 +27,10 @@ use crate::{
         VideoFrameAcceptance,
     },
     error::PublicError,
-    practice::{PracticePlan, PracticePlanGenerateInput, PracticePlanSummary},
+    practice::{
+        PracticePlan, PracticePlanGenerateInput, PracticePlanSummary, PracticeProgress,
+        PracticeSessionStartInput,
+    },
     providers::{
         ChatMessage, ChatModel, OpenAiCompatibleCascade, OpenAiCompatibleEmbeddingProbe,
         OpenAiCompatibleProbe, OpenAiCompatibleRealtime, ProviderEndpoint, StandardRouteProbe,
