@@ -46,7 +46,7 @@ RoleAI 的前身是一个 AI 面试助手，2026 年 8 月 10 日的首提交（
 
 架构收敛不是终点，它把复杂度从进程间搬到了进程内，产生了三个新问题，各有一个工程化解法。
 
-**问题一：Rust 和 TypeScript 之间的类型契约。** 以前跨进程通信靠 API schema，现在只剩 Tauri IPC 一条缝——缝小了，但类型不一致的坑还在：Rust 侧改一个字段名，前端拿到 `undefined` 才发现。解法是 [ts-rs](https://github.com/n/ts-rs)：Rust DTO 上标注 `#[derive(TS)]`，`cargo test` 时自动生成 `src/generated/bindings.ts`，前端直接 import 这些类型。字段改一边，编译失败。生成文件禁止手改，并有契约测试锁定 IPC 命令面不可膨胀。
+**问题一：Rust 和 TypeScript 之间的类型契约。** 以前跨进程通信靠 API schema，现在只剩 Tauri IPC 一条缝——缝小了，但类型不一致的坑还在：Rust 侧改一个字段名，前端拿到 `undefined` 才发现。解法是 [ts-rs](https://github.com/Aleph-Alpha/ts-rs)：Rust DTO 上标注 `#[derive(TS)]`，`cargo test` 时自动生成 `src/generated/bindings.ts`，前端直接 import 这些类型。字段改一边，编译失败。生成文件禁止手改，并有契约测试锁定 IPC 命令面不可膨胀。
 
 **问题二：不是所有本地能力都适合塞进 Rust。** 会议音频采集需要 WASAPI 进程环回（loopback），在纯 Rust 里做稳妥的进程环回采集，生态不成熟。解法是保留**一个**子进程：C# AudioBridge，复用 MIT 许可的 NAudio.Wasapi，通过一条极简的帧协议（音频帧 / clear 打断清空 / drain 播净回执）与主进程通信，发布产物自带 .NET 运行时。收敛不等于教条——该留的进程留着，但把它钉死在"单一职责 + 极简协议"上。
 
