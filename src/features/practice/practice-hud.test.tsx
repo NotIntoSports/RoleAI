@@ -10,6 +10,7 @@ vi.mock("../../api/commands", () => ({
   getPracticeSessionProgress: vi.fn(),
   getPracticeSessionTurnMetrics: vi.fn(),
   skipPracticeQuestion: vi.fn(),
+  generatePracticeReport: vi.fn(),
 }));
 
 function progress(overrides: Partial<PracticeProgress> = {}): PracticeProgress {
@@ -101,6 +102,43 @@ describe("PracticeHud", () => {
     expect(hud.textContent).toContain("全部 3 题已完成");
     expect(screen.queryByRole("button", { name: "跳过本题" })).toBeNull();
     expect(screen.queryByRole("timer")).toBeNull();
+  });
+
+  it("generates the training report from the finished-state entry", async () => {
+    vi.mocked(commands.getPracticeSessionProgress).mockResolvedValue({
+      ok: true,
+      data: progress({ questionIndex: 1, totalQuestions: 2, finished: true }),
+    });
+    vi.mocked(commands.generatePracticeReport).mockResolvedValue({
+      ok: true,
+      data: {
+        sessionId: "sess-1", planId: "plan-1", position: "后端", interviewerStyle: "面试官",
+        llmAvailable: true, totalScore: 4, dimensions: { contentDepth: 4, structureClarity: 4, fluency: 4, jobFit: 4 },
+        perQuestion: [], topSuggestions: [],
+        objective: { answers: [], totalDurationSeconds: null, averageAnswerSeconds: null, longPauses: null, topFillers: [] },
+        createdAt: "2026-10-02T08:00:00Z",
+      },
+    });
+    const onNotify = vi.fn();
+    render(<PracticeHud sessionId="sess-1" active={true} turns={[turn()]} onNotify={onNotify} />);
+    fireEvent.click(await screen.findByRole("button", { name: "生成训练报告" }));
+    await waitFor(() => expect(commands.generatePracticeReport).toHaveBeenCalledWith("sess-1"));
+    await waitFor(() => expect(onNotify).toHaveBeenCalledWith(expect.stringContaining("训练报告已生成")));
+  });
+
+  it("surfaces report generation failure through onNotify", async () => {
+    vi.mocked(commands.getPracticeSessionProgress).mockResolvedValue({
+      ok: true,
+      data: progress({ questionIndex: 1, totalQuestions: 2, finished: true }),
+    });
+    vi.mocked(commands.generatePracticeReport).mockResolvedValue({
+      ok: false,
+      error: { code: "PRACTICE_SESSION_STATE_INVALID", message: "状态无效", requestId: "r", retryable: false },
+    });
+    const onNotify = vi.fn();
+    render(<PracticeHud sessionId="sess-1" active={true} turns={[turn()]} onNotify={onNotify} />);
+    fireEvent.click(await screen.findByRole("button", { name: "生成训练报告" }));
+    await waitFor(() => expect(onNotify).toHaveBeenCalledWith("报告生成失败：PRACTICE_SESSION_STATE_INVALID"));
   });
 
   it("shows per-question position, question timer, and skip button", async () => {

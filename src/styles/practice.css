@@ -202,3 +202,148 @@
   align-items: center;
   gap: 6px;
 }
+
+/* 训练报告页（E08）。 */
+.practice-report-section {
+  margin-top: 20px;
+}
+
+.practice-report-missing {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.practice-report-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.practice-report-title {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
+
+.practice-report-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.practice-report-suggestions h4,
+.practice-report-questions h4,
+.practice-objective h4 {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.practice-report-suggestions ol {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.practice-report-grid {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 16px;
+  margin: 12px 0;
+}
+
+.practice-radar {
+  flex: none;
+}
+
+.practice-objective {
+  flex: 1 1 260px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-muted);
+  font-size: 13px;
+}
+
+.practice-objective-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.practice-objective-note {
+  margin: 8px 0 0;
+  font-size: 11px;
+}
+
+.practice-report-questions ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 10px;
+}
+
+.practice-review-card {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-muted);
+  font-size: 13px;
+}
+
+.practice-review-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.practice-review-index {
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.practice-review-question {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.practice-review-answer summary {
+  cursor: pointer;
+  margin: 8px 0 4px;
+  font-size: 12px;
+  color: var(--accent-strong);
+}
+
+.practice-review-answer p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.practice-review-body p {
+  margin: 6px 0 0;
+  line-height: 1.7;
+}
+
+.practice-report-disclaimer {
+  margin-top: 14px;
+  padding: 8px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+}

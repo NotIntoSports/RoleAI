@@ -50,6 +50,7 @@ export function PracticeHud({ sessionId, active, turns, onNotify }: PracticeHudP
   const [progress, setProgress] = useState<PracticeProgress | null>(null);
   const [turnMetrics, setTurnMetrics] = useState<AnswerMetrics | null>(null);
   const [skipBusy, setSkipBusy] = useState(false);
+  const [reportBusy, setReportBusy] = useState(false);
   const [questionSeconds, setQuestionSeconds] = useState(0);
   const questionStartRef = useRef<number | null>(null);
 
@@ -121,13 +122,31 @@ export function PracticeHud({ sessionId, active, turns, onNotify }: PracticeHudP
     }
   }
 
+  // 全部题目完成后的报告入口：生成成功后到「模拟面试」页查看报告详情。
+  async function handleGenerateReport() {
+    if (!sessionId || reportBusy) return;
+    setReportBusy(true);
+    try {
+      const result = await api.generatePracticeReport(sessionId);
+      if (result.ok) {
+        onNotify?.("训练报告已生成，可到「模拟面试」页查看评分与逐题点评。");
+      } else {
+        onNotify?.(`报告生成失败：${result.error.code}`);
+      }
+    } catch {
+      onNotify?.("报告生成失败：本地操作未完成，可重试。");
+    } finally {
+      setReportBusy(false);
+    }
+  }
+
   if (!progress) return null;
   const hints = expressionHints(turnMetrics);
   return (
     <section className="practice-hud" aria-label="模拟面试训练进度" data-finished={progress.finished ? "true" : undefined}>
       <span className="practice-hud-progress">
         {progress.finished
-          ? `全部 ${progress.totalQuestions} 题已完成，可结束会话生成训练报告。`
+          ? `全部 ${progress.totalQuestions} 题已完成，结束会话后可生成训练报告。`
           : `第 ${progress.questionIndex + 1} / ${progress.totalQuestions} 题`}
       </span>
       {!progress.finished && (
@@ -143,6 +162,16 @@ export function PracticeHud({ sessionId, active, turns, onNotify }: PracticeHudP
           onClick={() => void handleSkip()}
         >
           {skipBusy ? "跳过中…" : "跳过本题"}
+        </button>
+      )}
+      {progress.finished && (
+        <button
+          type="button"
+          className="button-ghost practice-hud-report"
+          disabled={reportBusy}
+          onClick={() => void handleGenerateReport()}
+        >
+          {reportBusy ? "正在生成报告…" : "生成训练报告"}
         </button>
       )}
       {hints.length > 0 && (
