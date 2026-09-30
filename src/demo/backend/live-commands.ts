@@ -45,8 +45,8 @@ const persistence: LivePersistence = {
   appendTurn: (sessionId, userText, assistantText) => {
     appendLiveTurn(sessionId, userText, assistantText);
   },
-  updateTurnAssistant: (sessionId, userText, assistantText) => {
-    updateLiveTurnAssistant(sessionId, userText, assistantText);
+  updateTurnAssistant: (sessionId, userText, assistantText, extras) => {
+    updateLiveTurnAssistant(sessionId, userText, assistantText, extras);
   },
   finish: (sessionId) => {
     finishLiveSession(sessionId);

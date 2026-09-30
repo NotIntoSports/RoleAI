@@ -4,10 +4,30 @@
 // - session:transcript:v1 / session:reply:v1 → {seq, text, done}
 // - session:playback-control:v1 → {seq, action:"clear"}（打断）
 // 可注入 emitEvent，单测用假时钟驱动；脚本轮与用户插话共用一条串行队列。
-import type { RuntimeStatus } from "../../generated/bindings";
+import type { RuntimeStatus, TurnLatencyView, TurnTimeline } from "../../generated/bindings";
 
 import type { DemoScript, DemoScriptTurn } from "./scripts";
 import { cancelDemoVoice, isDemoVoiceEnabled, speakDemoText } from "./demo-voice";
+
+const DEMO_ROUTE_ID = "route-demo-realtime";
+
+function emptyTimeline(): TurnTimeline {
+  return {
+    speechStartedMs: null,
+    speechStoppedMs: null,
+    transcriptDoneMs: null,
+    responseCreatedMs: null,
+    firstAudioMs: null,
+    responseDoneMs: null,
+    asrDoneMs: null,
+    retrievalDoneMs: null,
+    llmFirstTokenMs: null,
+    llmDoneMs: null,
+    ttsDoneMs: null,
+    playbackStartedMs: null,
+    playbackDoneMs: null,
+  };
+}
 
 const OPENING_DELAY_MS = 700;
 const THINKING_MS: [number, number] = [450, 900];
@@ -69,7 +89,7 @@ export interface LivePersistence {
     sessionId: string,
     userText: string,
     assistantText: string,
-    extras?: { materialsUsed?: boolean; citations?: LiveTurn["citations"] },
+    extras?: { materialsUsed?: boolean; citations?: LiveTurn["citations"]; latency?: TurnLatencyView },
   ) => void;
   finish: (sessionId: string) => void;
 }
@@ -103,6 +123,24 @@ export class ScriptedLiveSession {
   private revision = 0;
   private lastTurn: LiveTurn | null = null;
   private tailCursor = 0;
+  /** 会话基准（演示也是「真实测量」：锚点用演示时间线的实际流逝毫秒）。 */
+  private readonly epochMs = Date.now();
+  private liveTimeline: TurnTimeline = emptyTimeline();
+  private liveInterrupted = false;
+
+  private elapsedMs(): number {
+    return Date.now() - this.epochMs;
+  }
+
+  /** 回答落库时随轮次保存本演示轮的分阶段时间线（虚构数值但来自真实流逝）。 */
+  private latencySnapshot(): TurnLatencyView {
+    return {
+      routeId: DEMO_ROUTE_ID,
+      mode: "realtime",
+      interrupted: this.liveInterrupted,
+      timeline: { ...this.liveTimeline },
+    };
+  }
 
   constructor(
     sessionId: string,
@@ -180,7 +218,10 @@ export class ScriptedLiveSession {
     void this.enqueue(async () => {
       if (this.disposed || !this.lastTurn) return;
       const retry: LiveTurn = { ...this.lastTurn };
+      this.liveTimeline = emptyTimeline();
+      this.liveInterrupted = false;
       await this.emitStatus("thinking");
+      this.liveTimeline.responseCreatedMs = this.elapsedMs();
       await this.pauseBetween(this.randMs(THINKING_MS));
       if (this.disposed) return;
       await this.emitStatus("speaking");
@@ -252,6 +293,9 @@ export class ScriptedLiveSession {
   /** 用户发言：转写逐字上屏 → 落库 → done。 */
   private async runUserSpeech(userText: string): Promise<void> {
     await this.emitStatus("listening");
+    this.liveTimeline = emptyTimeline();
+    this.liveInterrupted = false;
+    this.liveTimeline.speechStartedMs = this.elapsedMs();
     const chunks = chunkText(userText);
     let emitted = "";
     for (const chunk of chunks) {
@@ -265,6 +309,8 @@ export class ScriptedLiveSession {
       await this.pauseBetween(this.randMs(USER_CHUNK_MS));
       if (this.disposed) return;
     }
+    this.liveTimeline.speechStoppedMs = this.elapsedMs();
+    this.liveTimeline.transcriptDoneMs = this.elapsedMs();
     this.persistence.appendTurn(this.sessionId, userText, "");
     this.revision += 1;
     this.transcriptSeq += 1;
@@ -282,6 +328,7 @@ export class ScriptedLiveSession {
     await this.runUserSpeech(turn.userText);
     if (this.disposed) return;
     await this.emitStatus("thinking");
+    this.liveTimeline.responseCreatedMs = this.elapsedMs();
     await this.pauseBetween(this.randMs(THINKING_MS));
     if (this.disposed) return;
     await this.emitStatus("speaking");
@@ -298,7 +345,8 @@ export class ScriptedLiveSession {
     const cut = turn.interruptAfterChars ?? null;
     const streamed = await this.streamReplyChunks(pending, turn.replyText, cut);
     if (cut !== null && streamed.length < turn.replyText.length) {
-      // 用户打断：清播放队列、回聆听态；截断的回答已由 streamReplyChunks 落库。
+      // 用户打断：清播放队列、回聆听态；截断的回答已由 streamReplyChunks 落库，
+      // interrupted 标注同样由 streamReplyChunks 在快照前写入。
       cancelDemoVoice();
       this.playbackSeq += 1;
       await this.emitEvent("session:playback-control:v1", {
@@ -320,6 +368,7 @@ export class ScriptedLiveSession {
     await this.runUserSpeech(text);
     if (this.disposed) return;
     await this.emitStatus("thinking");
+    this.liveTimeline.responseCreatedMs = this.elapsedMs();
     await this.pauseBetween(this.randMs(THINKING_MS));
     if (this.disposed) return;
     await this.emitStatus("speaking");
@@ -336,9 +385,17 @@ export class ScriptedLiveSession {
   private async streamReplyChunks(pending: LiveTurn, replyText: string, cutAfterChars: number | null): Promise<string> {
     const chunks = chunkText(replyText);
     let emitted = "";
+    let cutShort = false;
     for (const chunk of chunks) {
       const candidate = emitted + chunk;
-      if (cutAfterChars !== null && candidate.length > cutAfterChars) break;
+      if (cutAfterChars !== null && candidate.length > cutAfterChars) {
+        cutShort = true;
+        this.liveInterrupted = true;
+        break;
+      }
+      if (this.liveTimeline.firstAudioMs === null) {
+        this.liveTimeline.firstAudioMs = this.elapsedMs();
+      }
       emitted = candidate;
       this.replySeq += 1;
       await this.emitEvent("session:reply:v1", {
@@ -349,10 +406,15 @@ export class ScriptedLiveSession {
       await this.pauseBetween(this.randMs(REPLY_CHUNK_MS));
       if (this.disposed) return emitted;
     }
+    if (!cutShort) {
+      this.liveInterrupted = false;
+    }
     pending.assistantText = emitted;
+    this.liveTimeline.responseDoneMs = this.elapsedMs();
     this.persistence.updateTurnAssistant(this.sessionId, pending.userText, emitted, {
       materialsUsed: pending.materialsUsed,
       citations: pending.citations,
+      latency: this.latencySnapshot(),
     });
     this.revision += 1;
     this.lastTurn = pending;

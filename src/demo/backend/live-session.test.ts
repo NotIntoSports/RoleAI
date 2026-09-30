@@ -24,8 +24,8 @@ const REAL_PERSISTENCE: LivePersistence = {
   appendTurn: (sessionId, userText) => {
     appendLiveTurn(sessionId, userText, "");
   },
-  updateTurnAssistant: (sessionId, userText, assistantText) => {
-    updateLiveTurnAssistant(sessionId, userText, assistantText);
+  updateTurnAssistant: (sessionId, userText, assistantText, extras) => {
+    updateLiveTurnAssistant(sessionId, userText, assistantText, extras);
   },
   finish: (sessionId) => {
     finishLiveSession(sessionId);
@@ -265,5 +265,86 @@ describe("live session commands", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.code).toBe("SESSION_STATE_INVALID");
+  });
+});
+
+describe("ScriptedLiveSession 延迟时间线（lane-F F07）", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    window.localStorage.clear();
+    resetDemoState();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("脚本轮落库时带上单调的时间线与模式标注", async () => {
+    const session = createLiveSession("preset-strict-interviewer", "realtime-e2e");
+    const live = new ScriptedLiveSession(
+      session.id,
+      { id: "test", turns: [{ userText: "你好世界", replyText: "好的收到" }] },
+      { emitEvent: collectedEmitter([]), random: () => 0.5 },
+      REAL_PERSISTENCE,
+    );
+    live.begin();
+    await driveUntil(() => {
+      const turns = getState().sessionTurns[session.id] ?? [];
+      return turns.length === 1 && turns[0].latency != null;
+    });
+
+    const latency = getState().sessionTurns[session.id]![0].latency!;
+    expect(latency.mode).toBe("realtime");
+    expect(latency.routeId).toBe("route-demo-realtime");
+    expect(latency.interrupted).toBe(false);
+    const timeline = latency.timeline;
+    for (const anchor of [
+      timeline.speechStartedMs,
+      timeline.speechStoppedMs,
+      timeline.transcriptDoneMs,
+      timeline.responseCreatedMs,
+      timeline.firstAudioMs,
+      timeline.responseDoneMs,
+    ]) {
+      expect(anchor).toBeTypeOf("number");
+    }
+    const values = [
+      timeline.speechStartedMs!,
+      timeline.speechStoppedMs!,
+      timeline.transcriptDoneMs!,
+      timeline.responseCreatedMs!,
+      timeline.firstAudioMs!,
+      timeline.responseDoneMs!,
+    ];
+    expect([...values].sort((a, b) => a - b)).toEqual(values);
+    // 演示「首响延迟」= 请求发出 → 首包音频，与桌面实时线路口径一致（0.4～0.9s 量级）。
+    const firstResponse = timeline.firstAudioMs! - timeline.responseCreatedMs!;
+    expect(firstResponse).toBeGreaterThanOrEqual(400);
+    expect(firstResponse).toBeLessThan(1_200);
+  });
+
+  it("被打断的演示轮在延迟视图上标注 interrupted", async () => {
+    const session = createLiveSession("preset-strict-interviewer", "realtime-e2e");
+    const live = new ScriptedLiveSession(
+      session.id,
+      {
+        id: "test",
+        turns: [
+          {
+            userText: "请问缓存击穿怎么处理？",
+            replyText: "这是一个用来演示打断逻辑的比较长的回答内容",
+            interruptAfterChars: 4,
+          },
+        ],
+      },
+      { emitEvent: collectedEmitter([]), random: () => 0.5 },
+      REAL_PERSISTENCE,
+    );
+    live.begin();
+    await driveUntil(() => {
+      const turns = getState().sessionTurns[session.id] ?? [];
+      return turns.length === 1 && turns[0].latency != null;
+    });
+    expect(getState().sessionTurns[session.id]![0].latency!.interrupted).toBe(true);
   });
 });

@@ -1,4 +1,6 @@
 // 演示会话记录种子：4 条完全虚构的历史会话（2 场模拟面试、1 场会议纪要、1 场直播排练）。
+import type { TurnLatencyView, TurnTimeline } from "../../generated/bindings";
+
 export interface DemoSeedTurn {
   user: string;
   assistant: string;
@@ -17,6 +19,54 @@ export interface DemoSeedSession {
 }
 
 const ROUTE = "route-demo-realtime";
+
+/**
+ * 种子轮次的虚构分阶段时间线（数值与演示横幅「数据为虚构」声明一致）：
+ * - realtime 总延迟（responseCreated → firstAudio）0.4～0.9s；
+ * - cascade 全链路（asrDone → ttsDone）1.2～2.5s。
+ * 由 (会话序, 轮序) 确定性生成，保证每次播种数据一致、截图可复现。
+ */
+export function seedTurnLatency(
+  transportMode: string,
+  sessionIndex: number,
+  turnIndex: number,
+): TurnLatencyView {
+  const seed = sessionIndex * 31 + turnIndex * 7;
+  const pick = (min: number, max: number) => min + ((seed * 13 + min) % (max - min));
+  const timeline: TurnTimeline =
+    transportMode === "realtime-e2e"
+      ? {
+          speechStartedMs: null,
+          speechStoppedMs: null,
+          transcriptDoneMs: pick(60, 140),
+          responseCreatedMs: pick(150, 230),
+          firstAudioMs: pick(430, 900),
+          responseDoneMs: pick(1_600, 4_200),
+          asrDoneMs: null,
+          retrievalDoneMs: null,
+          llmFirstTokenMs: null,
+          llmDoneMs: null,
+          ttsDoneMs: null,
+          playbackStartedMs: null,
+          playbackDoneMs: null,
+        }
+      : {
+          speechStartedMs: null,
+          speechStoppedMs: null,
+          transcriptDoneMs: null,
+          responseCreatedMs: null,
+          firstAudioMs: null,
+          responseDoneMs: null,
+          asrDoneMs: pick(280, 620),
+          retrievalDoneMs: pick(640, 860),
+          llmFirstTokenMs: pick(900, 1_400),
+          llmDoneMs: pick(1_500, 2_200),
+          ttsDoneMs: pick(2_260, 2_500),
+          playbackStartedMs: null,
+          playbackDoneMs: null,
+        };
+  return { routeId: ROUTE, mode: transportMode === "realtime-e2e" ? "realtime" : "cascade", interrupted: false, timeline };
+}
 
 export const DEMO_SESSIONS: DemoSeedSession[] = [
   {

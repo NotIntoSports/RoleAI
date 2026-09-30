@@ -108,6 +108,27 @@ async function captureAll(outDir, deviceScaleFactor) {
       await context.close();
     }
 
+    // —— 延迟瀑布条（lane-F F07 追加，只加不改）——
+    {
+      const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor });
+      await context.addInitScript(() => {
+        window.localStorage.setItem("ai-assistant.theme", "dark");
+      });
+      const page = await context.newPage();
+      await gotoApp(page, "#/workspace");
+      await page.getByRole("button", { name: "开始语音会话" }).click();
+      await page.getByText("接下来看缓存", { exact: false }).first().waitFor({ timeout: 60_000 });
+      await page.waitForTimeout(800);
+      // 展开第 1 轮的瀑布条明细表。
+      await page.getByRole("button", { name: /第 1 轮延迟/ }).click();
+      await page.getByText("分阶段耗时").first().waitFor({ timeout: 5_000 });
+      await page.waitForTimeout(300);
+      await page.screenshot({ path: shotPath("latency-waterfall.png") });
+      reportSize("latency-waterfall.png");
+      await page.getByRole("button", { name: "结束通话" }).click();
+      await context.close();
+    }
+
     // —— 静态页面截图（深色）——
     const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor });
     await context.addInitScript(() => {
@@ -184,13 +205,19 @@ async function captureAll(outDir, deviceScaleFactor) {
     await page.screenshot({ path: shotPath("settings-appearance.png") });
     reportSize("settings-appearance.png");
 
-    // 延迟诊断。
+    // 延迟诊断（lane-F F05：诊断区升级为性能面板）。
     await gotoApp(page, "&category=diagnostics#/settings");
-    await page.getByText("诊断延迟").waitFor();
+    await page.getByText("性能面板").waitFor();
     await page.getByText("演示实时线路（端到端）").waitFor({ timeout: 15_000 });
     await page.waitForTimeout(400);
     await page.screenshot({ path: shotPath("diagnostics.png") });
     reportSize("diagnostics.png");
+
+    // 性能面板（分阶段百分位 + 最近轮折线，lane-F F07 追加）。
+    await page.getByText("分阶段延迟").first().waitFor({ timeout: 10_000 });
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: shotPath("performance-panel.png") });
+    reportSize("performance-panel.png");
 
     await context.close();
   } finally {
