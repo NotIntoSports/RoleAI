@@ -32,6 +32,10 @@ vi.mock("../../api/commands", async (importOriginal) => ({
   isSessionAudioReady: vi.fn(),
   pushMicPcm: vi.fn(),
   pushVideoFrame: vi.fn(),
+  listSessions: vi.fn(),
+  getPracticeSessionProgress: vi.fn(),
+  getPracticeSessionTurnMetrics: vi.fn(),
+  skipPracticeQuestion: vi.fn(),
 }));
 
 
@@ -148,6 +152,16 @@ describe("WorkspaceSession", () => {
       ok: true,
       data: [{ id: "spk-1", name: "扬声器" }],
     });
+    // 训练相关：默认“不可用/非训练会话”，训练信息条保持隐藏。
+    vi.mocked(commands.listSessions).mockResolvedValue({
+      ok: false,
+      error: { code: "TEST_UNAVAILABLE", message: "unavailable", requestId: "test", retryable: false },
+    });
+    vi.mocked(commands.getPracticeSessionProgress).mockResolvedValue({
+      ok: false,
+      error: { code: "PRACTICE_SESSION_STATE_INVALID", message: "该会话不是模拟面试训练", requestId: "test", retryable: false },
+    });
+    vi.mocked(commands.getPracticeSessionTurnMetrics).mockResolvedValue({ ok: true, data: null });
   });
 
   afterEach(() => {
@@ -1681,5 +1695,89 @@ describe("WorkspaceSession", () => {
     expect(screen.getAllByLabelText(/AI 回复/)).toHaveLength(1);
     expect(screen.getByLabelText("AI 回复 · 第 1 轮").textContent).toContain("回答前半与后半全文");
     expect(screen.queryByText("回答前半")).toBeNull();
+  });
+
+  it("keeps the practice HUD hidden for a normal session", async () => {
+    render(<WorkspaceSession />);
+    fireEvent.click(await screen.findByRole("button", { name: "开始会话" }));
+    await waitFor(() => expect(commands.startSession).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(commands.getPracticeSessionProgress).toHaveBeenCalledWith("sess-1"));
+    expect(screen.queryByRole("region", { name: "模拟面试训练进度" })).toBeNull();
+  });
+
+  it("shows the practice HUD with progress and hints for a training session", async () => {
+    vi.mocked(commands.getPracticeSessionProgress).mockResolvedValue({
+      ok: true,
+      data: { planId: "plan-1", questionIndex: 0, totalQuestions: 3, followupsUsed: 0, followupLimit: 2, finished: false },
+    });
+    vi.mocked(commands.getPracticeSessionTurnMetrics).mockResolvedValue({
+      ok: true,
+      data: {
+        answerIndex: 0, durationSeconds: 60, chineseChars: 350, englishWords: 0,
+        speechRate: { chinesePerMinute: 350, englishPerMinute: 0 },
+        fillers: [{ word: "嗯", count: 6 }], structureSignals: [], starCoverage: [],
+      },
+    });
+    render(<WorkspaceSession />);
+    fireEvent.click(await screen.findByRole("button", { name: "开始会话" }));
+    const hud = await screen.findByRole("region", { name: "模拟面试训练进度" });
+    expect(hud.textContent).toContain("第 1 / 3 题");
+    expect(hud.textContent).toContain("语速过快");
+    expect(hud.textContent).toContain("口头禅较多");
+  });
+
+  it("skips the current question from the practice HUD", async () => {
+    vi.mocked(commands.getPracticeSessionProgress).mockResolvedValue({
+      ok: true,
+      data: { planId: "plan-1", questionIndex: 0, totalQuestions: 2, followupsUsed: 0, followupLimit: 2, finished: false },
+    });
+    vi.mocked(commands.skipPracticeQuestion).mockResolvedValue({
+      ok: true,
+      data: { planId: "plan-1", questionIndex: 1, totalQuestions: 2, followupsUsed: 0, followupLimit: 2, finished: false },
+    });
+    render(<WorkspaceSession />);
+    fireEvent.click(await screen.findByRole("button", { name: "开始会话" }));
+    await screen.findByRole("region", { name: "模拟面试训练进度" });
+    fireEvent.click(screen.getByRole("button", { name: "跳过本题" }));
+    await waitFor(() => expect(commands.skipPracticeQuestion).toHaveBeenCalledWith("sess-1"));
+    await waitFor(() =>
+      expect(screen.getByRole("region", { name: "模拟面试训练进度" }).textContent).toContain("第 2 / 2 题"),
+    );
+  });
+
+  it("adopts the running practice session on mount when returning from the wizard", async () => {
+    vi.mocked(commands.getRuntimeStatus).mockResolvedValue({ ok: true, data: status({ phase: "listening", seq: 2 }) });
+    vi.mocked(commands.listSessions).mockResolvedValue({
+      ok: true,
+      data: [summary({ id: "sess-practice-9", status: "listening" })],
+    });
+    vi.mocked(commands.getPracticeSessionProgress).mockResolvedValue({
+      ok: true,
+      data: { planId: "plan-1", questionIndex: 1, totalQuestions: 2, followupsUsed: 0, followupLimit: 2, finished: false },
+    });
+    vi.mocked(commands.getSession).mockResolvedValue({
+      ok: true,
+      data: { session: summary({ id: "sess-practice-9" }), turns: [] },
+    });
+
+    render(<WorkspaceSession />);
+    const hud = await screen.findByRole("region", { name: "模拟面试训练进度" });
+    expect(hud.textContent).toContain("第 2 / 2 题");
+    // 接管后按训练会话 id 拉取转写现场。
+    await waitFor(() => expect(commands.getSession).toHaveBeenCalledWith("sess-practice-9"));
+  });
+
+  it("does not adopt a running non-practice session", async () => {
+    vi.mocked(commands.getRuntimeStatus).mockResolvedValue({ ok: true, data: status({ phase: "listening", seq: 2 }) });
+    vi.mocked(commands.listSessions).mockResolvedValue({
+      ok: true,
+      data: [summary({ id: "sess-normal", status: "listening" })],
+    });
+    render(<WorkspaceSession />);
+    await screen.findByText("聆听中");
+    await waitFor(() => expect(commands.getPracticeSessionProgress).toHaveBeenCalledWith("sess-normal"));
+    // 探针失败：不接管，也不拉取该会话转写。
+    expect(commands.getSession).not.toHaveBeenCalledWith("sess-normal");
+    expect(screen.queryByRole("region", { name: "模拟面试训练进度" })).toBeNull();
   });
 });

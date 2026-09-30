@@ -4,7 +4,7 @@
  * Design spec: docs/superpowers/specs/2026-09-04-tauri-local-monolith-design.md §6.1–6.5
  */
 
-export const routeIds = ["workspace", "livestream", "materials", "records", "services", "settings"] as const;
+export const routeIds = ["workspace", "livestream", "practice", "materials", "records", "services", "settings"] as const;
 
 export type RouteId = typeof routeIds[number];
 
@@ -31,6 +31,7 @@ export function routeLabel(id: RouteId): string {
   const labels: Record<RouteId, string> = {
     workspace: "工作台",
     livestream: "虚拟直播",
+    practice: "模拟面试",
     materials: "资料",
     records: "记录",
     services: "服务",
@@ -44,6 +45,8 @@ export function routeDesignRef(id: RouteId): string {
   const refs: Record<RouteId, string> = {
     workspace: "6.1",
     livestream: "6.1",
+    // 6.6：lane-E 模拟面试训练设计（docs/superpowers/specs/2026-10-mock-interview-training.md，不入库）。
+    practice: "6.6",
     materials: "6.2",
     records: "6.3",
     services: "6.4",
@@ -67,6 +70,12 @@ export function routeCapabilities(id: RouteId): readonly string[] {
       "图片或循环视频舞台",
       "讲稿确认与分段控制",
       "OBS Virtual Camera 输出",
+    ],
+    practice: [
+      "岗位方向与 JD/简历资料选择",
+      "面试官风格选择（面试官/HR/严苛面试官）",
+      "题量、难度与预计时长配置",
+      "题单预览、编辑与保存",
     ],
     materials: [
       "简历导入与管理",

@@ -14,13 +14,14 @@ describe("AppNav", () => {
   it("renders 6 navigation buttons with Chinese labels", () => {
     render(<AppNav current="workspace" onNavigate={() => {}} />);
     const buttons = screen.getAllByRole("button").filter((button) => button.classList.contains("app-nav-item"));
-    expect(buttons.length).toBe(6);
+    expect(buttons.length).toBe(7);
     expect(buttons[0].textContent).toBe("工作台");
     expect(buttons[1].textContent).toBe("虚拟直播");
-    expect(buttons[2].textContent).toBe("资料");
-    expect(buttons[3].textContent).toBe("记录");
-    expect(buttons[4].textContent).toBe("服务");
-    expect(buttons[5].textContent).toBe("设置");
+    expect(buttons[2].textContent).toBe("模拟面试");
+    expect(buttons[3].textContent).toBe("资料");
+    expect(buttons[4].textContent).toBe("记录");
+    expect(buttons[5].textContent).toBe("服务");
+    expect(buttons[6].textContent).toBe("设置");
   });
 
   it("marks the current route button with aria-current and data-active", () => {

@@ -1046,3 +1046,78 @@ fn cascade_turn_records_stage_timeline_with_loose_ranges() {
     assert_eq!(parsed.transcript_done_ms, Some(5));
     assert_eq!(parsed.asr_done_ms, None);
 }
+
+#[test]
+fn practice_overlay_reaches_llm_system_prompt_and_tracks_progress() {
+    // E04：训练会话沿用级联链路，题单 overlay 注入角色 style_instructions 后
+    // 必须出现在 LLM 的 system 消息里（含当前题面与追问规则）。
+    let directory = tempfile::tempdir().unwrap();
+    let database = opened(&directory);
+    let plan = crate::practice::PracticePlan {
+        id: "plan-e4".into(),
+        title: "后端一面".into(),
+        position: "后端工程师".into(),
+        interviewer_style: "严苛面试官".into(),
+        difficulty: "standard".into(),
+        questions: vec![
+            crate::practice::PracticeQuestion {
+                prompt: "介绍一个你负责的项目".into(),
+                focus: "项目深度".into(),
+                expected_points: vec!["背景".into(), "结果".into()],
+                followups: vec![],
+            },
+            crate::practice::PracticeQuestion {
+                prompt: "如何设计限流".into(),
+                focus: String::new(),
+                expected_points: vec![],
+                followups: vec![],
+            },
+        ],
+        created_at: "2026-10-01T00:00:00Z".into(),
+        updated_at: "2026-10-01T00:00:00Z".into(),
+    };
+    let mut director = crate::practice::director::PracticeDirector::from_plan(&plan, 2).unwrap();
+
+    let mut config = cherry_config();
+    let role = active_role_profile(&config).expect("role profile").clone();
+    let overlay = director.overlay();
+    let mut trained = role.clone();
+    trained.style_instructions = format!("{}\n\n{}", trained.style_instructions.trim(), overlay);
+    for profile in &mut config.role_profiles {
+        if profile.id == role.id {
+            *profile = trained;
+            break;
+        }
+    }
+
+    let asr = ScriptedAsr::ok("unused");
+    let llm = ScriptedLlm::ok("【第1题】请开始介绍");
+    let tts = ScriptedTts::ok(&[]);
+    let embed = ScriptedEmbed::ok(vec![0.0]);
+    let runtime = SessionRuntime::new();
+    let sleeps = Mutex::new(Vec::<Duration>::new());
+    let deps = CascadeTurnDeps {
+        asr: &asr,
+        llm: &llm,
+        tts: &tts,
+        embed: &embed,
+        database: &database,
+        runtime: &runtime,
+        sleep: &|delay| sleeps.lock().unwrap().push(delay),
+    };
+    run_turn(&deps, &config, "你好", &[], &AtomicBool::new(false)).unwrap();
+
+    let messages = llm.messages.lock().unwrap();
+    let system = &messages[0][0].content;
+    assert!(system.contains("模拟面试训练"), "{system}");
+    assert!(system.contains("1. 介绍一个你负责的项目"), "{system}");
+    assert!(system.contains("2. 如何设计限流"), "{system}");
+    assert!(system.contains("考察点：项目深度"), "{system}");
+    assert!(system.contains("追问最多 2 次"), "{system}");
+    // 推进到第 2 题后，overlay 的新题面同样进入 system 消息。
+    director.record_answer();
+    director.record_answer();
+    director.record_answer();
+    assert_eq!(director.question_number(), 2);
+    assert!(director.overlay().contains("2. 如何设计限流"));
+}

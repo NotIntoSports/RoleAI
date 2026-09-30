@@ -23,6 +23,7 @@ import { SessionToolbar } from "./session-toolbar";
 import { TranscriptPanel } from "./transcript-panel";
 import { AgentToolsPanel } from "./agent-tools-panel";
 import { useLatencyWaterfallPreference } from "./latency-preference";
+import { PracticeHud } from "../practice/practice-hud";
 import type {
   RuntimeStatus,
   PreflightIssue,
@@ -39,6 +40,9 @@ const PREPARATION_PHASES: Record<string, string> = {
   checking: "检测安装环境", downloading: "下载安装包", verifying: "校验安装包和签名",
   authorizing: "等待 Windows 管理员授权", installing: "安装驱动", rechecking: "重新检测音频端点",
 };
+
+// 终态会话不再接管；仅当最新会话是进行中的训练会话时才恢复现场（见下方接管逻辑）。
+const TERMINAL_SESSION_STATUSES = new Set(["completed", "failed", "interrupted"]);
 
 export type SessionListen = <T>(
   event: string,
@@ -346,6 +350,29 @@ export function WorkspaceSession({
     }, 1000);
     return () => window.clearInterval(timer);
   }, [active]);
+  // 模拟面试训练从“模拟面试”向导启动后跳回工作台：此时运行时已有活跃会话，
+  // 但本界面尚未持有 sessionId。这里按“最新进行中会话 + 训练进度探针”接管显示，
+  // 让转写与训练信息条恢复现场。非训练会话（探针失败）保持原有行为，不自动接管。
+  const practiceAdoptRef = useRef(false);
+  useEffect(() => {
+    if (!active || sessionId || practiceAdoptRef.current) return;
+    practiceAdoptRef.current = true;
+    void (async () => {
+      try {
+        const list = await api.listSessions();
+        if (!list.ok || list.data.length === 0) return;
+        const latest = list.data[0];
+        if (TERMINAL_SESSION_STATUSES.has(latest.status)) return;
+        const probe = await api.getPracticeSessionProgress(latest.id);
+        if (!probe.ok) return;
+        setSessionId(latest.id);
+        sessionIdRef.current = latest.id;
+        await refresh(latest.id, true);
+      } catch {
+        // 非训练环境（探针不可用）忽略，界面保持原状。
+      }
+    })();
+  }, [active, sessionId, refresh]);
   // modeRef 同时被媒体推流（静音门控）与自动 finalize（接管门控）读取，保持单一引用。
   const modeRef = useRef(mode);
   useEffect(() => { modeRef.current = mode; }, [mode]);
@@ -549,6 +576,7 @@ export function WorkspaceSession({
           {message}
         </p>
       )}
+      <PracticeHud sessionId={sessionId} active={active} turns={turns} onNotify={setMessage} />
       <TranscriptPanel
         transcript={transcript}
         reply={reply}

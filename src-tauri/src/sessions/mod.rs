@@ -5,7 +5,7 @@ pub mod export;
 pub mod latency_export;
 pub mod store;
 
-pub use export::{SessionExportError, SessionExportFormat, export_session};
+pub use export::{SessionExportError, SessionExportFormat, export_practice_report, export_session};
 pub use latency_export::{LatencyExportError, LatencyExportFormat, export_latency};
 pub use store::{
     NewCitation, NewSession, NewSnapshot, NewTurn, RuntimeSnapshot, SessionCitation, SessionEvent,

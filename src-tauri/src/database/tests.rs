@@ -29,6 +29,8 @@ fn empty_database_migrates_once_and_passes_integrity_check() {
             "material_documents",
             "material_file_cleanup",
             "materials",
+            "practice_plans",
+            "practice_reports",
             "runtime_snapshots",
             "schema_migrations",
             "session_citations",
@@ -455,5 +457,92 @@ fn voice_reference_schema_includes_target_model_column() {
             )
             .unwrap(),
         "<null>"
+    );
+}
+
+#[test]
+fn practice_schema_migrates_from_voice_reference_target_model() {
+    let (_directory, database) = database();
+    database.migrate().unwrap();
+
+    assert_eq!(database.schema_version().unwrap(), LATEST_SCHEMA_VERSION);
+    let plan_columns = database
+        .query_strings("SELECT name FROM pragma_table_info('practice_plans')")
+        .unwrap();
+    for column in [
+        "id",
+        "title",
+        "position",
+        "interviewer_style",
+        "difficulty",
+        "question_count",
+        "questions_json",
+        "created_at",
+        "updated_at",
+    ] {
+        assert!(
+            plan_columns.contains(&column.to_owned()),
+            "missing {column}"
+        );
+    }
+    let report_columns = database
+        .query_strings("SELECT name FROM pragma_table_info('practice_reports')")
+        .unwrap();
+    for column in [
+        "id",
+        "plan_id",
+        "position",
+        "interviewer_style",
+        "total_score",
+        "dimensions_json",
+        "objective_json",
+        "report_json",
+        "created_at",
+    ] {
+        assert!(
+            report_columns.contains(&column.to_owned()),
+            "missing {column}"
+        );
+    }
+
+    // practice_reports 的主键级联自 sessions：删会话删报告。
+    database
+        .execute_batch(
+            "INSERT INTO sessions(id, status, role_profile_id, voice_route_id, transport_mode, updated_at)
+             VALUES ('sess-p', 'completed', 'role-1', 'route-1', 'direct', '2026-10-01T00:00:00Z');
+             INSERT INTO practice_reports(id, plan_id, position, total_score, report_json, created_at)
+             VALUES ('sess-p', 'plan-1', '后端工程师', 4.0, '{}', '2026-10-01T00:00:00Z');",
+        )
+        .unwrap();
+    database
+        .execute_batch("DELETE FROM sessions WHERE id = 'sess-p';")
+        .unwrap();
+    let orphans: i64 = database
+        .with_connection(|connection| {
+            connection.query_row(
+                "SELECT COUNT(*) FROM practice_reports WHERE id = 'sess-p'",
+                [],
+                |row| row.get(0),
+            )
+        })
+        .unwrap();
+    assert_eq!(orphans, 0);
+
+    // 事件 kind 白名单纳入 practice_meta。
+    database
+        .execute_batch(
+            "INSERT INTO sessions(id, status, role_profile_id, voice_route_id, transport_mode, updated_at)
+             VALUES ('sess-q', 'completed', 'role-1', 'route-1', 'direct', '2026-10-01T00:00:00Z');
+             INSERT INTO session_events(session_id, seq, kind, payload, created_at)
+             VALUES ('sess-q', 0, 'practice_meta', '{}', '2026-10-01T00:00:00Z');",
+        )
+        .unwrap();
+    assert!(
+        database
+            .execute_batch(
+                "INSERT INTO session_events(session_id, seq, kind, payload, created_at)
+             VALUES ('sess-q', 1, 'unknown_kind', '{}', '2026-10-01T00:00:00Z');"
+            )
+            .is_err()
     );
 }

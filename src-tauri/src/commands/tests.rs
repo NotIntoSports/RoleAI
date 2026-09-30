@@ -1749,3 +1749,711 @@ fn session_start_rollback_keeps_routing_when_restore_fails() {
                 .exists()
     );
 }
+
+// ---------- practice 题单命令（mock LLM） ----------
+
+use crate::contracts::CommandResult;
+use crate::contracts::SessionStartResult;
+use crate::sessions::SessionStore;
+
+mod practice_mock {
+    use std::{
+        io::{Read, Write},
+        net::{TcpListener, TcpStream},
+        thread,
+    };
+
+    /// 启动一次性 mock LLM：返回 `content_body` 作为 chat.completions 的 message.content；
+    /// `None` 表示接受连接后立即断开（模拟连接失败/超时类通道故障）。
+    pub(in crate::commands::tests) fn serve_chat_content(content_body: Option<&str>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let payload = content_body.map(|body| {
+            let message = serde_json::json!({ "choices": [{ "message": { "content": body } }] });
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                message.to_string().len(),
+                message
+            )
+        });
+        thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            if drain_request(&mut stream).is_err() {
+                return;
+            }
+            if let Some(response) = payload {
+                let _ = stream.write_all(response.as_bytes());
+            }
+            // payload 为 None：直接 drop(stream) 断开，客户端得到通道错误。
+        });
+        format!("http://{address}/v1")
+    }
+
+    fn drain_request(stream: &mut TcpStream) -> std::io::Result<()> {
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
+        let mut received = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        let header_end = loop {
+            let count = stream.read(&mut buffer)?;
+            if count == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "request ended early",
+                ));
+            }
+            received.extend_from_slice(&buffer[..count]);
+            if let Some(position) = received.windows(4).position(|part| part == b"\r\n\r\n") {
+                break position + 4;
+            }
+        };
+        let headers = String::from_utf8_lossy(&received[..header_end]).to_string();
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().ok())?
+            })
+            .unwrap_or(0);
+        while received.len() - header_end < content_length {
+            let count = stream.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            received.extend_from_slice(&buffer[..count]);
+        }
+        Ok(())
+    }
+}
+
+fn practice_generate_input(position: &str) -> crate::practice::PracticePlanGenerateInput {
+    crate::practice::PracticePlanGenerateInput {
+        position: position.into(),
+        jd_material_id: None,
+        resume_material_id: None,
+        interviewer_style: "严苛面试官".into(),
+        question_count: 2,
+        difficulty: "standard".into(),
+    }
+}
+
+fn practice_llm_state(directory: &tempfile::TempDir, base_url: &str) -> AppState {
+    let config = format!(
+        r#"{{
+            "configVersion":1,
+            "models":{{"providers":[
+                {{"id":"llm-1","baseUrl":"{base_url}","credential":{{"reference":"providers/llm-1/api-key","configured":true}}}}
+            ]}},
+            "speech":{{"voiceRoutes":[{{
+                "id":"route-1","name":"R","mode":"cascaded",
+                "asrProviderId":"llm-1","asrModelId":"whisper",
+                "llmProviderId":"llm-1","llmModelId":"gpt",
+                "ttsProviderId":"llm-1","ttsModelId":"tts",
+                "voiceId":"alloy","active":true,"ready":true,"status":"ready","configVersion":1
+            }}],"activeVoiceRouteId":"route-1"}}
+        }}"#
+    );
+    let paths = AppPaths {
+        data_directory: directory.path().join("data"),
+        logs_directory: directory.path().join("logs"),
+        config_path: directory.path().join("config.json"),
+        legacy_search_roots: Vec::new(),
+    };
+    std::fs::write(&paths.config_path, config).unwrap();
+    let state = AppState::initialize(paths, Arc::new(MemorySecretStore::default())).unwrap();
+    state
+        .secrets
+        .set("providers/llm-1/api-key", "sk-test")
+        .unwrap();
+    state
+}
+
+#[test]
+fn practice_plan_generate_success_with_mock_llm() {
+    let directory = tempfile::tempdir().unwrap();
+    let plan_json = serde_json::json!({
+        "questions": [
+            {"prompt": "介绍一个你负责的项目", "focus": "项目深度", "expectedPoints": ["背景", "结果"], "followups": ["最大的困难"]},
+            {"prompt": "如何设计限流", "focus": "工程判断"}
+        ]
+    })
+    .to_string();
+    let base_url = practice_mock::serve_chat_content(Some(&plan_json));
+    let state = practice_llm_state(&directory, &base_url);
+
+    let result = super::practice_plan_generate_cmd(&state, practice_generate_input("后端工程师"));
+    let plan = match result {
+        CommandResult::Ok { data } => data,
+        CommandResult::Err { error } => panic!("generate failed: {} {}", error.code, error.message),
+    };
+    assert_eq!(plan.questions.len(), 2);
+    assert_eq!(plan.questions[0].prompt, "介绍一个你负责的项目");
+    assert_eq!(plan.position, "后端工程师");
+    assert!(plan.title.contains("后端工程师"));
+    assert!(!plan.id.is_empty());
+
+    // 生成结果可以直接保存并再次列表读取。
+    let saved = match super::practice_plan_save_cmd(&state, plan) {
+        CommandResult::Ok { data } => data,
+        CommandResult::Err { error } => panic!("save failed: {}", error.code),
+    };
+    let list = match super::practice_plan_list_cmd(&state) {
+        CommandResult::Ok { data } => data,
+        CommandResult::Err { error } => panic!("list failed: {}", error.code),
+    };
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].id, saved.id);
+    assert_eq!(list[0].question_count, 2);
+    let deleted = match super::practice_plan_delete_cmd(&state, saved.id) {
+        CommandResult::Ok { data } => data,
+        CommandResult::Err { error } => panic!("delete failed: {}", error.code),
+    };
+    assert!(deleted.ready);
+    assert_eq!(
+        super::practice_plan_list_cmd(&state).unwrap_err_code(),
+        "OK"
+    );
+}
+
+#[test]
+fn practice_plan_generate_invalid_model_json_fails_closed() {
+    let directory = tempfile::tempdir().unwrap();
+    let base_url = practice_mock::serve_chat_content(Some("这不是 JSON"));
+    let state = practice_llm_state(&directory, &base_url);
+
+    let result = super::practice_plan_generate_cmd(&state, practice_generate_input("后端工程师"));
+    assert_eq!(result.unwrap_err_code(), "PRACTICE_MODEL_RESPONSE_INVALID");
+}
+
+#[test]
+fn practice_plan_generate_channel_failure_is_retryable_unavailable() {
+    // 通道故障（连接被断开；真实超时同样走该分支，30s 等待由 provider 层测试覆盖）
+    // 表现为 PRACTICE_MODEL_UNAVAILABLE，可重试。
+    let directory = tempfile::tempdir().unwrap();
+    let base_url = practice_mock::serve_chat_content(None);
+    let state = practice_llm_state(&directory, &base_url);
+
+    let result = super::practice_plan_generate_cmd(&state, practice_generate_input("后端工程师"));
+    assert_eq!(result.unwrap_err_code(), "PRACTICE_MODEL_UNAVAILABLE");
+}
+
+#[test]
+fn practice_plan_generate_validates_input_and_material_state() {
+    let directory = tempfile::tempdir().unwrap();
+    let base_url = practice_mock::serve_chat_content(Some("{\"questions\":[{\"prompt\":\"q\"}]}"));
+    let state = practice_llm_state(&directory, &base_url);
+
+    let mut invalid = practice_generate_input("后端工程师");
+    invalid.question_count = 0;
+    assert_eq!(
+        super::practice_plan_generate_cmd(&state, invalid).unwrap_err_code(),
+        "PRACTICE_PLAN_INVALID"
+    );
+
+    let mut missing_material = practice_generate_input("后端工程师");
+    missing_material.jd_material_id = Some("no-such-material".into());
+    assert_eq!(
+        super::practice_plan_generate_cmd(&state, missing_material).unwrap_err_code(),
+        "PRACTICE_MATERIAL_NOT_READY"
+    );
+}
+
+#[test]
+fn practice_plan_save_rejects_invalid_payload() {
+    let directory = tempfile::tempdir().unwrap();
+    let base_url = practice_mock::serve_chat_content(Some("{\"questions\":[{\"prompt\":\"q\"}]}"));
+    let state = practice_llm_state(&directory, &base_url);
+
+    let mut plan = match super::practice_plan_generate_cmd(&state, practice_generate_input("后端"))
+    {
+        CommandResult::Ok { data } => data,
+        CommandResult::Err { error } => panic!("generate failed: {}", error.code),
+    };
+    plan.questions.clear();
+    assert_eq!(
+        super::practice_plan_save_cmd(&state, plan).unwrap_err_code(),
+        "PRACTICE_PLAN_INVALID"
+    );
+}
+
+/// CommandResult 的测试辅助：错误码提取（Ok 时返回 "OK"）。
+trait PracticeResultExt {
+    fn unwrap_err_code(&self) -> String;
+}
+
+impl<T: serde::Serialize + ts_rs::TS> PracticeResultExt for CommandResult<T> {
+    fn unwrap_err_code(&self) -> String {
+        match self {
+            CommandResult::Ok { .. } => "OK".into(),
+            CommandResult::Err { error } => error.code.clone(),
+        }
+    }
+}
+
+fn practice_sample_plan() -> crate::practice::PracticePlan {
+    crate::practice::PracticePlan {
+        id: "plan-e4".into(),
+        title: "后端一面".into(),
+        position: "后端工程师".into(),
+        interviewer_style: "严苛面试官".into(),
+        difficulty: "standard".into(),
+        questions: vec![
+            crate::practice::PracticeQuestion {
+                prompt: "介绍一个你负责的项目".into(),
+                focus: "项目深度".into(),
+                expected_points: vec!["背景".into()],
+                followups: vec![],
+            },
+            crate::practice::PracticeQuestion {
+                prompt: "如何设计限流".into(),
+                focus: String::new(),
+                expected_points: vec![],
+                followups: vec![],
+            },
+        ],
+        created_at: "2026-10-01T00:00:00Z".into(),
+        updated_at: "2026-10-01T00:00:00Z".into(),
+    }
+}
+
+fn start_practice_session(state: &AppState) -> String {
+    let database_slot = state.database.lock().unwrap();
+    let database = database_slot.as_ref().unwrap();
+    crate::practice::store::PracticePlanStore::new(database)
+        .save(&practice_sample_plan())
+        .unwrap();
+    drop(database_slot);
+    let result = super::practice_session_start_cmd(
+        state,
+        crate::practice::PracticeSessionStartInput {
+            plan_id: "plan-e4".into(),
+            role_profile_id: None,
+            voice_route_id: None,
+        },
+    );
+    match result {
+        CommandResult::Ok {
+            data: SessionStartResult::Started { session },
+        } => session.id,
+        other => panic!(
+            "expected started, got {}",
+            serde_json::to_string(&other).unwrap()
+        ),
+    }
+}
+
+#[test]
+fn practice_session_start_injects_plan_and_records_event() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = session_state(&directory, &ready_session_config());
+    let session_id = start_practice_session(&state);
+
+    let database_slot = state.database.lock().unwrap();
+    let database = database_slot.as_ref().unwrap();
+    let events = SessionStore::new(database)
+        .list_events(&session_id)
+        .unwrap();
+    let practice_meta = events
+        .iter()
+        .find(|event| event.kind == "practice_meta")
+        .expect("practice_meta event");
+    let payload: serde_json::Value = serde_json::from_str(&practice_meta.payload).unwrap();
+    drop(database_slot);
+    assert_eq!(payload["planId"], "plan-e4");
+    assert_eq!(payload["action"], "start");
+    assert_eq!(payload["questionIndex"], 0);
+
+    // 已在会话中的状态下再次开始训练：会话服务拒绝（一个会话端口）。
+    let second = super::practice_session_start_cmd(
+        &state,
+        crate::practice::PracticeSessionStartInput {
+            plan_id: "plan-e4".into(),
+            role_profile_id: None,
+            voice_route_id: None,
+        },
+    );
+    assert_eq!(second.unwrap_err_code(), "SESSION_ALREADY_ACTIVE");
+}
+
+#[test]
+fn practice_session_start_unknown_plan_is_not_found() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = session_state(&directory, &ready_session_config());
+    let result = super::practice_session_start_cmd(
+        &state,
+        crate::practice::PracticeSessionStartInput {
+            plan_id: "no-such-plan".into(),
+            role_profile_id: None,
+            voice_route_id: None,
+        },
+    );
+    assert_eq!(result.unwrap_err_code(), "PRACTICE_PLAN_NOT_FOUND");
+}
+
+#[test]
+fn practice_session_progress_and_skip_track_question_flow() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = session_state(&directory, &ready_session_config());
+    let session_id = start_practice_session(&state);
+
+    let progress = match super::practice_session_progress_cmd(&state, session_id.clone()) {
+        CommandResult::Ok { data } => data,
+        CommandResult::Err { error } => panic!("progress failed: {}", error.code),
+    };
+    assert_eq!(progress.question_index, 0);
+    assert_eq!(progress.total_questions, 2);
+    assert!(!progress.finished);
+
+    // 跳过 → 进入第 2 题，且提示写入滚动摘要。
+    let skipped = match super::practice_session_skip_cmd(&state, session_id.clone()) {
+        CommandResult::Ok { data } => data,
+        CommandResult::Err { error } => panic!("skip failed: {}", error.code),
+    };
+    assert_eq!(skipped.question_index, 1);
+
+    let database_slot = state.database.lock().unwrap();
+    let database = database_slot.as_ref().unwrap();
+    let (summary, _) = SessionStore::new(database)
+        .context_summary(&session_id)
+        .unwrap()
+        .expect("summary note");
+    assert!(summary.contains("候选人请求跳过"), "{summary}");
+    assert!(summary.contains("第2题"), "{summary}");
+    drop(database_slot);
+
+    // 转写标注兜底：事件未动时按最新【第X题】标注前进。
+    let database_slot = state.database.lock().unwrap();
+    let database = database_slot.as_ref().unwrap();
+    let store = SessionStore::new(database);
+    let turns = store.list_turns(&session_id).unwrap();
+    store
+        .insert_turn(crate::sessions::NewTurn {
+            id: "turn-marker-1",
+            session_id: &session_id,
+            turn_index: turns.len() as i64,
+            user_text: "回答",
+            assistant_text: "【第2题】如何设计限流？",
+            materials_used: false,
+        })
+        .unwrap();
+    drop(database_slot);
+    let progressed = match super::practice_session_progress_cmd(&state, session_id.clone()) {
+        CommandResult::Ok { data } => data,
+        CommandResult::Err { error } => panic!("progress failed: {}", error.code),
+    };
+    assert_eq!(progressed.question_index, 1);
+
+    // 再次跳过 → 全部题目完成。
+    let finished = match super::practice_session_skip_cmd(&state, session_id.clone()) {
+        CommandResult::Ok { data } => data,
+        CommandResult::Err { error } => panic!("skip failed: {}", error.code),
+    };
+    assert!(finished.finished);
+}
+
+#[test]
+fn practice_session_commands_reject_non_practice_sessions() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = session_state(&directory, &ready_session_config());
+    let started = serde_json::to_value(super::session_start_cmd(&state, None)).unwrap();
+    let session_id = started["data"]["session"]["id"]
+        .as_str()
+        .expect("session id")
+        .to_owned();
+
+    let progress = super::practice_session_progress_cmd(&state, session_id.clone());
+    assert_eq!(progress.unwrap_err_code(), "PRACTICE_SESSION_STATE_INVALID");
+    let skip = super::practice_session_skip_cmd(&state, session_id.clone());
+    assert_eq!(skip.unwrap_err_code(), "PRACTICE_SESSION_STATE_INVALID");
+
+    let missing = super::practice_session_progress_cmd(&state, "missing-session".into());
+    assert_eq!(missing.unwrap_err_code(), "SESSION_NOT_FOUND");
+}
+
+#[test]
+fn practice_session_turn_metrics_returns_latest_answer_metrics() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = session_state(&directory, &ready_session_config());
+    let session_id = start_practice_session(&state);
+
+    let database_slot = state.database.lock().unwrap();
+    let database = database_slot.as_ref().unwrap();
+    let store = SessionStore::new(database);
+    let turns = [
+        ("你好", "【第1题】介绍一个你负责的项目"),
+        ("那个项目，就是我负责的支付网关。", "追问：最大困难是什么？"),
+        ("后来其实上线了，然后很稳定。", ""),
+        // 末轮只有面试官发言：最新回答仍应是第 3 轮的候选人文本。
+        ("", "【第2题】如何设计限流？"),
+    ];
+    for (index, (user, assistant)) in turns.iter().enumerate() {
+        store
+            .insert_turn(crate::sessions::NewTurn {
+                id: &format!("turn-m{index}"),
+                session_id: &session_id,
+                turn_index: index as i64,
+                user_text: user,
+                assistant_text: assistant,
+                materials_used: false,
+            })
+            .unwrap();
+    }
+    drop(database_slot);
+
+    let metrics = match super::practice_session_turn_metrics_cmd(&state, session_id.clone()) {
+        CommandResult::Ok { data } => data.expect("latest answer metrics"),
+        CommandResult::Err { error } => panic!("turn metrics failed: {}", error.code),
+    };
+    assert_eq!(metrics.answer_index, 2);
+    // 口头禅来自最新一条回答，而不是更早的轮次。
+    assert!(
+        metrics
+            .fillers
+            .iter()
+            .any(|hit| hit.word == "其实" && hit.count == 1)
+    );
+    assert!(
+        metrics
+            .fillers
+            .iter()
+            .any(|hit| hit.word == "然后" && hit.count == 1)
+    );
+    assert!(!metrics.fillers.iter().any(|hit| hit.word == "那个"));
+
+    // 没有任何候选人回答时返回 None。
+    let directory = tempfile::tempdir().unwrap();
+    let state = session_state(&directory, &ready_session_config());
+    let empty_session = start_practice_session(&state);
+    let none = match super::practice_session_turn_metrics_cmd(&state, empty_session) {
+        CommandResult::Ok { data } => data,
+        CommandResult::Err { error } => panic!("turn metrics failed: {}", error.code),
+    };
+    assert!(none.is_none());
+}
+
+#[test]
+fn practice_session_turn_metrics_rejects_non_practice_sessions() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = session_state(&directory, &ready_session_config());
+    let started = serde_json::to_value(super::session_start_cmd(&state, None)).unwrap();
+    let session_id = started["data"]["session"]["id"]
+        .as_str()
+        .expect("session id")
+        .to_owned();
+
+    let metrics = super::practice_session_turn_metrics_cmd(&state, session_id);
+    assert_eq!(metrics.unwrap_err_code(), "PRACTICE_SESSION_STATE_INVALID");
+    let missing = super::practice_session_turn_metrics_cmd(&state, "missing-session".into());
+    assert_eq!(missing.unwrap_err_code(), "SESSION_NOT_FOUND");
+}
+
+// ---------- practice 报告命令（mock LLM，含重试） ----------
+
+mod practice_report_mock {
+    use std::{
+        io::{Read, Write},
+        net::{TcpListener, TcpStream},
+        thread,
+    };
+
+    /// 按顺序响应多次 chat.completions 请求（每次响应后断开连接）。
+    pub(in crate::commands::tests) fn serve_chat_sequence(bodies: Vec<String>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            for body in bodies {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                if drain(&mut stream).is_err() {
+                    return;
+                }
+                let message =
+                    serde_json::json!({ "choices": [{ "message": { "content": body } }] });
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    message.to_string().len(),
+                    message
+                );
+                if stream.write_all(response.as_bytes()).is_err() {
+                    return;
+                }
+            }
+        });
+        format!("http://{address}/v1")
+    }
+
+    fn drain(stream: &mut TcpStream) -> std::io::Result<()> {
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
+        let mut received = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        let header_end = loop {
+            let count = stream.read(&mut buffer)?;
+            if count == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "request ended early",
+                ));
+            }
+            received.extend_from_slice(&buffer[..count]);
+            if let Some(position) = received.windows(4).position(|part| part == b"\r\n\r\n") {
+                break position + 4;
+            }
+        };
+        let headers = String::from_utf8_lossy(&received[..header_end]).to_string();
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().ok())?
+            })
+            .unwrap_or(0);
+        while received.len() - header_end < content_length {
+            let count = stream.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            received.extend_from_slice(&buffer[..count]);
+        }
+        Ok(())
+    }
+}
+
+fn review_json() -> String {
+    serde_json::json!({
+        "perQuestion": [
+            {"index": 1, "score": 4, "strengths": ["结构清晰"], "issues": ["缺少量化"], "modelAnswer": "补充 p99 数字"}
+        ],
+        "dimensions": {"contentDepth": 4, "structureClarity": 3.5, "fluency": 4, "jobFit": 3},
+        "totalScore": 3.5,
+        "topSuggestions": ["补充量化结果", "先讲结论", "控制语速"]
+    })
+    .to_string()
+}
+
+/// 开一场训练会话并写入两问的转写（含【第X题】标注）。
+fn seed_finished_practice_session(state: &AppState) -> String {
+    let session_id = start_practice_session(state);
+    let database_slot = state.database.lock().unwrap();
+    let database = database_slot.as_ref().unwrap();
+    let store = SessionStore::new(database);
+    let turns = [
+        ("你好", "【第1题】介绍一个你负责的项目"),
+        ("我负责支付网关，用令牌桶限流。", "追问：效果如何？"),
+        ("p99 下降 30%。", "【第2题】如何设计限流？"),
+        ("先限后熔。", ""),
+    ];
+    for (index, (user, assistant)) in turns.iter().enumerate() {
+        store
+            .insert_turn(crate::sessions::NewTurn {
+                id: &format!("turn-r{index}"),
+                session_id: &session_id,
+                turn_index: index as i64,
+                user_text: user,
+                assistant_text: assistant,
+                materials_used: false,
+            })
+            .unwrap();
+    }
+    drop(database_slot);
+    session_id
+}
+
+#[test]
+fn practice_report_generate_success_and_roundtrip() {
+    let directory = tempfile::tempdir().unwrap();
+    let base_url = practice_report_mock::serve_chat_sequence(vec![review_json()]);
+    let state = practice_llm_state(&directory, &base_url);
+    let session_id = seed_finished_practice_session(&state);
+
+    let report = match super::practice_report_generate_cmd(&state, session_id.clone()) {
+        CommandResult::Ok { data } => data,
+        CommandResult::Err { error } => panic!("generate failed: {} {}", error.code, error.message),
+    };
+    assert!(report.llm_available);
+    assert!((report.total_score - 3.5).abs() < f64::EPSILON);
+    assert_eq!(report.per_question.len(), 2);
+    assert_eq!(report.per_question[0].question, "介绍一个你负责的项目");
+    assert!(report.per_question[0].answer.contains("支付网关"));
+    assert!((report.per_question[0].score - 4.0).abs() < f64::EPSILON);
+    assert_eq!(report.per_question[1].score, 0.0); // LLM 未点评第 2 题 → 未评
+    assert_eq!(report.top_suggestions.len(), 3);
+    assert_eq!(report.plan_id, "plan-e4");
+    assert_eq!(report.position, "后端工程师");
+    // 客观指标来自本地计算：语速/时长可算（首答缺时间戳 → 时长不可用也算合规）。
+    assert_eq!(report.objective.answers.len(), 4);
+
+    // 落库后 get/list 都能读到。
+    let fetched = match super::practice_report_get_cmd(&state, session_id.clone()) {
+        CommandResult::Ok { data } => data,
+        CommandResult::Err { error } => panic!("get failed: {}", error.code),
+    };
+    assert_eq!(fetched, report);
+    let list = match super::practice_report_list_cmd(&state) {
+        CommandResult::Ok { data } => data,
+        CommandResult::Err { error } => panic!("list failed: {}", error.code),
+    };
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].session_id, session_id);
+    assert!((list[0].total_score - 3.5).abs() < f64::EPSILON);
+    // 历史列表直接携带维度分与总时长（E09 成长曲线用）：维度来自 dimensions_json；
+    // 种子轮次时间戳相同 → 首答时长不可用 → 总时长不可用。
+    assert!((list[0].dimensions.content_depth - 4.0).abs() < f64::EPSILON);
+    assert!((list[0].dimensions.job_fit - 3.0).abs() < f64::EPSILON);
+    assert!(list[0].duration_seconds.is_none());
+}
+
+#[test]
+fn practice_report_generate_retries_after_invalid_json() {
+    let directory = tempfile::tempdir().unwrap();
+    let base_url =
+        practice_report_mock::serve_chat_sequence(vec!["第一次是垃圾输出".into(), review_json()]);
+    let state = practice_llm_state(&directory, &base_url);
+    let session_id = seed_finished_practice_session(&state);
+
+    let report = match super::practice_report_generate_cmd(&state, session_id) {
+        CommandResult::Ok { data } => data,
+        CommandResult::Err { error } => panic!("generate failed: {}", error.code),
+    };
+    assert!(report.llm_available, "重试后成功即为可用");
+    assert!((report.total_score - 3.5).abs() < f64::EPSILON);
+}
+
+#[test]
+fn practice_report_generate_double_failure_falls_back_to_objective_only() {
+    let directory = tempfile::tempdir().unwrap();
+    let base_url =
+        practice_report_mock::serve_chat_sequence(vec!["垃圾一".into(), "垃圾二".into()]);
+    let state = practice_llm_state(&directory, &base_url);
+    let session_id = seed_finished_practice_session(&state);
+
+    let report = match super::practice_report_generate_cmd(&state, session_id.clone()) {
+        CommandResult::Ok { data } => data,
+        CommandResult::Err { error } => panic!("generate failed: {}", error.code),
+    };
+    assert!(!report.llm_available);
+    assert_eq!(report.total_score, 0.0);
+    assert!(report.top_suggestions.is_empty());
+    assert!(report.dimensions.content_depth == 0.0);
+    // 客观指标仍然可用并落库。
+    assert_eq!(report.objective.answers.len(), 4);
+
+    let exported =
+        match super::practice_report_export_cmd(&state, session_id.clone(), "markdown".into()) {
+            CommandResult::Ok { data } => data,
+            CommandResult::Err { error } => panic!("export failed: {}", error.code),
+        };
+    let content = std::fs::read_to_string(&exported.path).unwrap();
+    assert!(content.contains("定性点评生成失败，可重试"));
+    assert!(content.contains("评分由 AI 生成，仅供练习参考"));
+
+    // 非法导出格式被拒绝。
+    let bad_format = super::practice_report_export_cmd(&state, session_id, "json".into());
+    assert_eq!(
+        bad_format.unwrap_err_code(),
+        "SESSION_EXPORT_FORMAT_INVALID"
+    );
+}
