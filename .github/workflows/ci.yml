@@ -43,6 +43,30 @@ jobs:
       - run: node --test tests/tauri/*.test.mjs
       - run: npm run test:tauri
 
+  e2e-demo:
+    # 演示版（GitHub Pages 在线 demo）端到端测试：真实浏览器走六页面 + 脚本会话主流程。
+    # ubuntu 比 windows 快；webServer 由 playwright.config.ts 拉起 npm run dev:demo，
+    # 不涉及 Electron/Tauri，也不需要 Rust 工具链。
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Install Playwright Chromium
+        # --with-deps 安装 Linux 系统依赖（runner 用户有免密 sudo）。
+        run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e:demo
+      - name: Upload failure artifacts (screenshots and traces)
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-demo-artifacts
+          path: test-results
+          if-no-files-found: ignore
+
   portable:
     # 跨平台可移植性证明：Linux / macOS 上 cargo check + lib 单测通过。
     # Windows 专属能力（凭据管理器、AudioBridge sidecar、会议进程采集）已在
