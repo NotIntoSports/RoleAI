@@ -745,6 +745,96 @@ mod tests {
     }
 
     #[test]
+    fn finish_sets_status_and_persists_finished_at() {
+        let (_directory, database) = opened();
+        let store = SessionStore::new(&database);
+        store
+            .insert_session(sample_session("session-1", "listening"))
+            .unwrap();
+
+        store.finish("session-1", "completed").unwrap();
+
+        let got = store.get("session-1").unwrap().expect("session-1 exists");
+        assert_eq!(got.status, "completed");
+        assert_eq!(
+            got.finished_at.as_deref(),
+            Some(got.updated_at.as_str()),
+            "finish 必须把 finished_at 与 updated_at 落成同一时刻"
+        );
+        assert!(got.started_at.is_some(), "finish 不得改动 started_at");
+    }
+
+    #[test]
+    fn update_assistant_text_rewrites_only_assistant_column() {
+        let (_directory, database) = opened();
+        let store = SessionStore::new(&database);
+        store
+            .insert_session(sample_session("session-1", "listening"))
+            .unwrap();
+        store
+            .insert_turn(NewTurn {
+                id: "turn-1",
+                session_id: "session-1",
+                turn_index: 0,
+                user_text: "问题原文",
+                assistant_text: "旧回答",
+                materials_used: false,
+            })
+            .unwrap();
+
+        store
+            .update_assistant_text("turn-1", "修正后的回答")
+            .unwrap();
+
+        let turns = store.list_turns("session-1").unwrap();
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].assistant_text, "修正后的回答");
+        assert_eq!(turns[0].user_text, "问题原文");
+        // 不存在的轮次是零行更新：成功返回且不产生副作用。
+        store
+            .update_assistant_text("turn-missing", "无关文本")
+            .unwrap();
+        assert_eq!(store.list_turns("session-1").unwrap().len(), 1);
+    }
+
+    /// 约束违规必须以错误浮出而不是 panic 或静默吞掉：
+    /// 主键冲突（重复 insert_session）与外键违规（轮次指向不存在的会话）。
+    #[test]
+    fn constraint_violations_surface_as_errors_without_partial_writes() {
+        let (_directory, database) = opened();
+        let store = SessionStore::new(&database);
+        store
+            .insert_session(sample_session("session-1", "listening"))
+            .unwrap();
+        assert!(
+            store
+                .insert_session(sample_session("session-1", "completed"))
+                .is_err(),
+            "重复主键必须报错"
+        );
+        assert!(
+            store
+                .insert_turn(NewTurn {
+                    id: "turn-orphan",
+                    session_id: "session-missing",
+                    turn_index: 0,
+                    user_text: "问",
+                    assistant_text: "答",
+                    materials_used: false,
+                })
+                .is_err(),
+            "外键违规（会话不存在）必须报错"
+        );
+
+        // 失败调用不得留下部分写入：原会话状态不变，孤儿轮次未落库。
+        assert_eq!(
+            store.get("session-1").unwrap().expect("原会话仍在").status,
+            "listening"
+        );
+        assert!(store.list_turns("session-1").unwrap().is_empty());
+    }
+
+    #[test]
     fn context_summary_roundtrip_and_absence() {
         let (_directory, database) = opened();
         let store = SessionStore::new(&database);
