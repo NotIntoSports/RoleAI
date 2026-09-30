@@ -26,5 +26,13 @@ export default defineConfig({
     environment: "jsdom",
     include: ["src/**/*.test.{ts,tsx}"],
     passWithNoTests: true,
+    // 覆盖率（lane-I I05）：排除纯样式与 ts-rs 生成代码，HTML 报告供 CI artifact。
+    coverage: {
+      provider: "v8",
+      include: ["src/**"],
+      exclude: ["src/**/*.css", "src/generated/**", "src/**/*.test.*"],
+      reporter: ["text", "html"],
+      reportsDirectory: "coverage/ui",
+    },
   },
 });

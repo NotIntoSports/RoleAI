@@ -129,6 +129,48 @@ jobs:
           path: artifacts/desktop-e2e
           if-no-files-found: ignore
 
+  coverage:
+    # 覆盖率展示（lane-I I05）：前端 @vitest/coverage-v8，Rust cargo-llvm-cov。
+    # 只展示不设阈值门禁；不接入需要令牌的第三方覆盖率服务。
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable 分支（2026-09-30）
+        with:
+          toolchain: "1.96"
+      - run: rustup component add llvm-tools-preview
+      - run: npm ci
+      # 输出重定向不影响退出码：覆盖率测试失败时步骤保持红色。
+      - name: Frontend coverage (vitest + @vitest/coverage-v8)
+        run: npm run test:coverage:ui > coverage/ui-summary.txt 2>&1
+      - name: Rust coverage (cargo-llvm-cov)
+        run: cargo llvm-cov --manifest-path src-tauri/Cargo.toml --summary-only > coverage/rust-summary.txt 2>&1
+      - name: Write coverage summary
+        shell: pwsh
+        run: |
+          "## 覆盖率报告（总覆盖率 + 各模块）" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "### Frontend（vitest + @vitest/coverage-v8）" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          '```' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          Get-Content coverage/ui-summary.txt | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          '```' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "### Rust（cargo-llvm-cov，语句覆盖率）" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          '```' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          Get-Content coverage/rust-summary.txt | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          '```' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-reports
+          path: |
+            coverage/ui
+            coverage/ui-summary.txt
+            coverage/rust-summary.txt
+          if-no-files-found: ignore
+
   portable:
     # 跨平台可移植性证明：Linux / macOS 上 cargo check + lib 单测通过。
     # Windows 专属能力（凭据管理器、AudioBridge sidecar、会议进程采集）已在
