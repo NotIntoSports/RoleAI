@@ -3,7 +3,7 @@
   "algorithm": "sha256",
   "normalization": "crlf-to-lf",
   "files": {
-    "src-tauri/capabilities/main.json": "d6d5c5024ed6ba3b71c3f33a2a17c1dc10e25c2e359f8a7548c8531a95e90de7",
+    "src-tauri/capabilities/main.json": "3629bed400c68c516ce8c938d1eaa8b9101612ddb58ce5034612467e867fb335",
     "src-tauri/src/lib.rs": "8eaa77c4960d7de4a9f378da12f11a0d22f9ef89cc90ec30961b699041a42cf6",
     "src-tauri/src/contracts.rs": "7bcf24fa11b7ddbe8056df5fa3ae3a4187cc05fd1634a0cfd27c09046c433d9d",
     "src-tauri/src/commands/mod.rs": "4c5990949684161feeda331fff36e69929a192612c353c36132c45e81164e1d6",

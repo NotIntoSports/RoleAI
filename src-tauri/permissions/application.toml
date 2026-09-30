@@ -218,6 +218,11 @@ description = "Allows exporting one cascade session to the local exports directo
 commands.allow = ["session_export"]
 
 [[permission]]
+identifier = "allow-session-latency-export"
+description = "Allows exporting one cascade session latency timeline (CSV or Chrome Trace JSON) to the local exports directory."
+commands.allow = ["session_latency_export"]
+
+[[permission]]
 identifier = "allow-session-list"
 description = "Allows listing cascade session summaries without material text or PCM."
 commands.allow = ["session_list"]

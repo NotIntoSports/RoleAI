@@ -48,6 +48,7 @@
     "allow-session-stop",
     "allow-session-set-mode",
     "allow-session-export",
+    "allow-session-latency-export",
     "allow-session-list",
     "allow-session-get",
     "allow-session-delete",
