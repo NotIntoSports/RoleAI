@@ -13,11 +13,17 @@ const dictionaries: Record<Language, Dictionary> = {
 };
 
 // 从字典类型推导全部点号路径键；键名拼错会在编译期报错。
-export type MessageKey<T> = T extends string
+// 字典允许两种叶子：字符串（t 使用）与只读字符串数组（tList 使用）。
+type StringPaths<T> = T extends string
   ? never
-  : { [K in keyof T & string]: T[K] extends string ? K : `${K}.${MessageKey<T[K]>}` }[keyof T & string];
+  : { [K in keyof T & string]: T[K] extends string ? K : T[K] extends readonly string[] ? never : `${K}.${StringPaths<T[K]>}` }[keyof T & string];
+type ListPaths<T> = T extends string
+  ? never
+  : { [K in keyof T & string]: T[K] extends readonly string[] ? K : T[K] extends string ? never : `${K}.${ListPaths<T[K]>}` }[keyof T & string];
 
-export type DictionaryKey = MessageKey<Dictionary>;
+export type DictionaryKey = StringPaths<Dictionary> | ListPaths<Dictionary>;
+export type DictionaryStringKey = StringPaths<Dictionary>;
+export type DictionaryListKey = ListPaths<Dictionary>;
 export type TParams = Record<string, string | number>;
 
 const listeners = new Set<() => void>();
@@ -88,13 +94,23 @@ function format(template: string, params?: TParams): string {
   );
 }
 
-function lookup(dictionary: Dictionary, key: string): string | undefined {
+function lookupNode(dictionary: Dictionary, key: string): unknown {
   let node: unknown = dictionary;
   for (const part of key.split(".")) {
     if (typeof node !== "object" || node === null) return undefined;
     node = (node as Record<string, unknown>)[part];
   }
+  return node;
+}
+
+function lookup(dictionary: Dictionary, key: string): string | undefined {
+  const node = lookupNode(dictionary, key);
   return typeof node === "string" ? node : undefined;
+}
+
+function lookupList(dictionary: Dictionary, key: string): readonly string[] | undefined {
+  const node = lookupNode(dictionary, key);
+  return Array.isArray(node) && node.every((item) => typeof item === "string") ? (node as readonly string[]) : undefined;
 }
 
 function reportMissing(key: string) {
@@ -102,7 +118,7 @@ function reportMissing(key: string) {
   if (import.meta.env.DEV) console.error(`[i18n] missing key: ${key}`);
 }
 
-export function translateText(language: Language, key: DictionaryKey, params?: TParams): string {
+export function translateText(language: Language, key: DictionaryStringKey, params?: TParams): string {
   const localized = lookup(dictionaries[language], key);
   if (localized !== undefined) return format(localized, params);
   reportMissing(key);
@@ -111,8 +127,21 @@ export function translateText(language: Language, key: DictionaryKey, params?: T
   return fallback !== undefined ? format(fallback, params) : key;
 }
 
-export function t(key: DictionaryKey, params?: TParams): string {
+export function translateList(language: Language, key: DictionaryListKey): readonly string[] {
+  const localized = lookupList(dictionaries[language], key);
+  if (localized !== undefined) return localized;
+  reportMissing(key);
+  // 当前语言缺键时回退中文基线；两者都缺时返回键名本身。
+  const fallback = language === "zh-CN" ? undefined : lookupList(dictionaries["zh-CN"], key);
+  return fallback ?? [key];
+}
+
+export function t(key: DictionaryStringKey, params?: TParams): string {
   return translateText(resolved, key, params);
+}
+
+export function tList(key: DictionaryListKey): readonly string[] {
+  return translateList(resolved, key);
 }
 
 function subscribe(listener: () => void) {

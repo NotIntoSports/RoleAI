@@ -6,9 +6,18 @@ export {
   resolveLanguage,
   setLanguagePreference,
   t,
+  tList,
+  translateList,
   translateText,
   useLanguage,
   useLanguagePreference,
   useT,
 } from "./language";
-export type { DictionaryKey, Language, LanguagePreference, TParams } from "./language";
+export type {
+  DictionaryKey,
+  DictionaryListKey,
+  DictionaryStringKey,
+  Language,
+  LanguagePreference,
+  TParams,
+} from "./language";
