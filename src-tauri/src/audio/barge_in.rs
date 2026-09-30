@@ -281,4 +281,68 @@ mod tests {
         m.ingest(&frames48(0, 200));
         assert!(m.take_staged().is_none());
     }
+
+    /// 触发后未取走前停止收集；取走后从干净状态重新积累，
+    /// 触发时刻滞留的旧 pending 不得混入下一轮话轮。
+    #[test]
+    fn staged_restart_collects_only_fresh_audio() {
+        // 第一轮：响人声触发并取走。
+        let mut probs = vec![0.9f32; 8];
+        probs.extend(vec![0.0f32; 40]);
+        let mut m = monitor(&probs);
+        m.ingest(&frames48(2000, 20));
+        assert!(m.triggered());
+        let first = m.take_staged().expect("staged");
+        assert_eq!(
+            first.len() % WINDOW_BYTES_48K,
+            0,
+            "话轮必须是完整窗的整数倍"
+        );
+
+        // 第二轮：同一监听器改喂安静的 100 幅度音频。若触发时刻滞留在
+        // pending 里的 2000 幅度旧字节泄漏进新一轮，最大样本幅度会是 2000。
+        let mut probs = vec![0.9f32; 8];
+        probs.extend(vec![0.0f32; 40]);
+        let mut m = monitor(&probs);
+        m.ingest(&frames48(100, 20));
+        assert!(m.triggered(), "取走后必须能重新触发");
+        let second = m.take_staged().expect("second staged");
+        let max_abs = second
+            .chunks_exact(2)
+            .map(|b| i16::from_le_bytes([b[0], b[1]]).unsigned_abs())
+            .max()
+            .unwrap_or(0);
+        assert_eq!(
+            max_abs, 100,
+            "新一轮话轮必须只含取走后新收集的音频，不得混入旧 pending"
+        );
+    }
+
+    /// 触发前的未取走状态：ingest 直接短路，缓冲冻结在触发时刻。
+    #[test]
+    fn staged_but_untaken_monitor_stops_buffering() {
+        let mut probs = vec![0.9f32; 8];
+        probs.extend(vec![0.0f32; 40]);
+        let mut m = monitor(&probs);
+        m.ingest(&frames48(2000, 20));
+        assert!(m.triggered());
+        let before = format!("{m:?}");
+        // 触发未取走时继续喂音频：缓冲必须原封不动。
+        m.ingest(&frames48(2000, 20));
+        assert_eq!(
+            format!("{m:?}"),
+            before,
+            "staged 未取走时 ingest 必须是空操作"
+        );
+    }
+
+    /// `CaptureState` 派生 `Debug` 走这条手工实现：暴露可观测状态、不 panic。
+    #[test]
+    fn debug_impl_reports_observable_state() {
+        let m = monitor(&[0.9f32; 4]);
+        let text = format!("{m:?}");
+        assert!(text.contains("BargeInMonitor"), "实际输出：{text}");
+        assert!(text.contains("buffered_windows"));
+        assert!(text.contains("echo_floor"));
+    }
 }
