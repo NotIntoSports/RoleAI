@@ -395,4 +395,50 @@ mod tests {
             Some(3)
         );
     }
+
+    /// 空题单必须报 PlanEmpty 并带稳定错误码（前端据此提示）。
+    #[test]
+    fn empty_plan_is_rejected_with_stable_code() {
+        let plan = PracticePlan {
+            id: "plan-empty".into(),
+            title: "空题单".into(),
+            position: "后端".into(),
+            interviewer_style: String::new(),
+            difficulty: "standard".into(),
+            questions: Vec::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        let error = PracticeDirector::from_plan(&plan, 2).unwrap_err();
+        assert_eq!(error, DirectorError::PlanEmpty);
+        assert_eq!(error.code(), "PRACTICE_PLAN_INVALID");
+    }
+
+    /// 构造入参必须原样可读：plan_id 与 followup_limit 供进度持久化
+    /// 与 overlay 文案使用，不得被默认值悄悄替换。
+    #[test]
+    fn director_exposes_plan_id_and_followup_limit() {
+        let director = PracticeDirector::from_plan(&plan(3), 5).unwrap();
+        assert_eq!(director.plan_id(), "plan-1");
+        assert_eq!(director.followup_limit(), 5);
+        assert_eq!(director.progress().followup_limit, 5);
+    }
+
+    /// current_question 必须跟随推进：从第一题开始，skip 后指向下一题。
+    #[test]
+    fn current_question_tracks_advance() {
+        let mut director = PracticeDirector::from_plan(&plan(3), 1).unwrap();
+        assert_eq!(director.current_question().unwrap().prompt, "第1题的题面");
+        assert!(matches!(
+            director.record_answer(),
+            PracticeAdvance::FollowUp
+        ));
+        // 追问上限 1：再答一次自动推进到第二题。
+        assert!(matches!(
+            director.record_answer(),
+            PracticeAdvance::Advanced
+        ));
+        assert_eq!(director.current_question().unwrap().prompt, "第2题的题面");
+        assert_eq!(director.question_number(), 2);
+    }
 }
