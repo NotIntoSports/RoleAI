@@ -12,6 +12,9 @@ export default defineConfig({
   use: {
     baseURL: "http://127.0.0.1:1421",
     viewport: { width: 1440, height: 900 },
+    // i18n（lane-H）：界面语言跟随系统语言，而 Playwright 默认 locale 是 en-US，
+    // 会把演示界面切到英文、让中文断言全部失败。按「测试环境默认 zh-CN」契约钉定。
+    locale: "zh-CN",
     launchOptions: {
       // 演示默认输入源是本机麦克风：无头模式用假设备自动授权，避免权限弹窗卡住。
       args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream"],
