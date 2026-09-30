@@ -1,0 +1,150 @@
+/* 模拟面试训练：准备向导（lane-E）。复用 shell/library 的面板、表单与徽章变量。 */
+
+.practice-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 16px;
+  padding: 0;
+  list-style: none;
+}
+
+.practice-steps li {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--surface-muted);
+}
+
+.practice-steps li[data-current="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.practice-steps li[data-done="true"] {
+  color: var(--text);
+}
+
+.practice-step-panel {
+  min-width: 0;
+}
+
+.practice-step-panel .service-form {
+  max-width: 560px;
+}
+
+.practice-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.practice-empty {
+  margin: 8px 0;
+}
+
+.practice-nav {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 14px;
+}
+
+.practice-nav > span:only-child {
+  flex: 1;
+}
+
+.practice-style-group {
+  display: grid;
+  gap: 10px;
+  max-width: 560px;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.practice-style-option {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.practice-style-name {
+  font-weight: 600;
+}
+
+.practice-generate {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+}
+
+.practice-generate p {
+  margin: 0;
+}
+
+.practice-plan-editor {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.practice-plan-editor h3 {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 15px;
+}
+
+.practice-question-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.practice-question-row {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-muted);
+}
+
+.practice-question-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.practice-question-remove {
+  margin-left: auto;
+  padding: 2px 6px;
+  font-size: 12px;
+}
+
+.practice-question-prompt {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.practice-question-prompt textarea {
+  width: 100%;
+  resize: vertical;
+}
+
+.practice-question-points {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+}

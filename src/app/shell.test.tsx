@@ -50,6 +50,12 @@ describe("Shell", () => {
     expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("资料");
   });
 
+  it("renders practice page when hash is #/practice", () => {
+    window.location.hash = "#/practice";
+    render(<Shell />);
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("模拟面试");
+  });
+
   it("renders services page when hash is #/services", () => {
     window.location.hash = "#/services";
     render(<Shell />);
