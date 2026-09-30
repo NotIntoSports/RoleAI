@@ -4,23 +4,25 @@ import * as api from "../../api/commands";
 import { EmptyState } from "../../components/empty-state";
 import { errorNoticeText as errorText } from "../../components/error-notice";
 import type { CommandResult, PublicConfig, VoiceReferenceSummary } from "../../generated/bindings";
+import { t, useT, type DictionaryStringKey } from "../../i18n";
 import { RECORD_MAX_MS, RECORD_MIN_MS, VoiceRecorder, bytesToBase64, type RecordingResult } from "./wav-recorder";
 
 const emptyReference = { id: "", name: "", providerId: "", targetModel: "" };
 
 const optional = (value: string) => value.trim() || null;
 
-const statusText: Record<string, string> = {
-  pending: "未克隆",
-  uploaded: "已上传，等待克隆结果",
-  cloned: "已克隆",
-  failed: "克隆失败",
+const statusKeys: Record<string, DictionaryStringKey> = {
+  pending: "services.voices.status.pending",
+  uploaded: "services.voices.status.uploaded",
+  cloned: "services.voices.status.cloned",
+  failed: "services.voices.status.failed",
 };
 
 export function VoiceReferenceEditor({ visible }: { visible: boolean }) {
+  useT();
   const [config, setConfig] = useState<PublicConfig | null>(null);
   const [references, setReferences] = useState<VoiceReferenceSummary[]>([]);
-  const [message, setMessage] = useState("正在读取音色…");
+  const [message, setMessage] = useState(() => t("services.voices.reading"));
   const [busy, setBusy] = useState(false);
   const [reference, setReference] = useState(emptyReference);
   const [recording, setRecording] = useState(false);
@@ -51,7 +53,7 @@ export function VoiceReferenceEditor({ visible }: { visible: boolean }) {
         setMessage("");
       }
     } catch (error) {
-      setMessage(`IPC_UNAVAILABLE：无法读取音色（${String(error)}）`);
+      setMessage(t("services.voices.ipc.readFailed", { error: String(error) }));
     }
   }, []);
 
@@ -73,8 +75,7 @@ export function VoiceReferenceEditor({ visible }: { visible: boolean }) {
       setMessage(success);
       return result;
     } catch (error) {
-      await reload();
-      setMessage(`IPC_UNAVAILABLE：本地操作失败（${error instanceof Error ? error.message : String(error)}）`);
+      setMessage(t("services.voices.ipc.operateFailed", { error: error instanceof Error ? error.message : String(error) }));
       return null;
     } finally {
       setBusy(false);
@@ -94,9 +95,7 @@ export function VoiceReferenceEditor({ visible }: { visible: boolean }) {
             transcript: null,
             audioBase64: audio.base64,
           }),
-        reference.id
-          ? "音色与音频已更新；克隆状态已重置，请重新克隆"
-          : "音色已保存，请点击「克隆」生成音色 ID",
+        reference.id ? t("services.voices.savedWithAudio") : t("services.voices.savedNew"),
       );
       if (result?.ok) {
         setReference((current) => ({ ...current, id: result.data.id }));
@@ -114,11 +113,11 @@ export function VoiceReferenceEditor({ visible }: { visible: boolean }) {
             targetModel: optional(reference.targetModel),
             transcript: null,
           }),
-        "音色信息已更新，原音频与克隆状态保持不变",
+        t("services.voices.infoUpdated"),
       );
       return;
     }
-    setMessage("请先录制或选择参考音频。");
+    setMessage(t("services.voices.needAudioFirst"));
   }
 
   const startRecording = useCallback(async () => {
@@ -126,7 +125,7 @@ export function VoiceReferenceEditor({ visible }: { visible: boolean }) {
     try {
       await recorder.start();
     } catch (error) {
-      setMessage(`无法开始录音（${error instanceof DOMException ? error.name : String(error)}）：请检查麦克风权限与输入设备后重试。`);
+      setMessage(t("services.voices.recordStartFailed", { error: error instanceof DOMException ? error.name : String(error) }));
       return;
     }
     recorderRef.current = recorder;
@@ -145,12 +144,12 @@ export function VoiceReferenceEditor({ visible }: { visible: boolean }) {
     if (!result || result.durationMs < RECORD_MIN_MS) {
       setMessage(
         result
-          ? `录音太短（仅 ${Math.round(result.durationMs / 1000)} 秒），请至少录制 3 秒后重试。`
-          : "没有录到声音（未捕获到音频数据），请重试；若再次出现，请检查系统麦克风输入设备。",
+          ? t("services.voices.tooShort", { seconds: Math.round(result.durationMs / 1000) })
+          : t("services.voices.noAudioCaptured"),
       );
       return;
     }
-    setAudio({ base64: result.base64, label: `已录制 ${Math.round(result.durationMs / 1000)} 秒 WAV` });
+    setAudio({ base64: result.base64, label: t("services.voices.recordedLabel", { seconds: Math.round(result.durationMs / 1000) }) });
     setMessage("");
   }, []);
 
@@ -167,10 +166,10 @@ export function VoiceReferenceEditor({ visible }: { visible: boolean }) {
     if (!file) return;
     try {
       const bytes = new Uint8Array(await file.arrayBuffer());
-      setAudio({ base64: bytesToBase64(bytes), label: `已选择 ${file.name}` });
+      setAudio({ base64: bytesToBase64(bytes), label: t("services.voices.pickedLabel", { name: file.name }) });
       setMessage("");
     } catch {
-      setMessage("无法读取所选音频文件，请重试。");
+      setMessage(t("services.voices.fileReadFailed"));
     }
   }, []);
 
@@ -192,9 +191,9 @@ export function VoiceReferenceEditor({ visible }: { visible: boolean }) {
 
   return (
     <section className="service-panel voice-reference-editor" aria-labelledby="voice-reference-editor-heading">
-      <h2 className="section-heading" id="voice-reference-editor-heading">音色克隆</h2>
+      <h2 className="section-heading" id="voice-reference-editor-heading">{t("services.categories.voices")}</h2>
       <p className="configuration-description">
-        保存 3–30 秒（建议 10–15 秒）的参考音频，克隆后把返回的音色 ID 填入语音线路。音频保存在本机；点击「克隆」会上传到所选供应商并可能产生费用。
+        {t("services.voices.description")}
       </p>
       {message && (
         <p className="services-message" role="status">
@@ -203,9 +202,9 @@ export function VoiceReferenceEditor({ visible }: { visible: boolean }) {
       )}
       <div className="configuration-columns">
         <form className="service-form configuration-editor" onSubmit={submit}>
-          <h3>{reference.id && references.some((item) => item.id === reference.id) ? "编辑音色" : "添加音色"}</h3>
+          <h3>{reference.id && references.some((item) => item.id === reference.id) ? t("services.voices.editTitle") : t("services.voices.addTitle")}</h3>
           <label>
-            名称
+            {t("services.voices.nameLabel")}
             <input
               required
               value={reference.name}
@@ -213,44 +212,43 @@ export function VoiceReferenceEditor({ visible }: { visible: boolean }) {
             />
           </label>
           <label>
-            供应商
+            {t("services.voices.providerLabel")}
             <select
               value={reference.providerId}
               onChange={(event) => setReference({ ...reference, providerId: event.target.value })}
             >
-              <option value="">暂不选择（克隆前需指定）</option>
+              <option value="">{t("services.voices.providerLaterOption")}</option>
               {providers.map((item) => (
                 <option key={item.id} value={item.id}>
-                  {item.name || "未命名供应商"}
+                  {item.name || t("services.providers.unnamed")}
                 </option>
               ))}
             </select>
           </label>
           <label>
-            目标模型（可选）
+            {t("services.voices.targetModelLabel")}
             <input
               value={reference.targetModel}
               onChange={(event) => setReference({ ...reference, targetModel: event.target.value })}
             />
             <small>
-              阿里云端到端 Realtime 系（如 qwen3.8-omni-flash-realtime）必填同名模型；
-              留空按 CosyVoice（cosyvoice-v2）复刻，智谱无需填写。
+              {t("services.voices.targetModelHint")}
             </small>
           </label>
           <div className="voice-recorder-field">
-            <span>参考音频</span>
+            <span>{t("services.voices.referenceAudioLabel")}</span>
             <span className="voice-recorder">
               {recording ? (
                 <button type="button" disabled={busy} onClick={() => void finishRecording()}>
-                  停止录音（{Math.floor(elapsedMs / 1000)} 秒 / 30 秒上限）
+                  {t("services.voices.stopRecording", { elapsed: Math.floor(elapsedMs / 1000) })}
                 </button>
               ) : (
                 <button type="button" disabled={busy} onClick={() => void startRecording()}>
-                  开始录音
+                  {t("services.voices.startRecording")}
                 </button>
               )}
               <button type="button" disabled={busy} onClick={() => fileInputRef.current?.click()}>
-                选择音频文件…
+                {t("services.voices.pickAudioFile")}
               </button>
               <input
                 ref={fileInputRef}
@@ -264,46 +262,46 @@ export function VoiceReferenceEditor({ visible }: { visible: boolean }) {
               <span className="voice-recorder-status">
                 {audio.label}
                 <button type="button" disabled={busy} onClick={clearAudio}>
-                  清除
+                  {t("services.voices.clear")}
                 </button>
               </span>
             )}
             {!audio && reference.id && (
-              <span className="voice-recorder-status">保存修改将保留原有音频与克隆状态</span>
+              <span className="voice-recorder-status">{t("services.voices.keepExistingNote")}</span>
             )}
-            <small>录制或选择 wav / mp3（10 MB 以内，建议 10–15 秒）；首次录音需在系统提示中允许麦克风权限</small>
+            <small>{t("services.voices.fileHint")}</small>
           </div>
           <button
             className="button-primary"
             disabled={busy}
-            title={!audio && !reference.id ? "请先录制或选择参考音频" : undefined}
+            title={!audio && !reference.id ? t("services.voices.needAudioTitle") : undefined}
             type="submit"
           >
-            {audio || !reference.id ? "保存音色" : "保存修改"}
+            {audio || !reference.id ? t("services.voices.saveNewTitle") : t("services.voices.saveEditTitle")}
           </button>
         </form>
         <div className="service-list configuration-list">
-          <h3>已保存音色 <span className="configuration-count">{references.length}</span></h3>
-          {references.length === 0 && <EmptyState title="还没有音色。" />}
+          <h3>{t("services.voices.listHeading")} <span className="configuration-count">{references.length}</span></h3>
+          {references.length === 0 && <EmptyState title={t("services.voices.empty")} />}
           {references.map((item) => {
             const providerName = providers.find((provider) => provider.id === item.providerId)?.name;
             return (
               <article className="service-card" key={item.id}>
                 <h3>{item.name}</h3>
                 <p>
-                  {providerName || "未选择供应商"} · {Number(item.byteSize) / 1024 >= 1024
+                  {providerName || t("services.voices.noProvider")} · {Number(item.byteSize) / 1024 >= 1024
                     ? (Number(item.byteSize) / 1024 / 1024).toFixed(1) + " MB"
                     : Math.max(1, Math.round(Number(item.byteSize) / 1024)) + " KB"}
-                  {item.durationMs != null ? ` · ${Math.round(Number(item.durationMs) / 1000)} 秒` : ""}
+                  {item.durationMs != null ? ` · ${t("services.voices.secondsSuffix", { n: Math.round(Number(item.durationMs) / 1000) })}` : ""}
                 </p>
                 <p>
-                  {statusText[item.cloneStatus] ?? item.cloneStatus}
-                  {item.voiceId ? ` · 音色 ${item.voiceId}` : ""}
+                  {statusKeys[item.cloneStatus] ? t(statusKeys[item.cloneStatus]) : item.cloneStatus}
+                  {item.voiceId ? ` · ${t("services.voices.voiceIdPrefix", { id: item.voiceId })}` : ""}
                 </p>
                 {item.cloneError && <p className="service-test-result" data-tone="error">{item.cloneError}</p>}
                 <div className="service-actions">
                   <button
-                    aria-label={"编辑 " + item.name}
+                    aria-label={t("services.voices.editAria", { name: item.name })}
                     disabled={busy}
                     onClick={() => {
                       clearAudio();
@@ -314,25 +312,25 @@ export function VoiceReferenceEditor({ visible }: { visible: boolean }) {
                         targetModel: item.targetModel ?? "",
                       });
                       setMessage(
-                        `正在编辑「${item.name}」：可修改名称与供应商，保存后原音频与克隆状态保持不变。`,
+                        t("services.voices.editingNotice", { name: item.name }),
                       );
                     }}
                   >
-                    编辑
+                    {t("services.voices.edit")}
                   </button>
                   <button
                     disabled={busy || !item.providerId}
-                    title={item.providerId ? undefined : "请先在编辑中选择供应商"}
-                    onClick={() => void run(() => api.cloneVoiceReference(item.id), "克隆完成，音色 ID 已保存")}
+                    title={item.providerId ? undefined : t("services.voices.cloneNeedsProvider")}
+                    onClick={() => void run(() => api.cloneVoiceReference(item.id), t("services.voices.cloneDone"))}
                   >
-                    克隆
+                    {t("services.voices.clone")}
                   </button>
                   <button
                     className="button-danger"
                     disabled={busy}
-                    onClick={() => void run(() => api.deleteVoiceReference(item.id), "音色已删除")}
+                    onClick={() => void run(() => api.deleteVoiceReference(item.id), t("services.voices.deleted"))}
                   >
-                    删除
+                    {t("services.voices.delete")}
                   </button>
                 </div>
               </article>

@@ -4,6 +4,7 @@ import * as api from "../../api/commands";
 import { EmptyState } from "../../components/empty-state";
 import { errorNoticeText as errorText } from "../../components/error-notice";
 import type { CommandResult, PublicConfig } from "../../generated/bindings";
+import { t, useT } from "../../i18n";
 
 const emptyEmbedding = {
   id: "",
@@ -18,8 +19,9 @@ const emptyEmbedding = {
 const optional = (value: string) => value.trim() || null;
 
 export function EmbeddingEditor({ focusId = null }: { focusId?: string | null }) {
+  useT();
   const [config, setConfig] = useState<PublicConfig | null>(null);
-  const [message, setMessage] = useState("正在读取本地配置…");
+  const [message, setMessage] = useState(() => t("services.reading"));
   const [busy, setBusy] = useState(false);
   const [embedding, setEmbedding] = useState(emptyEmbedding);
 
@@ -33,7 +35,7 @@ export function EmbeddingEditor({ focusId = null }: { focusId?: string | null })
         setMessage(errorText(result.error));
       }
     } catch {
-      setMessage("IPC_UNAVAILABLE：无法读取本地配置");
+      setMessage(t("services.ipc.statusUnavailable"));
     }
   }, []);
 
@@ -46,7 +48,7 @@ export function EmbeddingEditor({ focusId = null }: { focusId?: string | null })
     const item = config.knowledge.embeddingConfigs.find((entry) => entry.id === focusId);
     if (!item) {
       setEmbedding(emptyEmbedding);
-      setMessage(`找不到 Embedding 配置（${focusId}），请重新选择。`);
+      setMessage(t("services.embedding.notFound", { id: focusId }));
       return;
     }
     setEmbedding({
@@ -73,7 +75,7 @@ export function EmbeddingEditor({ focusId = null }: { focusId?: string | null })
       return result;
     } catch {
       await reload();
-      setMessage("IPC_UNAVAILABLE：本地操作失败");
+      setMessage(t("services.ipc.operateFailed"));
       return null;
     } finally {
       setBusy(false);
@@ -95,7 +97,7 @@ export function EmbeddingEditor({ focusId = null }: { focusId?: string | null })
             dimensions: Number(embedding.dimensions),
             normalized: embedding.normalized,
           }),
-        "Embedding 配置已保存，请先测试再启用",
+        t("services.embedding.saved"),
       );
       if (result?.ok) {
         setEmbedding((current) => ({ ...current, id: result.data.id, apiKey: "" }));
@@ -113,7 +115,7 @@ export function EmbeddingEditor({ focusId = null }: { focusId?: string | null })
   return (
     <section className="service-panel embedding-editor" aria-labelledby="embedding-editor-heading">
       <h2 className="section-heading" id="embedding-editor-heading">Embedding</h2>
-      <p className="configuration-description">可以选用已保存的供应商，或自行填写 OpenAI 兼容接入地址。测试、切片和查询文本会发到该接口，不会经过作者服务器。</p>
+      <p className="configuration-description">{t("services.embedding.description")}</p>
       {message && (
         <p className="services-message" role="status">
           {message}
@@ -121,17 +123,17 @@ export function EmbeddingEditor({ focusId = null }: { focusId?: string | null })
       )}
       <div className="configuration-columns">
         <form className="service-form configuration-editor" onSubmit={submit}>
-          <h3>{embedding.id && items.some((item) => item.id === embedding.id) ? "编辑配置" : "添加配置"}</h3>
+          <h3>{embedding.id && items.some((item) => item.id === embedding.id) ? t("services.embedding.editTitle") : t("services.embedding.addTitle")}</h3>
           <label>
-            供应商
+            {t("services.embedding.providerLabel")}
             <select
               value={embedding.providerId}
               onChange={(event) => setEmbedding({ ...embedding, providerId: event.target.value, apiKey: "" })}
             >
-              <option value="">不使用供应商，自行填写地址</option>
+              <option value="">{t("services.embedding.providerOffOption")}</option>
               {providers.map((item) => (
                 <option key={item.id} value={item.id}>
-                  {item.name || "未命名供应商"}
+                  {item.name || t("services.providers.unnamed")}
                 </option>
               ))}
             </select>
@@ -139,7 +141,7 @@ export function EmbeddingEditor({ focusId = null }: { focusId?: string | null })
           {!usingProvider && (
             <>
               <label>
-                接入地址
+                {t("services.embedding.endpointLabel")}
                 <input
                   required
                   type="url"
@@ -156,12 +158,12 @@ export function EmbeddingEditor({ focusId = null }: { focusId?: string | null })
                   value={embedding.apiKey}
                   onChange={(event) => setEmbedding({ ...embedding, apiKey: event.target.value })}
                 />
-                <small>留空会保留已保存的密钥；无鉴权可留空</small>
+                <small>{t("services.embedding.apiKeyHint")}</small>
               </label>
             </>
           )}
           <label>
-            模型
+            {t("services.embedding.modelLabel")}
             <input
               required
               value={embedding.modelId}
@@ -169,7 +171,7 @@ export function EmbeddingEditor({ focusId = null }: { focusId?: string | null })
             />
           </label>
           <label>
-            维度
+            {t("services.embedding.dimensionsLabel")}
             <input
               required
               type="number"
@@ -180,7 +182,7 @@ export function EmbeddingEditor({ focusId = null }: { focusId?: string | null })
             />
           </label>
           <label>
-            距离
+            {t("services.embedding.distanceLabel")}
             <input readOnly value="cosine" />
           </label>
           <label className="configuration-checkbox">
@@ -189,29 +191,29 @@ export function EmbeddingEditor({ focusId = null }: { focusId?: string | null })
               checked={embedding.normalized}
               onChange={(event) => setEmbedding({ ...embedding, normalized: event.target.checked })}
             />
-            归一化向量
+            {t("services.embedding.normalizedLabel")}
           </label>
           <button className="button-primary" disabled={busy} type="submit">
-            保存 Embedding
+            {t("services.embedding.save")}
           </button>
         </form>
         <div className="service-list configuration-list">
-          <h3>已配置模型 <span className="configuration-count">{items.length}</span></h3>
-          {items.length === 0 && <EmptyState title="还没有 Embedding 配置。" />}
+          <h3>{t("services.embedding.listHeading")} <span className="configuration-count">{items.length}</span></h3>
+          {items.length === 0 && <EmptyState title={t("services.embedding.empty")} />}
           {items.map((item) => {
             const providerName = providers.find((provider) => provider.id === item.providerId)?.name;
-            const source = providerName || item.baseUrl || "自定义";
+            const source = providerName || item.baseUrl || t("services.embedding.customSource");
             return (
             <article className="service-card" key={item.id}>
               <h3>{item.modelId}</h3>
               <p>
-                {source} · {item.dimensions} 维 · cosine
+                {source} · {t("services.embedding.dimensionUnit", { n: item.dimensions })} · cosine
               </p>
-              <p>{item.ready ? "测试通过" : "尚未就绪"}</p>
-              {item.active && <span className="status-badge">当前启用</span>}
+              <p>{item.ready ? t("services.embedding.ready") : t("services.embedding.notReady")}</p>
+              {item.active && <span className="status-badge">{t("services.embedding.activeBadge")}</span>}
               <div className="service-actions">
                 <button
-                  aria-label={"编辑 " + item.modelId}
+                  aria-label={t("services.embedding.editAria", { name: item.modelId })}
                   disabled={busy}
                   onClick={() =>
                     setEmbedding({
@@ -225,19 +227,19 @@ export function EmbeddingEditor({ focusId = null }: { focusId?: string | null })
                     })
                   }
                 >
-                  编辑
+                  {t("services.embedding.edit")}
                 </button>
-                <button disabled={busy} onClick={() => void run(() => api.testEmbeddingConfig(item.id), "Embedding 测试通过")}>
-                  测试
+                <button disabled={busy} onClick={() => void run(() => api.testEmbeddingConfig(item.id), t("services.embedding.testPassed"))}>
+                  {t("services.embedding.test")}
                 </button>
                 <button
                   disabled={busy || !item.ready}
-                  onClick={() => void run(() => api.activateEmbeddingConfig(item.id), "Embedding 已启用")}
+                  onClick={() => void run(() => api.activateEmbeddingConfig(item.id), t("services.embedding.activated"))}
                 >
-                  启用
+                  {t("services.embedding.activate")}
                 </button>
-                <button className="button-danger" disabled={busy} onClick={() => void run(() => api.deleteEmbeddingConfig(item.id), "Embedding 已删除")}>
-                  删除
+                <button className="button-danger" disabled={busy} onClick={() => void run(() => api.deleteEmbeddingConfig(item.id), t("services.embedding.deleted"))}>
+                  {t("services.embedding.delete")}
                 </button>
               </div>
             </article>

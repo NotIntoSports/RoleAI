@@ -2,6 +2,8 @@ import { useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { check } from "@tauri-apps/plugin-updater";
 
+import { t, useT } from "../../i18n";
+
 /**
  * 设置页「检查更新」面板（G07）：只做手动检查，不做静默自动更新。
  * 签名公钥未配置时（当前发布态），插件 check() 会报错，界面如实显示
@@ -36,6 +38,7 @@ const defaultCheckForUpdate: CheckForUpdate = async () => {
 };
 
 export function UpdaterPanel({ checkForUpdate = defaultCheckForUpdate }: { checkForUpdate?: CheckForUpdate }) {
+  useT();
   const [state, setState] = useState<UpdaterState>({ kind: "idle" });
 
   const runCheck = () => {
@@ -73,26 +76,26 @@ export function UpdaterPanel({ checkForUpdate = defaultCheckForUpdate }: { check
   return (
     <section className="service-panel updater-panel" aria-labelledby="updater-heading">
       <div className="section-heading">
-        <h2 id="updater-heading">应用更新</h2>
-        <p className="muted">手动检查新版本；不会在后台自动下载或安装。</p>
+        <h2 id="updater-heading">{t("updater.heading")}</h2>
+        <p className="muted">{t("updater.description")}</p>
       </div>
       <div className="updater-actions">
         <button type="button" className="button-secondary" disabled={busy} onClick={runCheck}>
-          <RefreshCw size={14} aria-hidden="true" />{state.kind === "checking" ? "正在检查…" : "检查更新"}
+          <RefreshCw size={14} aria-hidden="true" />{state.kind === "checking" ? t("updater.checking") : t("updater.check")}
         </button>
-        {state.kind === "upToDate" && <span className="muted" role="status">当前已是最新版本。</span>}
+        {state.kind === "upToDate" && <span className="muted" role="status">{t("updater.upToDate")}</span>}
         {state.kind === "available" && (
           <span className="muted" role="status">
-            发现新版本 {state.update.version}。
+            {t("updater.available", { version: state.update.version })}
             <button type="button" className="button-primary" disabled={busy} onClick={() => install(state.update)}>
-              下载并安装
+              {t("updater.downloadInstall")}
             </button>
           </span>
         )}
-        {state.kind === "installing" && <span className="muted" role="status">正在下载并安装更新，完成后应用会自动重启…</span>}
+        {state.kind === "installing" && <span className="muted" role="status">{t("updater.installing")}</span>}
         {state.kind === "error" && (
           <span className="muted" role="alert">
-            更新源未配置或不可达：{state.message}。待发布签名公钥配置后即可检查更新。
+            {t("updater.error", { message: state.message })}
           </span>
         )}
       </div>
