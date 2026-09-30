@@ -192,6 +192,22 @@ pub struct SessionCitationView {
     pub snippet: String,
 }
 
+/// 公开契约复用的轮次分阶段时间线（services 层同一结构，camelCase 序列化）。
+pub use crate::services::realtime_pump::TurnTimeline;
+
+/// 单轮延迟时间线视图：线路、模式、打断标注与分阶段毫秒数。
+/// 旧记录没有 timeline 时整段缺省，前端显示「无数据」。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct TurnLatencyView {
+    pub route_id: String,
+    /// "cascade" | "realtime"（读侧自 turn_meta.latencyMode 归一，缺省 realtime）。
+    pub mode: String,
+    pub interrupted: bool,
+    pub timeline: TurnTimeline,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
@@ -211,6 +227,9 @@ pub struct SessionTurnView {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub playback_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub latency: Option<TurnLatencyView>,
     pub id: String,
     #[ts(type = "number")]
     pub turn_index: i64,
@@ -421,6 +440,8 @@ fn generated_bindings() -> String {
         RuntimeStatus::decl(&config),
         SessionExportResult::decl(&config),
         SessionCitationView::decl(&config),
+        TurnTimeline::decl(&config),
+        TurnLatencyView::decl(&config),
         SessionTurnView::decl(&config),
         SessionDetail::decl(&config),
         SessionTranscriptEvent::decl(&config),
@@ -537,6 +558,8 @@ mod tests {
             "SessionDetail",
             "SessionTurnView",
             "SessionCitationView",
+            "TurnTimeline",
+            "TurnLatencyView",
             "SessionTranscriptEvent",
             "SessionReplyEvent",
             "SessionPlaybackControlEvent",

@@ -733,6 +733,7 @@ pub(crate) fn finalize_network(
             citations: Vec::new(),
             materials_used: false,
             error_code: None,
+            timeline: crate::services::realtime_pump::TurnTimeline::default(),
         }
     } else if plan.e2e_route && plan.realtime_shared.is_some() && user_text.is_none() {
         // 端到端流式路线：轮次已由泵完成（含播放/打断），这里只取结果落库。
@@ -766,6 +767,7 @@ pub(crate) fn finalize_network(
             return NetworkOutcome::Idle;
         };
         pump_turn_meta = serde_json::json!({
+            "latencyMode": "realtime",
             "latencyMsFirstAudio": completed.first_audio_ms,
             "ingressDropped": plan.tap_dropped,
             "audioBytes": completed.audio_bytes,
@@ -826,6 +828,7 @@ pub(crate) fn finalize_network(
             materials_used: false,
             citations: Vec::new(),
             error_code: None,
+            timeline: crate::services::realtime_pump::TurnTimeline::default(),
         }
     } else if plan.e2e_route {
         match run_e2e_turn(
@@ -836,12 +839,36 @@ pub(crate) fn finalize_network(
             plan.control.cancel_flag(),
             hooks,
         ) {
-            Ok(turn) => turn,
+            Ok(mut turn) => {
+                // e2e 非泵路径：时间线随轮次写入 turn_meta（latencyMode 标注 realtime）。
+                pump_turn_meta = serde_json::json!({
+                    "latencyMode": "realtime",
+                    "timeline": turn.timeline,
+                });
+                if let Some(first_audio) = turn.timeline.response_done_ms {
+                    // e2e 音频随轮次一次到达：轮次完成即首包可听时刻。
+                    pump_turn_meta["latencyMsFirstAudio"] = serde_json::json!(first_audio);
+                }
+                turn.timeline = crate::services::realtime_pump::TurnTimeline::default();
+                turn
+            }
             Err(error) => return NetworkOutcome::Realtime(error),
         }
     } else {
         match run_cascade_turn(&deps, request, plan.control.cancel_flag(), hooks) {
-            Ok(turn) => turn,
+            Ok(mut turn) => {
+                // 级联路径：ASR/RAG/LLM/TTS 分阶段时间线写入 turn_meta。
+                pump_turn_meta = serde_json::json!({
+                    "latencyMode": "cascade",
+                    "timeline": turn.timeline,
+                });
+                if let Some(first_audio) = turn.timeline.tts_done_ms {
+                    // 级联的「首响」= TTS 合成完成（播放紧随其后）。
+                    pump_turn_meta["latencyMsFirstAudio"] = serde_json::json!(first_audio);
+                }
+                turn.timeline = crate::services::realtime_pump::TurnTimeline::default();
+                turn
+            }
             Err(error) => return NetworkOutcome::Cascade(error),
         }
     };

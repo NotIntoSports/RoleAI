@@ -2,6 +2,29 @@
 
 use super::*;
 
+/// 从 turn_meta 组装单轮延迟视图；旧记录没有 timeline 时返回 None（前端显示「无数据」）。
+fn turn_latency_view(
+    meta: Option<&serde_json::Value>,
+    route_id: &str,
+) -> Option<crate::contracts::TurnLatencyView> {
+    let meta = meta?;
+    let timeline: crate::services::realtime_pump::TurnTimeline =
+        serde_json::from_value(meta["timeline"].clone()).ok()?;
+    // latencyMode 由泵/级联打点写入；F02 之前的存量记录只有泵路径有 timeline，
+    // 缺省归一为 realtime。
+    let mode = meta["latencyMode"]
+        .as_str()
+        .unwrap_or("realtime")
+        .to_owned();
+    let interrupted = meta["playbackStatus"].as_str() == Some("interrupted");
+    Some(crate::contracts::TurnLatencyView {
+        route_id: route_id.to_owned(),
+        mode,
+        interrupted,
+        timeline,
+    })
+}
+
 pub(in crate::commands) fn session_detail(
     store: &SessionStore<'_>,
     id: &str,
@@ -31,6 +54,7 @@ pub(in crate::commands) fn session_detail(
                 snippet: clip_snippet(&citation.snippet),
             })
             .collect();
+        let latency = turn_latency_view(meta.as_ref(), &session.voice_route_id);
         turns.push(SessionTurnView {
             trigger_source: meta
                 .as_ref()
@@ -47,6 +71,7 @@ pub(in crate::commands) fn session_detail(
                 .as_ref()
                 .and_then(|event| serde_json::from_value(event["sources"].clone()).ok()),
             web_degraded: web.as_ref().and_then(|event| event["degraded"].as_bool()),
+            latency,
             id: turn.id,
             turn_index: turn.turn_index,
             user_text: turn.user_text,
@@ -218,3 +243,43 @@ blocking_command!(session_export, session_export_blocking(session_id: String, fo
 blocking_command!(session_list, session_list_blocking() -> Vec<SessionSummary>);
 blocking_command!(session_get, session_get_blocking(session_id: String) -> SessionDetail);
 blocking_command!(session_delete, session_delete_blocking(session_id: String) -> FoundationStatus);
+
+#[cfg(test)]
+mod turn_latency_view_tests {
+    use super::turn_latency_view;
+
+    #[test]
+    fn cascade_meta_maps_to_latency_view() {
+        let meta = serde_json::json!({
+            "latencyMode": "cascade",
+            "playbackStatus": "played",
+            "timeline": {"asrDoneMs": 12, "llmFirstTokenMs": 40},
+        });
+        let view = turn_latency_view(Some(&meta), "route-1").unwrap();
+        assert_eq!(view.route_id, "route-1");
+        assert_eq!(view.mode, "cascade");
+        assert!(!view.interrupted);
+        assert_eq!(view.timeline.asr_done_ms, Some(12));
+        assert_eq!(view.timeline.llm_first_token_ms, Some(40));
+        assert_eq!(view.timeline.first_audio_ms, None);
+    }
+
+    #[test]
+    fn legacy_pump_meta_defaults_to_realtime_mode() {
+        let meta = serde_json::json!({
+            "playbackStatus": "interrupted",
+            "timeline": {"speechStartedMs": 5, "firstAudioMs": 300},
+        });
+        let view = turn_latency_view(Some(&meta), "route-2").unwrap();
+        assert_eq!(view.mode, "realtime");
+        assert!(view.interrupted);
+        assert_eq!(view.timeline.speech_started_ms, Some(5));
+    }
+
+    #[test]
+    fn meta_without_timeline_yields_none() {
+        let meta = serde_json::json!({"playbackStatus": "played"});
+        assert!(turn_latency_view(Some(&meta), "route-3").is_none());
+        assert!(turn_latency_view(None, "route-3").is_none());
+    }
+}

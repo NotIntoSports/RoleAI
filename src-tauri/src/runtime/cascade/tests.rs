@@ -879,3 +879,169 @@ fn streaming_llm_snapshots_reach_turn_hooks() {
     );
     assert_eq!(llm.complete_calls.load(Ordering::SeqCst), 1);
 }
+
+/// 固定延迟的脚本化 ASR：转写前睡 delay（验证时间线阶段下界）。
+struct DelayedAsr {
+    inner: ScriptedAsr,
+    delay: Duration,
+}
+
+impl SpeechToText for DelayedAsr {
+    fn transcribe(
+        &self,
+        endpoint: &ProviderEndpoint,
+        credential: Option<&str>,
+        model_id: &str,
+        pcm: &[u8],
+        sample_rate: u32,
+    ) -> Result<String, CascadeError> {
+        std::thread::sleep(self.delay);
+        self.inner
+            .transcribe(endpoint, credential, model_id, pcm, sample_rate)
+    }
+}
+
+/// 固定延迟的脚本化 LLM：首 token 前睡 delay/2，快照后再睡 delay/2，
+/// 使 llm_first_token_ms 与 llm_done_ms 严格分开。
+struct DelayedLlm {
+    inner: ScriptedLlm,
+    delay: Duration,
+}
+
+impl ChatModel for DelayedLlm {
+    fn complete(
+        &self,
+        endpoint: &ProviderEndpoint,
+        credential: Option<&str>,
+        model_id: &str,
+        messages: &[ChatMessage],
+    ) -> Result<String, CascadeError> {
+        self.inner.complete(endpoint, credential, model_id, messages)
+    }
+
+    fn complete_streaming(
+        &self,
+        endpoint: &ProviderEndpoint,
+        credential: Option<&str>,
+        model_id: &str,
+        messages: &[ChatMessage],
+        on_snapshot: &dyn Fn(&str),
+    ) -> Result<String, CascadeError> {
+        std::thread::sleep(self.delay / 2);
+        let text = self
+            .inner
+            .complete(endpoint, credential, model_id, messages)?;
+        on_snapshot(&text);
+        std::thread::sleep(self.delay / 2);
+        Ok(text)
+    }
+}
+
+/// 固定延迟的脚本化 TTS。
+struct DelayedTts {
+    inner: ScriptedTts,
+    delay: Duration,
+}
+
+impl TextToSpeech for DelayedTts {
+    fn synthesize(
+        &self,
+        endpoint: &ProviderEndpoint,
+        credential: Option<&str>,
+        model_id: &str,
+        voice_id: &str,
+        text: &str,
+    ) -> Result<Vec<u8>, CascadeError> {
+        std::thread::sleep(self.delay);
+        self.inner
+            .synthesize(endpoint, credential, model_id, voice_id, text)
+    }
+}
+
+#[test]
+fn cascade_turn_records_stage_timeline_with_loose_ranges() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = opened(&directory);
+    let asr = DelayedAsr {
+        inner: ScriptedAsr::ok("延迟提问"),
+        delay: Duration::from_millis(30),
+    };
+    let llm = DelayedLlm {
+        inner: ScriptedLlm::ok("延迟回答"),
+        delay: Duration::from_millis(50),
+    };
+    let tts = DelayedTts {
+        inner: ScriptedTts::ok(&[0x33, 0x44]),
+        delay: Duration::from_millis(20),
+    };
+    let embed = ScriptedEmbed::ok(vec![1.0, 0.0, 0.0, 0.0]);
+    let runtime = SessionRuntime::new();
+    let config = cherry_config();
+    let deps = CascadeTurnDeps {
+        asr: &asr,
+        llm: &llm,
+        tts: &tts,
+        embed: &embed,
+        database: &database,
+        runtime: &runtime,
+        sleep: &|_| {},
+    };
+
+    let turn = run_cascade_turn(
+        &deps,
+        CascadeTurnRequest {
+            config: &config,
+            credentials: CascadeCredentials::default(),
+            pcm: Some(&[0x01_u8; 32]),
+            sample_rate: 16_000,
+            user_text: None,
+            history: &[],
+            context_summary: None,
+        },
+        &AtomicBool::new(false),
+        &TurnStreamHooks::none(),
+    )
+    .unwrap();
+    let timeline = turn.timeline;
+
+    // 宽松上界（5s）避免负载抖动误报；下界由注入延迟保证；阶段单调不减。
+    let asr_done = timeline.asr_done_ms.expect("asr done recorded");
+    assert!(asr_done >= 25 && asr_done < 5_000, "asr_done_ms={asr_done}");
+    let retrieval_done = timeline.retrieval_done_ms.expect("retrieval done recorded");
+    assert!(
+        retrieval_done >= asr_done && retrieval_done < 5_000,
+        "retrieval_done_ms={retrieval_done}"
+    );
+    let first_token = timeline.llm_first_token_ms.expect("first token recorded");
+    assert!(
+        first_token >= retrieval_done + 20 && first_token < 5_000,
+        "llm_first_token_ms={first_token}"
+    );
+    let llm_done = timeline.llm_done_ms.expect("llm done recorded");
+    assert!(
+        llm_done > first_token && llm_done < 5_000,
+        "llm_done_ms={llm_done}"
+    );
+    let tts_done = timeline.tts_done_ms.expect("tts done recorded");
+    assert!(
+        tts_done >= llm_done + 15 && tts_done < 5_000,
+        "tts_done_ms={tts_done}"
+    );
+    // 级联路径不产出 Realtime 泵阶段与播放起止。
+    assert_eq!(timeline.speech_started_ms, None);
+    assert_eq!(timeline.first_audio_ms, None);
+    assert_eq!(timeline.playback_started_ms, None);
+    assert_eq!(timeline.playback_done_ms, None);
+
+    // 序列化契约：camelCase、无字段丢失。
+    let value = serde_json::to_value(&timeline).unwrap();
+    assert_eq!(value["asrDoneMs"], serde_json::json!(asr_done));
+    assert_eq!(value["speechStartedMs"], serde_json::Value::Null);
+    assert_eq!(value["playbackDoneMs"], serde_json::Value::Null);
+    // 往返：旧记录缺新字段也能反序列化（Option 自动 None）。
+    let legacy = serde_json::json!({"transcriptDoneMs": 5});
+    let parsed: crate::services::realtime_pump::TurnTimeline =
+        serde_json::from_value(legacy).unwrap();
+    assert_eq!(parsed.transcript_done_ms, Some(5));
+    assert_eq!(parsed.asr_done_ms, None);
+}

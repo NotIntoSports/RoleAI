@@ -5,11 +5,11 @@
   "files": {
     "src-tauri/capabilities/main.json": "d6d5c5024ed6ba3b71c3f33a2a17c1dc10e25c2e359f8a7548c8531a95e90de7",
     "src-tauri/src/lib.rs": "006783156d21148ec1c2ae744b6e41c8a90afea597c3f2cd5a495085aa382dcd",
-    "src-tauri/src/contracts.rs": "5fafd5a66852cd7dca78d1b7b597af1d9767044a66a9be48bd25e88703bd2a82",
+    "src-tauri/src/contracts.rs": "5e47ad99f0d44889169f0a7160a3c62c2e4a9ce06b22208d536c443299509fa4",
     "src-tauri/src/commands/mod.rs": "4c5990949684161feeda331fff36e69929a192612c353c36132c45e81164e1d6",
     "src-tauri/tauri.conf.json": "7cbaa279bb71a156cfb3563d2a935fbf859a21728ec11e6e886b5e0aaae6c219",
     "src/api/commands.ts": "4c4122b96439ade9811f282537ca14e73bca61c31f6417b584fba6191eef7c13",
-    "src/generated/bindings.ts": "8881c84f980181fac2e6a520daa8af9092ee2b8c2be89f21eaba11470dde8edb",
+    "src/generated/bindings.ts": "f0e46696d5542aaf2a280d6430fd4e65ad5e0f46f93126a4573680dfbafe8b0f",
     "tests/tauri/shell-contract.test.mjs": "7a9e13b97754f371ec3e95d3c01cc888394e007207ea16371768574e09ed452f",
     "src-tauri/tests/security_contract.rs": "22e42bfb76980bd585e6b012585207d39a1a8848b707336b0ebbc14f7dfb7ea3",
     "src-tauri/src/commands/config.rs": "26d3dcc5ed93c6211566883a463759a9da7f4298eb07665bcfc5c0c1a9f7004a",
