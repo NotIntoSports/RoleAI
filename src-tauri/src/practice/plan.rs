@@ -78,8 +78,10 @@ pub fn build_plan_messages(
 }
 
 /// 解析并裁剪 LLM 返回的题单 JSON。
+/// 兜底顺序：直接解析 → 剥 markdown 代码围栏 → 取首个 `{` 到最后一个 `}` 的子串；
+/// 全部失败才算 `PRACTICE_MODEL_RESPONSE_INVALID`。
 /// 每道题的题面必须非空（≤500 字符）；字段缺失回落为空；
-/// 超过上限的题目被丢弃；空题单或非法 JSON 都算失败。
+/// 超过上限的题目被丢弃；空题单也算失败。
 pub fn parse_generated_plan(
     response: &str,
     max_questions: usize,
@@ -88,8 +90,10 @@ pub fn parse_generated_plan(
     if text.is_empty() {
         return Err(PlanParseError::ResponseEmpty);
     }
-    let parsed: GeneratedPlan =
-        serde_json::from_str(text).map_err(|_| PlanParseError::ResponseInvalid)?;
+    let parsed: GeneratedPlan = serde_json::from_str(text)
+        .or_else(|_| serde_json::from_str(&strip_code_fence(text)))
+        .or_else(|_| serde_json::from_str(&extract_json_object(text)))
+        .map_err(|_| PlanParseError::ResponseInvalid)?;
     let mut questions = Vec::new();
     for question in parsed.questions {
         let prompt = question.prompt.trim().to_owned();
@@ -126,6 +130,33 @@ pub fn parse_generated_plan(
 
 fn clip_line(value: &str) -> String {
     value.trim().chars().take(200).collect()
+}
+
+/// 剥掉 markdown 代码围栏（```json ... ``` 或 ``` ... ```）。
+/// 没有围栏时原样返回（trim 后）。
+fn strip_code_fence(text: &str) -> String {
+    let trimmed = text.trim();
+    let Some(rest) = trimmed.strip_prefix("```") else {
+        return trimmed.to_owned();
+    };
+    // 跳过围栏标注行（如 json）及其换行。
+    let body = match rest.find('\n') {
+        Some(line_end) => &rest[line_end + 1..],
+        None => rest,
+    };
+    let body = body.trim_start();
+    match body.rfind("```") {
+        Some(close) => body[..close].trim().to_owned(),
+        None => body.trim().to_owned(),
+    }
+}
+
+/// 取首个 `{` 到最后一个 `}` 之间的子串（模型在 JSON 前后夹说明文字时的兜底）。
+fn extract_json_object(text: &str) -> String {
+    match (text.find('{'), text.rfind('}')) {
+        (Some(start), Some(end)) if start < end => text[start..=end].to_owned(),
+        _ => text.trim().to_owned(),
+    }
 }
 
 /// 调用现有 LLM 通道生成题单题目。超时/网络失败原样返回 `CascadeError`
@@ -249,5 +280,42 @@ mod tests {
         assert_eq!(questions.len(), 1);
         assert_eq!(questions[0].focus, "");
         assert!(questions[0].expected_points.is_empty());
+    }
+
+    #[test]
+    fn parse_plan_strips_markdown_code_fence() {
+        let response =
+            "```json\n{\"questions\":[{\"prompt\":\"围栏里的题\",\"focus\":\"围栏\"}]}\n```";
+        let questions = parse_generated_plan(response, 12).unwrap();
+        assert_eq!(questions.len(), 1);
+        assert_eq!(questions[0].prompt, "围栏里的题");
+
+        // 无语言标注的围栏同样剥离。
+        let plain_fence = "```\n{\"questions\":[{\"prompt\":\"无标注围栏\"}]}\n```";
+        assert_eq!(parse_generated_plan(plain_fence, 12).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn parse_plan_extracts_json_object_from_surrounding_prose() {
+        let response = "好的，以下是生成的题单：\n{\"questions\":[{\"prompt\":\"杂文中的题\"}]}\n希望对你有帮助。";
+        let questions = parse_generated_plan(response, 12).unwrap();
+        assert_eq!(questions.len(), 1);
+        assert_eq!(questions[0].prompt, "杂文中的题");
+
+        // 围栏 + 杂文双兜底叠加也能解析。
+        let fenced_prose = "题单如下\n```json\n{\"questions\":[{\"prompt\":\"双兜底\"}]}\n```\n完";
+        assert_eq!(parse_generated_plan(fenced_prose, 12).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn parse_plan_still_rejects_garbage_after_fallbacks() {
+        assert_eq!(
+            parse_generated_plan("完全没有 JSON 的回复", 12).unwrap_err(),
+            PlanParseError::ResponseInvalid
+        );
+        assert_eq!(
+            parse_generated_plan("```json\n{broken\n```", 12).unwrap_err(),
+            PlanParseError::ResponseInvalid
+        );
     }
 }
