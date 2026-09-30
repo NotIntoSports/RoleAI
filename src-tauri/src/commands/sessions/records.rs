@@ -8,18 +8,11 @@ fn turn_latency_view(
     route_id: &str,
 ) -> Option<crate::contracts::TurnLatencyView> {
     let meta = meta?;
-    let timeline: crate::services::realtime_pump::TurnTimeline =
-        serde_json::from_value(meta["timeline"].clone()).ok()?;
-    // latencyMode 由泵/级联打点写入；F02 之前的存量记录只有泵路径有 timeline，
-    // 缺省归一为 realtime。
-    let mode = meta["latencyMode"]
-        .as_str()
-        .unwrap_or("realtime")
-        .to_owned();
-    let interrupted = meta["playbackStatus"].as_str() == Some("interrupted");
+    let (timeline, mode, interrupted) =
+        crate::sessions::latency_export::parse_turn_latency(meta)?;
     Some(crate::contracts::TurnLatencyView {
         route_id: route_id.to_owned(),
-        mode,
+        mode: mode.to_owned(),
         interrupted,
         timeline,
     })
@@ -239,7 +232,67 @@ pub fn session_delete_blocking(
     session_delete_cmd(&state, session_id)
 }
 
+pub(in crate::commands) fn session_latency_export_cmd(
+    state: &AppState,
+    session_id: String,
+    format: String,
+) -> CommandResult<SessionExportResult> {
+    let Some(format) = crate::sessions::LatencyExportFormat::from_name(&format) else {
+        return CommandResult::Err {
+            error: PublicError::new(
+                SessionExportError::FormatInvalid.code(),
+                "Unsupported export format",
+                false,
+            )
+            .with_field("format"),
+        };
+    };
+    let database = match state.database.lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            return service_error("DATABASE_OPERATION_FAILED", "Database is unavailable");
+        }
+    };
+    let Some(database) = database.as_ref() else {
+        return service_error("DATABASE_OPERATION_FAILED", "Database is unavailable");
+    };
+    // 与 session_export 同目录（数据目录 exports/ 下），渲染进程不可指定任意路径。
+    let export_root = state.paths.data_directory.join("exports");
+    match crate::sessions::export_latency(
+        &SessionStore::new(database),
+        &session_id,
+        format,
+        &export_root,
+    ) {
+        Ok(path) => CommandResult::Ok {
+            data: SessionExportResult {
+                path: path.to_string_lossy().into_owned(),
+            },
+        },
+        Err(error) => {
+            let mut public = PublicError::new(error.code(), "Session export failed", false);
+            if error == crate::sessions::LatencyExportError::NotFound {
+                public = public.with_field("sessionId");
+            }
+            CommandResult::Err { error: public }
+        }
+    }
+}
+
+pub fn session_latency_export_blocking(
+    state: State<'_, AppState>,
+    session_id: String,
+    format: String,
+) -> CommandResult<SessionExportResult> {
+    let _guard = match service_guard(&state) {
+        Ok(guard) => guard,
+        Err(error) => return error,
+    };
+    session_latency_export_cmd(&state, session_id, format)
+}
+
 blocking_command!(session_export, session_export_blocking(session_id: String, format: String) -> SessionExportResult);
+blocking_command!(session_latency_export, session_latency_export_blocking(session_id: String, format: String) -> SessionExportResult);
 blocking_command!(session_list, session_list_blocking() -> Vec<SessionSummary>);
 blocking_command!(session_get, session_get_blocking(session_id: String) -> SessionDetail);
 blocking_command!(session_delete, session_delete_blocking(session_id: String) -> FoundationStatus);

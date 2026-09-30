@@ -175,6 +175,10 @@ export function exportSession(sessionId: string, format: "markdown" | "json" | "
   return invoke<CommandResult<SessionExportResult>>("session_export", { sessionId, format });
 }
 
+export function exportSessionLatency(sessionId: string, format: "csv" | "trace") {
+  return invoke<CommandResult<SessionExportResult>>("session_latency_export", { sessionId, format });
+}
+
 export function listSessions() {
   return invoke<CommandResult<SessionSummary[]>>("session_list");
 }

@@ -9,6 +9,7 @@ vi.mock("../../api/commands", () => ({
   listSessions: vi.fn(),
   getSession: vi.fn(),
   exportSession: vi.fn(),
+  exportSessionLatency: vi.fn(),
   deleteSession: vi.fn(),
   getConfigPublic: vi.fn(),
 }));
@@ -278,5 +279,53 @@ describe("RecordsList", () => {
     expect(await screen.findByText("IPC_UNAVAILABLE：本地操作失败")).toBeTruthy();
     expect((screen.getByRole("button", { name: "查看" }) as HTMLButtonElement).disabled).toBe(false);
     expect(screen.queryByRole("region", { name: "会话详情" })).toBeNull();
+  });
+});
+
+describe("RecordsList 延迟导出", () => {
+  afterEach(cleanup);
+
+  beforeEach(() => {
+    vi.mocked(commands.listSessions).mockResolvedValue({ ok: true, data: [summary()] });
+    vi.mocked(commands.getSession).mockResolvedValue({ ok: true, data: detail() });
+  });
+
+  it("导出延迟数据与时间线走 session_latency_export", async () => {
+    vi.mocked(commands.exportSessionLatency).mockResolvedValue({
+      ok: true,
+      data: { path: "C:/data/exports/sess-1-latency.latency.csv" },
+    });
+    render(<RecordsList />);
+    fireEvent.click(await screen.findByRole("button", { name: "查看" }));
+    await screen.findByText("请介绍岗位");
+    fireEvent.click(screen.getByRole("button", { name: "导出延迟数据 CSV" }));
+    await waitFor(() =>
+      expect(commands.exportSessionLatency).toHaveBeenCalledWith("sess-1", "csv"),
+    );
+    expect(screen.getByRole("status").textContent).toContain("sess-1-latency.latency.csv");
+
+    vi.mocked(commands.exportSessionLatency).mockResolvedValue({
+      ok: true,
+      data: { path: "C:/data/exports/sess-1-latency.latency.trace.json" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "导出时间线 Chrome Trace JSON" }));
+    await waitFor(() =>
+      expect(commands.exportSessionLatency).toHaveBeenCalledWith("sess-1", "trace"),
+    );
+    expect(screen.getByRole("status").textContent).toContain("latency.trace.json");
+  });
+
+  it("导出失败显示错误码信息", async () => {
+    vi.mocked(commands.exportSessionLatency).mockResolvedValue({
+      ok: false,
+      error: { code: "SESSION_EXPORT_WRITE_FAILED", message: "Session export failed", requestId: "r2", retryable: false },
+    });
+    render(<RecordsList />);
+    fireEvent.click(await screen.findByRole("button", { name: "查看" }));
+    await screen.findByText("请介绍岗位");
+    fireEvent.click(screen.getByRole("button", { name: "导出延迟数据 CSV" }));
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toContain("SESSION_EXPORT_WRITE_FAILED"),
+    );
   });
 });
