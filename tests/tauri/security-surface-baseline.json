@@ -8,7 +8,7 @@
     "src-tauri/src/contracts.rs": "1e6cc295aa2af7e766717f5fe2800e389e3d0a2c9593e03ac465c93e89f8710b",
     "src-tauri/src/commands/mod.rs": "bb218facb2a0d2cf38f2dde64cb8d44c2446d819a17249d0473d13000625db2d",
     "src-tauri/tauri.conf.json": "9dcf44d661d230973479529095023f8519a82c71a6be2ea3949229f1ecd61939",
-    "src/api/commands.ts": "e5eec508892662d3c9b90a6a1af554a9540651bf35bcc273ca3ba4d14d01cb91",
+    "src/api/commands.ts": "7e56f1438d8177d4756145b975ae70595fb20c40eb8abed0736d5948b1888330",
     "src/generated/bindings.ts": "6daddd53c2046a753aeca8d21c3885d2754a4b72f45a6a0e55dd1d2aad3e980b",
     "tests/tauri/shell-contract.test.mjs": "0f204fc5a965fef536901f80378594f7c7c1e3eca1dfda9b4571b49307cdcb32",
     "src-tauri/tests/security_contract.rs": "cfe58b9d75c1afbc903e24d224adec934f68a51b5d46422e0613ee4121ceabff",
