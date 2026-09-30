@@ -1,0 +1,53 @@
+# CodeQL 代码扫描：JS/TS（src/ 前端）+ Rust（src-tauri/ 核心）。
+# Rust 支持为 GA（官方语言支持矩阵 2026-09 查证，支持 edition 2024）；
+# Linux runner 需 Tauri 系统依赖供 cargo 构建分析。
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '23 4 * * 3'
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript, rust]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Tauri Linux system dependencies
+        if: matrix.language == 'rust'
+        # Tauri v2 官方前置依赖（https://v2.tauri.app/start/prerequisites/），
+        # CodeQL 的 Rust 分析要真实跑 cargo build，缺这些系统库无法编译。
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - name: Setup Rust
+        if: matrix.language == 'rust'
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable 分支（2026-09-30）
+        with:
+          toolchain: '1.96'
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.31.5
+        with:
+          languages: ${{ matrix.language }}
+      - name: Autobuild
+        if: matrix.language == 'rust'
+        uses: github/codeql-action/autobuild@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.31.5
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.31.5
+        with:
+          category: '/language:${{ matrix.language }}'
