@@ -13,6 +13,7 @@ pub mod livestream;
 pub mod materials;
 pub mod migrate;
 pub mod obs;
+pub mod practice;
 pub mod prerequisites;
 pub mod processes;
 pub mod providers;
