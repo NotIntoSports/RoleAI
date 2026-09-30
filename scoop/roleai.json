@@ -1,0 +1,29 @@
+{
+    "$schema": "https://raw.githubusercontent.com/ScoopInstaller/Scoop/master/schema.json",
+    "version": "0.1.0",
+    "description": "本地优先的 Windows 实时语音 AI 角色助手：级联与端到端实时语音、模拟面试训练、本地知识库。",
+    "homepage": "https://github.com/NotIntoSports/RoleAI",
+    "license": "MIT",
+    "notes": "安装包为 NSIS 安装程序，Scoop 以可移植方式解包使用；应用数据保存在 %APPDATA%\\AI Virtual Assistant。",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/NotIntoSports/RoleAI/releases/download/v0.1.0/RoleAI_0.1.0_x64-setup.exe",
+            "hash": "0884488236bf3d51fa913427ffd5f3cb81ac10981c73c546e0c04f7d9d94d498"
+        }
+    },
+    "checkver": {
+        "url": "https://github.com/NotIntoSports/RoleAI/releases/latest",
+        "regex": "/RoleAI/releases/tag/v([\\d.]+)"
+    },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/NotIntoSports/RoleAI/releases/download/v$version/RoleAI_$version_x64-setup.exe",
+                "hash": {
+                    "mode": "extract",
+                    "url": "https://github.com/NotIntoSports/RoleAI/releases/download/v$version/SHA256SUMS.txt"
+                }
+            }
+        }
+    }
+}

@@ -67,3 +67,18 @@ jobs:
           releaseBody: ${{ steps.changelog.outputs.body }}
           releaseDraft: true
           prerelease: false
+      - name: Upload SHA256SUMS to draft release
+        # Scoop 清单（scoop/roleai.json）的 autoupdate 用 extract 模式从该文件取哈希。
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          $bundle = Get-ChildItem "src-tauri/target/release/bundle/nsis/RoleAI_${version}_x64-setup.exe"
+          if (-not $bundle) {
+            Write-Error "未找到安装包 RoleAI_${version}_x64-setup.exe"
+            exit 1
+          }
+          $hash = (Get-FileHash $bundle.FullName -Algorithm SHA256).Hash.ToLower()
+          "$hash  $($bundle.Name)" | Out-File -Encoding ascii SHA256SUMS.txt
+          gh release upload "${{ github.ref_name }}" SHA256SUMS.txt --clobber
