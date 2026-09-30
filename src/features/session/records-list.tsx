@@ -133,6 +133,23 @@ export function RecordsList() {
     }
   }
 
+  async function exportLatency(format: "csv" | "trace") {
+    if (!detail) return;
+    setBusy(true);
+    try {
+      const result = await api.exportSessionLatency(detail.session.id, format);
+      if (!result.ok) {
+        setMessage(errorText(result.error));
+        return;
+      }
+      setMessage(format === "csv" ? `延迟数据已导出：${result.data.path}` : `时间线已导出（Perfetto / chrome://tracing 可打开）：${result.data.path}`);
+    } catch {
+      setMessage("IPC_UNAVAILABLE：本地操作失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <section className="service-panel records-list" aria-labelledby="records-list-heading">
       <div className="library-heading">
@@ -161,6 +178,24 @@ export function RecordsList() {
               </button>
               <button className="button-ghost" disabled={busy} type="button" onClick={() => void exportRecord("text")}>
                 导出文本
+              </button>
+              <button
+                className="button-ghost"
+                disabled={busy}
+                type="button"
+                aria-label="导出延迟数据 CSV"
+                onClick={() => void exportLatency("csv")}
+              >
+                导出延迟数据
+              </button>
+              <button
+                className="button-ghost"
+                disabled={busy}
+                type="button"
+                aria-label="导出时间线 Chrome Trace JSON"
+                onClick={() => void exportLatency("trace")}
+              >
+                导出时间线
               </button>
             </div>
           </div>

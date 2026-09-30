@@ -6,7 +6,7 @@ mod embeddings;
 mod ids;
 mod materials;
 mod providers;
-mod realtime_pump;
+pub(crate) mod realtime_pump;
 mod roles;
 pub(crate) mod sessions;
 

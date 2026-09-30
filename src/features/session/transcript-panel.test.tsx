@@ -34,6 +34,7 @@ function panelProps(overrides: Partial<Parameters<typeof TranscriptPanel>[0]> = 
     busy: false,
     unusedMaterials: false,
     showTranscriptOnlyNotes: false,
+    showLatency: false,
     onTriggerAssistant: () => {},
     onCopy: () => {},
     onAdjustConfiguration: () => {},
@@ -89,5 +90,50 @@ describe("TranscriptPanel 自动滚动", () => {
     view.rerender(<TranscriptPanel {...panelProps({ transcript: "新的 partial 文本" })} />);
 
     expect(scrollIntoView).toHaveBeenCalledWith({ block: "end" });
+  });
+});
+
+describe("TranscriptPanel 延迟瀑布条", () => {
+  const timedTurn = turn({
+    latency: {
+      routeId: "route-1",
+      mode: "cascade",
+      interrupted: false,
+      timeline: {
+        speechStartedMs: null,
+        speechStoppedMs: null,
+        transcriptDoneMs: null,
+        responseCreatedMs: null,
+        firstAudioMs: null,
+        responseDoneMs: null,
+        asrDoneMs: 100,
+        retrievalDoneMs: 150,
+        llmFirstTokenMs: 300,
+        llmDoneMs: 500,
+        ttsDoneMs: 700,
+        playbackStartedMs: null,
+        playbackDoneMs: null,
+      },
+    },
+  });
+
+  afterEach(() => cleanup());
+
+  it("showLatency 且轮次有 latency 时，AI 回复下渲染瀑布条", () => {
+    render(
+      <TranscriptPanel
+        {...panelProps({ historyTurns: [timedTurn], turns: [timedTurn], showLatency: true })}
+      />,
+    );
+    expect(screen.getByRole("button", { name: /第 1 轮延迟 600 毫秒/ })).toBeTruthy();
+  });
+
+  it("showLatency=false 时不渲染瀑布条", () => {
+    render(
+      <TranscriptPanel
+        {...panelProps({ historyTurns: [timedTurn], turns: [timedTurn], showLatency: false })}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /延迟/ })).toBeNull();
   });
 });

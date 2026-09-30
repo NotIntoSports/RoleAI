@@ -138,6 +138,7 @@ pub fn run() {
             commands::session_stop,
             commands::session_set_mode,
             commands::session_export,
+            commands::session_latency_export,
             commands::session_list,
             commands::session_get,
             commands::session_delete,

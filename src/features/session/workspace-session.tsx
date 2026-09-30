@@ -22,6 +22,7 @@ import {
 import { SessionToolbar } from "./session-toolbar";
 import { TranscriptPanel } from "./transcript-panel";
 import { AgentToolsPanel } from "./agent-tools-panel";
+import { useLatencyWaterfallPreference } from "./latency-preference";
 import type {
   RuntimeStatus,
   PreflightIssue,
@@ -106,6 +107,8 @@ export function WorkspaceSession({
   const [meetingPid, setMeetingPid] = useState("");
   const [audioOutputs, setAudioOutputs] = useState<AudioOutputDevice[]>([]);
   const [outputDeviceId, setOutputDeviceId] = useState("");
+  // 设置页「性能」面板可关的轮次延迟瀑布条（localStorage 偏好，默认开）。
+  const latencyWaterfallEnabled = useLatencyWaterfallPreference();
   const [virtualAudio, setVirtualAudio] = useState<VirtualAudioPreparation | null>(null);
   const [installingAudio, setInstallingAudio] = useState(false);
   const [audioPreparationPhase, setAudioPreparationPhase] = useState("checking");
@@ -561,6 +564,7 @@ export function WorkspaceSession({
         busy={busy}
         unusedMaterials={unusedMaterials}
         showTranscriptOnlyNotes={inputSource === "meeting" && selectedRoleScenario === "meetingAssistant"}
+        showLatency={latencyWaterfallEnabled}
         onTriggerAssistant={triggerAssistant}
         onCopy={copyText}
         onAdjustConfiguration={() => {

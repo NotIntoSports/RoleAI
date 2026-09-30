@@ -13,7 +13,7 @@ import type {
 } from "../../generated/bindings";
 
 import { DEMO_MATERIALS, type DemoMaterialDoc } from "./materials-data";
-import { DEMO_SESSIONS } from "./records-data";
+import { DEMO_SESSIONS, seedTurnLatency } from "./records-data";
 import { parseState, stringifyState } from "./util";
 
 const STORAGE_KEY = "roleai.demo.backend.v1";
@@ -186,7 +186,7 @@ function seedLibrary(): Pick<
   );
   const sessions: SessionSummary[] = [];
   const sessionTurns: Record<string, SessionTurnView[]> = {};
-  for (const seed of DEMO_SESSIONS) {
+  for (const [sessionIndex, seed] of DEMO_SESSIONS.entries()) {
     sessions.push({
       id: seed.id,
       status: seed.status,
@@ -209,6 +209,7 @@ function seedLibrary(): Pick<
         snippet: citation.snippet,
       })),
       createdAt: seed.startedAt,
+      latency: seedTurnLatency(seed.transportMode, sessionIndex, index),
     }));
   }
   return { materials, materialDocs, sessions, sessionTurns };

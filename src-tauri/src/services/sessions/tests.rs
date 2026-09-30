@@ -2263,3 +2263,39 @@ fn dropped_finalize_keeps_a_newer_finalizes_guard() {
         "newer finalize B must still own the guard"
     );
 }
+
+#[test]
+fn cascade_finalize_writes_stage_timeline_into_turn_meta() {
+    let (_directory, database) = opened();
+    let config = ready_public_config();
+    let mut service = SessionService::with_sink(RecordingSink::default());
+    match service.start(&database, &config, true, false).unwrap() {
+        SessionStartOutcome::Started { .. } => {}
+        SessionStartOutcome::Blocked { issues } => panic!("blocked: {issues:?}"),
+    }
+    let asr = ScriptedAsr::ok("ignored");
+    let llm = ScriptedLlm::ok("时间线回答");
+    let tts = ScriptedTts::ok(&[1, 2, 3]);
+    let embed = UnusedEmbed;
+    let probes = cascaded_probes(&asr, &llm, &tts, &embed);
+    service
+        .finalize_utterance(
+            &database,
+            &config,
+            &probes,
+            credentials(),
+            Some("时间线问题"),
+        )
+        .unwrap();
+
+    let meta = latest_turn_meta(&database, service.session_id().unwrap());
+    assert_eq!(meta["latencyMode"], "cascade");
+    // 手动文本轮无 ASR 调用，但各阶段锚点都应有数值（宽松上界防负载抖动）。
+    for stage in ["asrDoneMs", "retrievalDoneMs", "llmDoneMs", "ttsDoneMs"] {
+        let value = meta["timeline"][stage].as_u64().expect(stage);
+        assert!(value < 5_000, "{stage}={value}");
+    }
+    assert!(meta["timeline"]["llmFirstTokenMs"].is_u64());
+    // 级联「首响」= TTS 完成时刻，透传给既有按线路首响汇总。
+    assert_eq!(meta["latencyMsFirstAudio"], meta["timeline"]["ttsDoneMs"]);
+}

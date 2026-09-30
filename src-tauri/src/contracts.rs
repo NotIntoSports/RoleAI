@@ -59,17 +59,46 @@ pub struct DiagnosticsExportResult {
     pub exported: bool,
 }
 
-/// 单条语音线路的首响延迟与入口丢帧汇总（只读诊断）。
+/// 单阶段的最近秩百分位汇总（只读诊断）。
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct StageLatencySummary {
+    /// 时间线字段名（camelCase，如 `asrDoneMs`）。
+    pub stage: String,
+    pub samples: u32,
+    pub p50_ms: Option<f64>,
+    pub p95_ms: Option<f64>,
+}
+
+/// 单条语音线路在单一模式下的首响延迟、分阶段百分位与入口丢帧汇总（只读诊断）。
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
 pub struct RouteLatencySummary {
     pub route_id: String,
     pub route_label: String,
+    /// "cascade" | "realtime"（旧记录缺 latencyMode 时归一为 realtime）。
+    pub mode: String,
     pub samples: u32,
     pub p50_ms: Option<f64>,
     pub p95_ms: Option<f64>,
+    /// 有样本的阶段才出现在列表内，顺序固定（时间线字段声明序）。
+    pub stages: Vec<StageLatencySummary>,
     pub ingress_dropped_total: u32,
+}
+
+/// 单轮延迟样本（性能面板最近 50 轮折线用，只读诊断）。
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct TurnLatencySample {
+    pub route_id: String,
+    pub mode: String,
+    /// 单轮总延迟：优先 latencyMsFirstAudio，缺省用时间线首末锚点跨度。
+    pub total_ms: Option<f64>,
+    /// turn_meta 事件落库时间（ISO 字符串）。
+    pub created_at: String,
 }
 
 /// 按语音线路汇总的最近会话首响延迟概览（只读诊断）。
@@ -79,6 +108,8 @@ pub struct RouteLatencySummary {
 pub struct DiagnosticsLatencySummary {
     pub sessions_scanned: u32,
     pub routes: Vec<RouteLatencySummary>,
+    /// 最近（至多 50）轮的总延迟样本，最新在前。
+    pub recent_turns: Vec<TurnLatencySample>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
@@ -192,6 +223,22 @@ pub struct SessionCitationView {
     pub snippet: String,
 }
 
+/// 公开契约复用的轮次分阶段时间线（services 层同一结构，camelCase 序列化）。
+pub use crate::services::realtime_pump::TurnTimeline;
+
+/// 单轮延迟时间线视图：线路、模式、打断标注与分阶段毫秒数。
+/// 旧记录没有 timeline 时整段缺省，前端显示「无数据」。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct TurnLatencyView {
+    pub route_id: String,
+    /// "cascade" | "realtime"（读侧自 turn_meta.latencyMode 归一，缺省 realtime）。
+    pub mode: String,
+    pub interrupted: bool,
+    pub timeline: TurnTimeline,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
@@ -211,6 +258,9 @@ pub struct SessionTurnView {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub playback_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub latency: Option<TurnLatencyView>,
     pub id: String,
     #[ts(type = "number")]
     pub turn_index: i64,
@@ -366,6 +416,8 @@ fn generated_bindings() -> String {
         SecretStatus::decl(&config),
         DiagnosticsExportResult::decl(&config),
         DiagnosticsLatencySummary::decl(&config),
+        TurnLatencySample::decl(&config),
+        StageLatencySummary::decl(&config),
         RouteLatencySummary::decl(&config),
         StartupState::decl(&config),
         crate::migrate::LegacyMigrationStatus::decl(&config),
@@ -421,6 +473,8 @@ fn generated_bindings() -> String {
         RuntimeStatus::decl(&config),
         SessionExportResult::decl(&config),
         SessionCitationView::decl(&config),
+        TurnTimeline::decl(&config),
+        TurnLatencyView::decl(&config),
         SessionTurnView::decl(&config),
         SessionDetail::decl(&config),
         SessionTranscriptEvent::decl(&config),
@@ -537,6 +591,9 @@ mod tests {
             "SessionDetail",
             "SessionTurnView",
             "SessionCitationView",
+            "TurnTimeline",
+            "TurnLatencyView",
+            "StageLatencySummary",
             "SessionTranscriptEvent",
             "SessionReplyEvent",
             "SessionPlaybackControlEvent",

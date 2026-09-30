@@ -1053,3 +1053,91 @@
 @media (max-height: 560px) {
   .workspace-page { min-height: 440px; }
 }
+
+/* —— 轮次延迟瀑布条（lane-F F04）—— */
+.latency-waterfall {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  min-width: 0;
+}
+
+.latency-waterfall-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+  padding: 2px 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+}
+
+.latency-waterfall-track {
+  display: flex;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--accent-soft, rgba(127, 127, 127, 0.18));
+}
+
+.latency-waterfall-segment {
+  display: block;
+  min-width: 2px;
+}
+
+.latency-waterfall-total {
+  flex: none;
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.latency-waterfall-flag {
+  flex: none;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.latency-waterfall-details {
+  margin: 6px 0 0;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.latency-waterfall-details th,
+.latency-waterfall-details td {
+  padding: 2px 12px 2px 0;
+  text-align: left;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.latency-waterfall-details th {
+  font-size: 11px;
+}
+
+.latency-waterfall-swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  margin-right: 6px;
+  vertical-align: baseline;
+}
+
+.diagnostics-waterfall-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  color: var(--text-muted);
+  font-size: 13px;
+}

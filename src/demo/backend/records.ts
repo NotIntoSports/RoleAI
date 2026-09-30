@@ -1,6 +1,6 @@
 // 会话记录命令：session_list / get / export / delete。
 // 同时为 B05 的脚本化实时会话提供落库助手（createLiveSession 等）。
-import type { SessionDetail, SessionSummary, SessionTurnView } from "../../generated/bindings";
+import type { SessionDetail, SessionSummary, SessionTurnView, TurnLatencyView } from "../../generated/bindings";
 
 import { getState, updateState } from "./state";
 import { demoId, err, latency, ok } from "./util";
@@ -79,7 +79,7 @@ export function appendLiveTurn(
   sessionId: string,
   userText: string,
   assistantText: string,
-  extras?: { materialsUsed?: boolean; citations?: SessionTurnView["citations"] },
+  extras?: { materialsUsed?: boolean; citations?: SessionTurnView["citations"]; latency?: TurnLatencyView },
 ): SessionTurnView {
   const now = new Date().toISOString();
   const turn: SessionTurnView = {
@@ -104,7 +104,7 @@ export function updateLiveTurnAssistant(
   sessionId: string,
   userText: string,
   assistantText: string,
-  extras?: { materialsUsed?: boolean; citations?: SessionTurnView["citations"] },
+  extras?: { materialsUsed?: boolean; citations?: SessionTurnView["citations"]; latency?: TurnLatencyView },
 ): void {
   const now = new Date().toISOString();
   updateState((s) => {
@@ -128,6 +128,7 @@ export function updateLiveTurnAssistant(
           materialsUsed: extras?.materialsUsed ?? false,
           citations: extras?.citations ?? [],
           createdAt: now,
+          latency: extras?.latency,
         },
       ];
       return;
@@ -137,6 +138,7 @@ export function updateLiveTurnAssistant(
       assistantText,
       materialsUsed: turns[index].materialsUsed || Boolean(extras?.materialsUsed),
       citations: turns[index].citations.length ? turns[index].citations : extras?.citations ?? [],
+      latency: extras?.latency ?? turns[index].latency,
     };
     s.sessionTurns[sessionId] = turns.map((turn, i) => (i === index ? updated : turn));
   });

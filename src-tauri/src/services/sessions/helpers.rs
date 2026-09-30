@@ -385,7 +385,28 @@ pub(super) fn run_e2e_turn(
     let citations = known_text
         .map(|text| retrieve(deps, request, text))
         .unwrap_or_default();
+    // 分阶段打点（相对本函数入口）：e2e 非泵路径的转写/补全/音频随单次请求
+    // 一次性返回，无法拆出 ASR/LLM/TTS 各自的完成点，只记检索、首 token 与
+    // 轮次完成三个锚点（见时间线字段注释）。
+    let started = std::time::Instant::now();
+    let retrieval_done_ms = started.elapsed().as_millis() as u64;
+    let mut timeline = crate::services::realtime_pump::TurnTimeline {
+        retrieval_done_ms: Some(retrieval_done_ms),
+        ..crate::services::realtime_pump::TurnTimeline::default()
+    };
     let instructions = e2e_instructions(active_role_profile(request.config), &citations);
+    // 首个增量快照即首 token：包一层回调记录时间点后转发原钩子。
+    let first_token = std::cell::OnceCell::<Option<u64>>::new();
+    let user_snapshot = hooks.assistant_text;
+    let on_snapshot = |text: &str| {
+        if first_token.get().is_none() {
+            let _ = first_token.set(Some(started.elapsed().as_millis() as u64));
+        }
+        if let Some(snapshot) = user_snapshot {
+            snapshot(text);
+        }
+    };
+    let snapshot_ref: &dyn Fn(&str) = &on_snapshot;
     let turn = if let Some(prompt) = known_text {
         realtime.text_turn(
             RealtimeTextRequest {
@@ -399,7 +420,7 @@ pub(super) fn run_e2e_turn(
                 // 手动输入时用户文本已知，无需流式转写回调。
                 hooks: TurnStreamHooks {
                     user_text: None,
-                    assistant_text: hooks.assistant_text,
+                    assistant_text: Some(snapshot_ref),
                 },
             },
             cancel,
@@ -414,7 +435,10 @@ pub(super) fn run_e2e_turn(
                 sample_rate: request.sample_rate,
                 instructions: &instructions,
                 voice: route_voice,
-                hooks: *hooks,
+                hooks: TurnStreamHooks {
+                    user_text: hooks.user_text,
+                    assistant_text: Some(snapshot_ref),
+                },
             },
             cancel,
         )
@@ -422,6 +446,12 @@ pub(super) fn run_e2e_turn(
     if cancel.load(Ordering::SeqCst) {
         return Err(RealtimeError::Cancelled);
     }
+    // 轮次完成：e2e 非泵路径的补全结束、TTS 音频到达与首包同点收束。
+    let done_ms = started.elapsed().as_millis() as u64;
+    timeline.llm_first_token_ms = first_token.get().copied().flatten();
+    timeline.llm_done_ms = Some(done_ms);
+    timeline.tts_done_ms = Some(done_ms);
+    timeline.response_done_ms = Some(done_ms);
     let user_text = known_text.map(ToOwned::to_owned).unwrap_or(turn.user_text);
     Ok(CascadeTurn {
         user_text,
@@ -430,6 +460,7 @@ pub(super) fn run_e2e_turn(
         materials_used: !citations.is_empty(),
         citations,
         error_code: None,
+        timeline: Box::new(timeline),
     })
 }
 

@@ -39,6 +39,9 @@ pub struct CascadeTurn {
     pub citations: Vec<TurnCitation>,
     pub materials_used: bool,
     pub error_code: Option<&'static str>,
+    /// 分阶段延迟时间线（相对本函数入口；落库进 turn_meta，见 finalize.rs）。
+    /// 装箱控制 NetworkOutcome::Turn 变体尺寸（clippy large_enum_variant）。
+    pub timeline: Box<crate::services::realtime_pump::TurnTimeline>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -77,6 +80,11 @@ pub fn run_cascade_turn(
     cancel: &AtomicBool,
     hooks: &TurnStreamHooks<'_>,
 ) -> Result<CascadeTurn, CascadeError> {
+    let started = std::time::Instant::now();
+    let mut timeline = crate::services::realtime_pump::TurnTimeline::default();
+    let since = |slot: &mut Option<u64>| {
+        *slot = Some(started.elapsed().as_millis() as u64);
+    };
     cancelled(cancel)?;
     if !deps.runtime.can_answer() {
         return Err(CascadeError::AnswerBlocked);
@@ -120,8 +128,10 @@ pub fn run_cascade_turn(
 
     cancelled(cancel)?;
     let user_text = resolve_user_text(deps, &request, &asr_endpoint, asr_model_id)?;
+    since(&mut timeline.asr_done_ms);
     cancelled(cancel)?;
     let citations = retrieve(deps, &request, &user_text);
+    since(&mut timeline.retrieval_done_ms);
     cancelled(cancel)?;
     let messages = build_messages(
         role,
@@ -131,17 +141,29 @@ pub fn run_cascade_turn(
         &citations,
     );
     let assistant_text = {
-        let noop = |_: &str| {};
-        let on_snapshot: &dyn Fn(&str) = hooks.assistant_text.unwrap_or(&noop);
-        run_with_retry(deps.sleep, classify_cascade, || {
+        // 首个增量快照即 LLM 首 token：包一层回调记录时间点后转发原钩子。
+        let first_token = std::cell::OnceCell::<Option<u64>>::new();
+        let user_snapshot = hooks.assistant_text;
+        let on_snapshot = |text: &str| {
+            if first_token.get().is_none() {
+                let _ = first_token.set(Some(started.elapsed().as_millis() as u64));
+            }
+            if let Some(snapshot) = user_snapshot {
+                snapshot(text);
+            }
+        };
+        let result = run_with_retry(deps.sleep, classify_cascade, || {
             deps.llm.complete_streaming(
                 &llm_endpoint,
                 request.credentials.llm,
                 llm_model_id,
                 &messages,
-                on_snapshot,
+                &on_snapshot,
             )
-        })?
+        });
+        timeline.llm_first_token_ms = first_token.get().copied().flatten();
+        since(&mut timeline.llm_done_ms);
+        result?
     };
     cancelled(cancel)?;
     let (tts_pcm, error_code) = match voice_id {
@@ -154,7 +176,10 @@ pub fn run_cascade_turn(
                 &assistant_text,
             )
         }) {
-            Ok(pcm) => (pcm, None),
+            Ok(pcm) => {
+                since(&mut timeline.tts_done_ms);
+                (pcm, None)
+            }
             Err(_) => (Vec::new(), Some("TTS_FAILED")),
         },
         None => (Vec::new(), Some("TTS_FAILED")),
@@ -167,6 +192,7 @@ pub fn run_cascade_turn(
         materials_used: !citations.is_empty(),
         citations,
         error_code,
+        timeline: Box::new(timeline),
     })
 }
 

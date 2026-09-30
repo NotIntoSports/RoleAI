@@ -12,9 +12,37 @@ export type SecretStatus = { reference: string, configured: boolean, };
 
 export type DiagnosticsExportResult = { exported: boolean, };
 
-export type DiagnosticsLatencySummary = { sessionsScanned: number, routes: Array<RouteLatencySummary>, };
+export type DiagnosticsLatencySummary = { sessionsScanned: number, routes: Array<RouteLatencySummary>, 
+/**
+ * 最近（至多 50）轮的总延迟样本，最新在前。
+ */
+recentTurns: Array<TurnLatencySample>, };
 
-export type RouteLatencySummary = { routeId: string, routeLabel: string, samples: number, p50Ms: number | null, p95Ms: number | null, ingressDroppedTotal: number, };
+export type TurnLatencySample = { routeId: string, mode: string, 
+/**
+ * 单轮总延迟：优先 latencyMsFirstAudio，缺省用时间线首末锚点跨度。
+ */
+totalMs: number | null, 
+/**
+ * turn_meta 事件落库时间（ISO 字符串）。
+ */
+createdAt: string, };
+
+export type StageLatencySummary = { 
+/**
+ * 时间线字段名（camelCase，如 `asrDoneMs`）。
+ */
+stage: string, samples: number, p50Ms: number | null, p95Ms: number | null, };
+
+export type RouteLatencySummary = { routeId: string, routeLabel: string, 
+/**
+ * "cascade" | "realtime"（旧记录缺 latencyMode 时归一为 realtime）。
+ */
+mode: string, samples: number, p50Ms: number | null, p95Ms: number | null, 
+/**
+ * 有样本的阶段才出现在列表内，顺序固定（时间线字段声明序）。
+ */
+stages: Array<StageLatencySummary>, ingressDroppedTotal: number, };
 
 export type StartupState = { "kind": "ready" } | { "kind": "migrated" } | { "kind": "recoverable", error: PublicError, } | { "kind": "invalid", error: PublicError, };
 
@@ -123,7 +151,43 @@ export type SessionExportResult = { path: string, };
 
 export type SessionCitationView = { materialId: string, chunkId: string, snippet: string, };
 
-export type SessionTurnView = { webSources?: Array<WebSource>, webDegraded?: boolean, triggerSource?: string, userConfirmed?: boolean, playbackStatus?: string, id: string, turnIndex: number, userText: string, assistantText: string, materialsUsed: boolean, citations: Array<SessionCitationView>, createdAt: string, };
+export type TurnTimeline = { speechStartedMs: number | null, speechStoppedMs: number | null, transcriptDoneMs: number | null, responseCreatedMs: number | null, firstAudioMs: number | null, responseDoneMs: number | null, 
+/**
+ * ASR 转写完成（级联；相对轮次起点）。
+ */
+asrDoneMs: number | null, 
+/**
+ * RAG 资料检索完成（级联与 e2e 文本轮）。
+ */
+retrievalDoneMs: number | null, 
+/**
+ * LLM 首个增量快照（级联与 e2e 非泵轮的首 token）。
+ */
+llmFirstTokenMs: number | null, 
+/**
+ * LLM 补全结束。
+ */
+llmDoneMs: number | null, 
+/**
+ * TTS 合成完成（级联中即「首包可播音频就绪」）。
+ */
+ttsDoneMs: number | null, 
+/**
+ * 播放开始（级联 finalize 播放阶段；预留，泵路径由前端 WebAudio 掌握）。
+ */
+playbackStartedMs: number | null, 
+/**
+ * 播放结束或被打断（预留，同上）。
+ */
+playbackDoneMs: number | null, };
+
+export type TurnLatencyView = { routeId: string, 
+/**
+ * "cascade" | "realtime"（读侧自 turn_meta.latencyMode 归一，缺省 realtime）。
+ */
+mode: string, interrupted: boolean, timeline: TurnTimeline, };
+
+export type SessionTurnView = { webSources?: Array<WebSource>, webDegraded?: boolean, triggerSource?: string, userConfirmed?: boolean, playbackStatus?: string, latency?: TurnLatencyView, id: string, turnIndex: number, userText: string, assistantText: string, materialsUsed: boolean, citations: Array<SessionCitationView>, createdAt: string, };
 
 export type SessionDetail = { session: SessionSummary, turns: Array<SessionTurnView>, };
 

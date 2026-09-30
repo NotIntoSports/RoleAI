@@ -4,15 +4,45 @@ use super::*;
 
 /// 泵完成后交给 SessionService 落库的一轮。
 /// 逐轮关键事件相对泵启动（≈会话开始）的毫秒数，写入 turn_meta 定位慢在哪一段。
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct TurnTimeline {
+    #[ts(type = "number | null")]
     pub speech_started_ms: Option<u64>,
+    #[ts(type = "number | null")]
     pub speech_stopped_ms: Option<u64>,
+    #[ts(type = "number | null")]
     pub transcript_done_ms: Option<u64>,
+    #[ts(type = "number | null")]
     pub response_created_ms: Option<u64>,
+    #[ts(type = "number | null")]
     pub first_audio_ms: Option<u64>,
+    #[ts(type = "number | null")]
     pub response_done_ms: Option<u64>,
+    // —— 以下为级联（cascade）/端到端非泵路径的分阶段打点；Realtime 泵路径
+    // 不产生这些阶段，序列化为 null（读侧按「缺失即无该阶段」处理）。 ——
+    /// ASR 转写完成（级联；相对轮次起点）。
+    #[ts(type = "number | null")]
+    pub asr_done_ms: Option<u64>,
+    /// RAG 资料检索完成（级联与 e2e 文本轮）。
+    #[ts(type = "number | null")]
+    pub retrieval_done_ms: Option<u64>,
+    /// LLM 首个增量快照（级联与 e2e 非泵轮的首 token）。
+    #[ts(type = "number | null")]
+    pub llm_first_token_ms: Option<u64>,
+    /// LLM 补全结束。
+    #[ts(type = "number | null")]
+    pub llm_done_ms: Option<u64>,
+    /// TTS 合成完成（级联中即「首包可播音频就绪」）。
+    #[ts(type = "number | null")]
+    pub tts_done_ms: Option<u64>,
+    /// 播放开始（级联 finalize 播放阶段；预留，泵路径由前端 WebAudio 掌握）。
+    #[ts(type = "number | null")]
+    pub playback_started_ms: Option<u64>,
+    /// 播放结束或被打断（预留，同上）。
+    #[ts(type = "number | null")]
+    pub playback_done_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
