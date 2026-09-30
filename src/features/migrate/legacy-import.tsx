@@ -1,8 +1,10 @@
 import { FormEvent, useState } from "react";
 
 import { importLegacySource } from "../../api/commands";
+import { t, useT } from "../../i18n";
 
 export function LegacyImportPanel() {
+  useT();
   const [path, setPath] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -13,12 +15,12 @@ export function LegacyImportPanel() {
     try {
       const result = await importLegacySource(path.trim());
       if (result.ok) {
-        setMessage(`已导入 ${result.data.sessions} 个会话，${result.data.turns} 轮`);
+        setMessage(t("migrate.legacyImport.imported", { sessions: result.data.sessions, turns: result.data.turns }));
       } else {
         setMessage(`${result.error.code}：${result.error.message}`);
       }
     } catch {
-      setMessage("IPC_UNAVAILABLE：无法导入旧会话");
+      setMessage(t("migrate.legacyImport.ipcFailed"));
     } finally {
       setBusy(false);
     }
@@ -26,19 +28,19 @@ export function LegacyImportPanel() {
 
   return (
     <section className="service-panel settings-section" aria-labelledby="legacy-import-heading">
-      <h2 className="section-heading" id="legacy-import-heading">导入旧会话</h2>
-      <p className="configuration-description">从旧版本的数据目录导入会话记录。</p>
+      <h2 className="section-heading" id="legacy-import-heading">{t("migrate.legacyImport.heading")}</h2>
+      <p className="configuration-description">{t("migrate.legacyImport.description")}</p>
       <form className="service-form configuration-migration-form" onSubmit={(event) => void submit(event)}>
-        <label htmlFor="legacy-source-path">旧数据目录</label>
+        <label htmlFor="legacy-source-path">{t("migrate.legacyImport.pathLabel")}</label>
         <input
           id="legacy-source-path"
           name="legacySourcePath"
           value={path}
           onChange={(event) => setPath(event.target.value)}
-          placeholder="例如 E:\\old-install 或 .desktop-runtime"
+          placeholder={t("migrate.legacyImport.pathPlaceholder")}
         />
         <button className="button-primary" type="submit" disabled={busy || path.trim().length === 0}>
-          导入旧会话
+          {t("migrate.legacyImport.action")}
         </button>
       </form>
       {message ? <p className="services-message" role="status">{message}</p> : null}
