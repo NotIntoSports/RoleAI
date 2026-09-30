@@ -2,6 +2,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { EmptyState } from "../../components/empty-state";
 import { ErrorNotice } from "../../components/error-notice";
+import {
+  setLatencyWaterfallEnabled,
+  useLatencyWaterfallPreference,
+} from "../session/latency-preference";
 import type { DiagnosticsLatencySummary, RouteLatencySummary } from "../../generated/bindings";
 
 export type { DiagnosticsLatencySummary, RouteLatencySummary };
@@ -25,6 +29,7 @@ interface DiagnosticsPanelProps {
 export function DiagnosticsPanel({ loadSummary }: DiagnosticsPanelProps) {
   const [state, setState] = useState<PanelState>({ kind: "loading" });
   const epochRef = useRef(0);
+  const latencyWaterfallEnabled = useLatencyWaterfallPreference();
 
   const load = useCallback(() => {
     const epoch = ++epochRef.current;
@@ -44,6 +49,14 @@ export function DiagnosticsPanel({ loadSummary }: DiagnosticsPanelProps) {
   return (
     <section className="service-panel diagnostics-panel" aria-labelledby="diagnostics-panel-heading">
       <h3 className="section-heading" id="diagnostics-panel-heading">诊断延迟</h3>
+      <label className="diagnostics-waterfall-toggle">
+        <input
+          type="checkbox"
+          checked={latencyWaterfallEnabled}
+          onChange={(event) => setLatencyWaterfallEnabled(event.target.checked)}
+        />
+        在对话中显示每轮延迟瀑布条
+      </label>
       {state.kind === "ready" && (
         <p className="muted">已扫描会话：{state.data.sessionsScanned}</p>
       )}

@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import "@testing-library/jest-dom/vitest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { LATENCY_WATERFALL_STORAGE_KEY } from "../session/latency-preference";
 import type { DiagnosticsLatencySummary } from "./diagnostics-panel";
 import { DiagnosticsPanel } from "./diagnostics-panel";
 
@@ -106,5 +107,19 @@ describe("DiagnosticsPanel", () => {
     expect((screen.getByRole("button", { name: "刷新" }) as HTMLButtonElement).disabled).toBe(true);
     second.resolve({ ok: true, data: summary });
     await waitFor(() => expect((screen.getByRole("button", { name: "刷新" }) as HTMLButtonElement).disabled).toBe(false));
+  });
+});
+
+describe("DiagnosticsPanel 瀑布条开关", () => {
+  afterEach(cleanup);
+
+  it("勾选开关写入显示偏好", async () => {
+    const loadSummary = vi.fn(async (): Promise<LoadResult> => ({ ok: true, data: summary }));
+    render(<DiagnosticsPanel loadSummary={loadSummary} />);
+    const toggle = await screen.findByRole("checkbox", { name: "在对话中显示每轮延迟瀑布条" });
+    expect((toggle as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(toggle);
+    expect((toggle as HTMLInputElement).checked).toBe(false);
+    expect(window.localStorage.getItem(LATENCY_WATERFALL_STORAGE_KEY)).toBe("off");
   });
 });

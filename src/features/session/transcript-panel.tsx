@@ -2,6 +2,7 @@ import { Fragment, useEffect, useRef, type FormEvent } from "react";
 import { Bot, Copy, MessageSquare, Volume2 } from "lucide-react";
 
 import { clockOf } from "./workspace-format";
+import { LatencyWaterfall } from "./latency-waterfall";
 import type { SessionTurnView } from "../../generated/bindings";
 
 interface TranscriptPanelProps {
@@ -20,6 +21,8 @@ interface TranscriptPanelProps {
   unusedMaterials: boolean;
   /** 会议助手 + 会议音频：有用户文本、无回答的历史轮标注「未点名，仅转写」。 */
   showTranscriptOnlyNotes: boolean;
+  /** 设置里可关的轮次延迟瀑布条（无 timeline 数据的旧轮次不显示）。 */
+  showLatency: boolean;
   /** 最后一轮仅转写标注旁的追答入口（与工具栏「让助手回答」同一路径）。 */
   onTriggerAssistant: () => void;
   onCopy: (text: string) => void;
@@ -41,6 +44,7 @@ export function TranscriptPanel({
   busy,
   unusedMaterials,
   showTranscriptOnlyNotes,
+  showLatency,
   onTriggerAssistant,
   onCopy,
   onAdjustConfiguration,
@@ -97,6 +101,9 @@ export function TranscriptPanel({
                     </button>
                   </header>
                   <p>{item.assistantText}</p>
+                  {showLatency && item.latency && (
+                    <LatencyWaterfall latency={item.latency} turnIndex={item.turnIndex} />
+                  )}
                 </article>
               )}
             </Fragment>
