@@ -1,0 +1,69 @@
+# Release：推送 v* 标签时构建 Windows 安装包并创建草稿 Release。
+# 草稿由用户在 GitHub Releases 页检查后手动发布（见 lanes/G-platform.md G01）。
+# 不做代码签名。
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  # 创建草稿 Release 并上传安装包所需的最小权限。
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable 分支（2026-09-30）
+        with:
+          toolchain: '1.96'
+      - name: Setup .NET SDK
+        # AudioBridge（C# net10.0-windows）是打包资源之一；release 构建不像 debug
+        # 那样由 build.rs 生成占位文件，必须先真实构建 sidecar。
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.x
+      - name: Install dependencies
+        run: npm ci
+      - name: Build AudioBridge sidecar
+        shell: pwsh
+        run: ./scripts/build-audio-bridge.ps1
+      - name: Extract release notes from CHANGELOG
+        id: changelog
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          $version = $env:TAG.TrimStart('v')
+          $changelog = Get-Content CHANGELOG.md -Raw
+          $pattern = '(?s)## \[' + [regex]::Escape($version) + '\].*?(?=\r?\n## \[|\z)'
+          $match = [regex]::Match($changelog, $pattern)
+          if (-not $match.Success) {
+            Write-Error "CHANGELOG.md 中没有版本 $version 的段落"
+            exit 1
+          }
+          $body = $match.Value.Trim()
+          # 多行 step output 需用 heredoc 定界符写入 GITHUB_OUTPUT。
+          Add-Content $env:GITHUB_OUTPUT 'body<<RELEASE_NOTES_EOF'
+          Add-Content $env:GITHUB_OUTPUT $body
+          Add-Content $env:GITHUB_OUTPUT 'RELEASE_NOTES_EOF'
+      - name: Build app and upload to draft release
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'RoleAI ${{ github.ref_name }}'
+          releaseBody: ${{ steps.changelog.outputs.body }}
+          releaseDraft: true
+          prerelease: false
