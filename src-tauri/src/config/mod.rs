@@ -4,6 +4,7 @@
 
 mod locator;
 pub mod presets;
+pub mod presets_local;
 mod store;
 
 #[cfg(test)]

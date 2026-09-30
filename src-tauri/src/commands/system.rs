@@ -297,6 +297,10 @@ pub fn meeting_process_list_blocking(
 ) -> CommandResult<Vec<crate::processes::MeetingProcess>> {
     match crate::processes::list_meeting_processes(&crate::processes::PowerShellProcessEnumerator) {
         Ok(data) => CommandResult::Ok { data },
+        Err(crate::processes::ProcessError::PlatformUnsupported) => service_error(
+            crate::processes::ProcessError::PlatformUnsupported.code(),
+            "当前平台不支持会议进程采集",
+        ),
         Err(_) => service_error(
             "MEETING_PROCESS_ENUM_FAILED",
             "无法读取会议进程，请确认会议软件已打开",
@@ -309,6 +313,11 @@ pub fn audio_output_list_blocking<R: tauri::Runtime>(
     app: AppHandle<R>,
     _state: State<'_, AppState>,
 ) -> CommandResult<Vec<crate::audio::playback::AudioOutputDevice>> {
+    if !cfg!(windows) {
+        // AudioBridge 是 Windows 专属 sidecar；非 Windows 返回稳定错误码，
+        // 前端据此隐藏回环音频设备入口。
+        return service_error("PLATFORM_UNSUPPORTED", "当前平台不支持本机回环音频采集");
+    }
     let bridge = if cfg!(debug_assertions) {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../native/AudioBridge/publish/AudioBridge.exe")
@@ -331,6 +340,9 @@ blocking_command!(with_events audio_output_list, audio_output_list_blocking() ->
 pub(super) fn audio_bridge_path<R: tauri::Runtime>(
     app: &AppHandle<R>,
 ) -> Result<std::path::PathBuf, &'static str> {
+    if !cfg!(windows) {
+        return Err("PLATFORM_UNSUPPORTED");
+    }
     if cfg!(debug_assertions) {
         Ok(std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../native/AudioBridge/publish/AudioBridge.exe"))

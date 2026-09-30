@@ -7,9 +7,25 @@ fn manifest_dir() -> PathBuf {
 }
 
 /// Explicit allow-list shape for a capability permission entry:
-/// `^(core:default|allow-[a-z0-9-]+)$`. Implemented without a regex dependency.
+/// `^(core:default|allow-[a-z0-9-]+|<枚举插件>:<permission>)$`。
+/// 插件命名空间逐一枚举（G07 引入 updater:default）；新增插件权限必须显式
+/// 更新本契约，与安全面基线同一提交。无 regex 依赖。
+fn is_plugin_permission(permission: &str) -> bool {
+    // 官方 Tauri 插件权限形如 `<plugin>:<permission>`；只接受枚举过的插件名。
+    match permission.split_once(':') {
+        Some((plugin, rest)) => {
+            matches!(plugin, "updater")
+                && !rest.is_empty()
+                && rest
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        }
+        None => false,
+    }
+}
+
 fn matches_permission_shape(permission: &str) -> bool {
-    if permission == "core:default" {
+    if permission == "core:default" || is_plugin_permission(permission) {
         return true;
     }
     match permission.strip_prefix("allow-") {
@@ -162,6 +178,9 @@ fn each_application_command_has_one_explicit_permission() {
         .iter()
         .filter_map(Value::as_str)
         .filter(|permission| *permission != "core:default")
+        // 官方插件命名空间权限（如 updater:default）不属于命令映射，
+        // 在下方按枚举清单单独校验。
+        .filter(|permission| !is_plugin_permission(permission))
         .collect::<Vec<_>>();
     assert_eq!(granted.len(), allowed.len());
     for command in &commands {
@@ -169,6 +188,20 @@ fn each_application_command_has_one_explicit_permission() {
         assert!(
             granted.contains(&identifier.as_str()),
             "capability missing {identifier}"
+        );
+    }
+    // 插件权限清单：新增插件权限必须先扩展 is_plugin_permission 的枚举。
+    let plugin_expected = ["updater:default"];
+    let all_granted = capability["permissions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    for expected in plugin_expected {
+        assert!(
+            all_granted.contains(&expected),
+            "capability missing expected plugin permission {expected}"
         );
     }
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Activity, ArchiveRestore, Palette, UserRound } from "lucide-react";
+import { Activity, ArchiveRestore, Palette, RefreshCw, UserRound } from "lucide-react";
 
 import { getDiagnosticsLatencySummary, getLegacyMigrationStatus } from "../../api/commands";
 import { AppearanceSettings } from "../../features/appearance/appearance-settings";
@@ -7,6 +7,7 @@ import { DiagnosticsPanel } from "../../features/diagnostics/diagnostics-panel";
 import { LegacyImportPanel } from "../../features/migrate/legacy-import";
 import { ReenterSecretsBanner } from "../../features/migrate/reenter-secrets-banner";
 import { RoleEditor } from "../../features/roles/role-editor";
+import { UpdaterPanel } from "../../features/updater/updater-panel";
 import type { LegacyMigrationStatus } from "../../generated/bindings";
 import { PageShell } from "../page-shell";
 import "../../styles/configuration.css";
@@ -14,6 +15,7 @@ import "../../styles/configuration.css";
 const categories = [
   { id: "appearance", label: "外观", icon: Palette },
   { id: "roles", label: "角色", icon: UserRound },
+  { id: "updater", label: "应用更新", icon: RefreshCw },
   { id: "migration", label: "数据迁移", icon: ArchiveRestore },
   { id: "diagnostics", label: "诊断", icon: Activity },
 ] as const;
@@ -50,6 +52,7 @@ export function SettingsPage() {
         <div className="configuration-content">
           <section id="settings-panel-appearance" hidden={category !== "appearance"} aria-labelledby="settings-category-appearance"><AppearanceSettings /></section>
           <section id="settings-panel-roles" hidden={category !== "roles"} aria-labelledby="settings-category-roles"><RoleEditor /></section>
+          <section id="settings-panel-updater" hidden={category !== "updater"} aria-labelledby="settings-category-updater"><UpdaterPanel /></section>
           <section id="settings-panel-migration" hidden={category !== "migration"} aria-labelledby="settings-category-migration"><LegacyImportPanel /></section>
           <section id="settings-panel-diagnostics" hidden={category !== "diagnostics"} aria-labelledby="settings-category-diagnostics">
             {category === "diagnostics" ? <DiagnosticsPanel loadSummary={getDiagnosticsLatencySummary} /> : null}

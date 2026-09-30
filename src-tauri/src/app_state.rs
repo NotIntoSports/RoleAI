@@ -12,10 +12,15 @@ use crate::{
     diagnostics::{DiagnosticError, DiagnosticEvent, DiagnosticWriter},
     error::PublicError,
     migrate::{self, LegacySearchRoot},
-    secrets::{SecretError, SecretService, SecretStore, WindowsSecretStore},
+    secrets::{SecretError, SecretService, SecretStore},
     services::{SessionControl, SessionService},
     sessions::SessionStore,
 };
+// Windows 凭据管理器后端仅在 Windows 编译；其它平台回退内存实现（见 default_secret_store）。
+#[cfg(windows)]
+use crate::secrets::WindowsSecretStore;
+#[cfg(not(windows))]
+use crate::secrets::MemorySecretStore;
 
 #[derive(Debug, Clone)]
 pub struct AppPaths {
@@ -74,16 +79,29 @@ pub enum AppStateError {
     Secrets(#[from] SecretError),
 }
 
+/// 生产默认密钥后端：Windows 用凭据管理器持久化；其它平台回退到内存实现
+/// （应用退出即丢失），并在启动日志明确提示，避免用户误以为密钥已持久化。
+#[cfg(windows)]
+fn default_secret_store() -> Arc<dyn SecretStore> {
+    Arc::new(WindowsSecretStore::new())
+}
+
+#[cfg(not(windows))]
+fn default_secret_store() -> Arc<dyn SecretStore> {
+    tracing::warn!("当前平台不持久化密钥：API Key 仅保存在内存中，应用退出后需重新配置");
+    Arc::new(MemorySecretStore::default())
+}
+
 impl AppState {
     pub fn production(paths: AppPaths) -> Result<Self, AppStateError> {
-        Self::initialize(paths, Arc::new(WindowsSecretStore::new()))
+        Self::initialize(paths, default_secret_store())
     }
 
     pub fn production_namespaced(
         paths: AppPaths,
         secret_namespace: String,
     ) -> Result<Self, AppStateError> {
-        Self::initialize_namespaced(paths, secret_namespace, Arc::new(WindowsSecretStore::new()))
+        Self::initialize_namespaced(paths, secret_namespace, default_secret_store())
     }
 
     pub fn initialize(

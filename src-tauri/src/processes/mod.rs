@@ -41,6 +41,8 @@ pub struct MeetingProcess {
 pub enum ProcessError {
     EnumerationFailed,
     SnapshotInvalid,
+    /// 当前平台不支持会议进程采集（仅非 Windows 的生产枚举器返回）。
+    PlatformUnsupported,
 }
 
 impl ProcessError {
@@ -48,6 +50,7 @@ impl ProcessError {
         match self {
             Self::EnumerationFailed => "MEETING_PROCESS_ENUM_FAILED",
             Self::SnapshotInvalid => "MEETING_PROCESS_SNAPSHOT_INVALID",
+            Self::PlatformUnsupported => "PLATFORM_UNSUPPORTED",
         }
     }
 }
@@ -171,7 +174,9 @@ impl ProcessEnumerator for PowerShellProcessEnumerator {
         }
         #[cfg(not(windows))]
         {
-            Ok(Vec::new())
+            // 非 Windows 没有白名单内的会议进程采集面：返回稳定错误码，
+            // 前端据此隐藏会议采集入口（而非展示空列表）。
+            Err(ProcessError::PlatformUnsupported)
         }
     }
 }

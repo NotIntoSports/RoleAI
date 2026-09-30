@@ -39,8 +39,10 @@ test("root scripts are Tauri-only", async () => {
       `capability must retain baseline permission: ${required}`,
     );
   }
-  // (2) every entry matches the explicit allow-list shape.
-  const shape = /^(core:default|allow-[a-z0-9-]+)$/;
+  // (2) every entry matches an explicit allow-list shape: core 默认、命令 allow-*，
+  // 或官方插件命名空间权限（如 updater:default）。插件名逐一枚举，新增命名空间
+  // 必须显式更新本契约（与安全面基线同一提交）。
+  const shape = /^(core:default|allow-[a-z0-9-]+|(updater):[a-z0-9-]+)$/;
   for (const permission of permissions) {
     assert.match(permission, shape, `unexpected capability permission shape: ${permission}`);
   }

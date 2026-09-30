@@ -25,5 +25,13 @@
       "../scripts/install-prerequisite.ps1": "prerequisite-scripts/install-prerequisite.ps1",
       "resources/models/*.onnx": "resources/models/"
     }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "",
+      "endpoints": [
+        "https://github.com/NotIntoSports/RoleAI/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

@@ -472,6 +472,11 @@ pub fn session_start_blocking<R: tauri::Runtime>(
         Ok(guard) => guard,
         Err(error) => return error,
     };
+    if meeting_pid.is_some() && !cfg!(windows) {
+        // 会议进程采集依赖 Windows 专属 AudioBridge sidecar；非 Windows 返回
+        // 稳定错误码，前端据此隐藏会议采集入口。纯语音会话不受影响。
+        return service_error("PLATFORM_UNSUPPORTED", "当前平台不支持会议进程采集");
+    }
     let bridge = if cfg!(debug_assertions) {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../native/AudioBridge/publish/AudioBridge.exe")

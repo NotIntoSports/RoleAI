@@ -1,0 +1,37 @@
+# Dependabot：依赖升级以可审查的 PR 形式到达。项目所有依赖版本均精确钉死
+# （Cargo 用 =x.y.z，npm 用精确版本），因此每个 PR 都对应一次显式升级审查。
+# 小版本与补丁合并为一个 PR，控制同时打开的 PR 数量。
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "cargo"
+    directory: "/src-tauri"
+    schedule:
+      interval: "weekly"
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    open-pull-requests-limit: 5
