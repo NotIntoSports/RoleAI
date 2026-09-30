@@ -13,12 +13,13 @@ import { PreflightIssues } from "./preflight-issues";
 import {
   ACTIVE_PHASES,
   BAR_FACTORS,
-  RATE_LIMIT_HINT,
   errorText,
   formatDuration,
   humanizeRemoteError,
+  rateLimitHint,
   roleScenario,
 } from "./workspace-format";
+import { t, useT } from "../../i18n";
 import { SessionToolbar } from "./session-toolbar";
 import { TranscriptPanel } from "./transcript-panel";
 import { AgentToolsPanel } from "./agent-tools-panel";
@@ -36,10 +37,7 @@ import type {
   VirtualAudioPreparation,
 } from "../../generated/bindings";
 
-const PREPARATION_PHASES: Record<string, string> = {
-  checking: "检测安装环境", downloading: "下载安装包", verifying: "校验安装包和签名",
-  authorizing: "等待 Windows 管理员授权", installing: "安装驱动", rechecking: "重新检测音频端点",
-};
+const PREPARATION_PHASE_KEYS = new Set(["checking", "downloading", "verifying", "authorizing", "installing", "rechecking"]);
 
 // 终态会话不再接管；仅当最新会话是进行中的训练会话时才恢复现场（见下方接管逻辑）。
 const TERMINAL_SESSION_STATUSES = new Set(["completed", "failed", "interrupted"]);
@@ -87,6 +85,7 @@ export function WorkspaceSession({
   createMicStreamer = defaultCreateMicStreamer,
   createVideoSharer = defaultCreateVideoSharer,
 }: WorkspaceSessionProps) {
+  useT();
   const [phase, setPhase] = useState("idle");
   const [mode, setMode] = useState("ai_active");
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -94,7 +93,7 @@ export function WorkspaceSession({
   const [reply, setReply] = useState("");
   const [turns, setTurns] = useState<SessionTurnView[]>([]);
   const [unusedMaterials, setUnusedMaterials] = useState(false);
-  const [message, setMessage] = useState("正在读取会话状态…");
+  const [message, setMessage] = useState(() => t("session.workspace.readingStatus"));
   const [issues, setIssues] = useState<PreflightIssue[]>([]);
   const [configurationOpen, setConfigurationOpen] = useState(true);
   const [config, setConfig] = useState<PublicConfig | null>(null);
@@ -122,7 +121,7 @@ export function WorkspaceSession({
     let disposed = false;
     let unlisten = () => {};
     Promise.resolve(listen<string>("virtual_audio:preparation:v1", (phase) => {
-      if (!disposed && phase in PREPARATION_PHASES) setAudioPreparationPhase(phase);
+      if (!disposed && PREPARATION_PHASE_KEYS.has(phase)) setAudioPreparationPhase(phase);
     })).then((cleanup) => { if (disposed) cleanup(); else unlisten = cleanup; }).catch(() => {});
     return () => { disposed = true; unlisten(); };
   }, [listen]);
@@ -133,7 +132,7 @@ export function WorkspaceSession({
       setVirtualAudio(result.data);
       setAudioRetryBlocked(result.data.state === "installing");
       setOutputDeviceId(result.data.renderEndpointId ?? "");
-    } catch { setVirtualAudio(null); setMessage("无法检测虚拟声卡。"); }
+    } catch { setVirtualAudio(null); setMessage(t("session.controls.virtualAudioCheckFailed")); }
   }
   async function installVirtualAudio() {
     if (installingAudio || audioRetryBlocked) return;
@@ -148,7 +147,7 @@ export function WorkspaceSession({
       setVirtualAudio(result.data); setOutputDeviceId(result.data.renderEndpointId ?? "");
       setAudioRetryBlocked(result.data.diagnostic?.retryAllowed === false);
       setMessage(result.data.detail);
-    } catch { setMessage("虚拟声卡安装失败，请稍后重试。"); }
+    } catch { setMessage(t("session.controls.virtualAudioInstallFailed")); }
     finally { setInstallingAudio(false); }
   }
   async function refreshAudioOutputs() {
@@ -157,7 +156,7 @@ export function WorkspaceSession({
       const result = await api.listAudioOutputs();
       if (result.ok) setAudioOutputs(result.data);
       else { setAudioOutputs([]); setMessage(errorText(result.error)); }
-    } catch { setAudioOutputs([]); setMessage("无法读取音频输出设备。"); }
+    } catch { setAudioOutputs([]); setMessage(t("session.controls.audioOutputsReadFailed")); }
   }
   async function refreshMeetings() {
     setMeetingPid("");
@@ -166,8 +165,8 @@ export function WorkspaceSession({
       if (!result.ok) { setMeetingProcesses([]); setMessage(result.error.message); return; }
       setMeetingProcesses(result.data);
       setMeetingPid(result.data.length === 1 ? String(result.data[0].pid) : "");
-      if (!result.data.length) setMessage("未检测到会议窗口，请打开 Teams、腾讯会议、飞书、钉钉或 Zoom 后刷新。");
-    } catch { setMeetingProcesses([]); setMessage("无法检测会议进程，请稍后重试。"); }
+      if (!result.data.length) setMessage(t("session.controls.noMeetingWindows"));
+    } catch { setMeetingProcesses([]); setMessage(t("session.controls.meetingDetectFailed")); }
   }
   useEffect(() => {
     let cancelled = false;
@@ -251,7 +250,7 @@ export function WorkspaceSession({
       setPendingConfirmation(false);
     }
     if (next.lastErrorCode) {
-      setMessage(errorText({ code: next.lastErrorCode, message: "会话运行时错误" }));
+      setMessage(errorText({ code: next.lastErrorCode, message: t("session.ipc.runtimeError") }));
     }
   }, []);
 
@@ -298,7 +297,7 @@ export function WorkspaceSession({
           }
         }
       } catch {
-        if (epoch === requestEpoch.current) setMessage("IPC_UNAVAILABLE：无法读取会话状态");
+        if (epoch === requestEpoch.current) setMessage(t("session.ipc.statusUnavailable"));
       }
     },
     [applyStatus],
@@ -329,7 +328,7 @@ export function WorkspaceSession({
           setMessage(errorText(result.error));
         }
       } catch {
-        setMessage("IPC_UNAVAILABLE：无法读取会话状态");
+        setMessage(t("session.ipc.statusUnavailable"));
       }
     })();
   }, [applyStatus]);
@@ -421,11 +420,11 @@ export function WorkspaceSession({
           // 透出真实错误码（如 REALTIME_REMOTE_ERROR），否则用户只能看到笼统提示。
           // 连续快速失败多为供应商限流：追加退避提示，避免用户在限流窗口内反复重试。
           consecutiveAutoFailures.current += 1;
-          const backoff = consecutiveAutoFailures.current >= 2 ? RATE_LIMIT_HINT : "";
+          const backoff = consecutiveAutoFailures.current >= 2 ? rateLimitHint() : "";
           setMessage(
             (humanizeRemoteError(
               error instanceof Error && error.message ? error.message : "",
-            ) || "自动转写失败，已保留会话，可重试或人工接管。") + (backoff ? backoff : ""),
+            ) || t("session.controls.autoTranscribeFailed")) + (backoff ? backoff : ""),
           );
         } finally { audioFinalizePending.current = false; }
       })();
@@ -505,7 +504,7 @@ export function WorkspaceSession({
           if (disposed || result.ok) return;
           setMessage(errorText(result.error));
         }).catch(() => {
-          if (!disposed) setMessage("IPC_UNAVAILABLE：视频帧发送失败");
+          if (!disposed) setMessage(t("session.ipc.videoFrameFailed"));
         });
       },
       onError: (videoError) => { if (!disposed) setMessage(videoError); },
@@ -519,8 +518,8 @@ export function WorkspaceSession({
       if (disposed) return;
       setVideoKind("off");
       setMessage(videoKind === "camera"
-        ? "无法访问摄像头，请检查系统权限后重试。"
-        : "无法开始桌面共享，请重试。");
+        ? t("session.controls.cameraUnavailable")
+        : t("session.controls.screenShareUnavailable"));
     });
     return () => { disposed = true; sharer.stop(); };
   }, [active, canVideo, videoKind, createVideoSharer]);
@@ -566,9 +565,9 @@ export function WorkspaceSession({
         assistantPending={assistantPending}
       />
       <PreflightIssues issues={issues} />
-      {webDegraded && <p className="services-message">联网搜索未成功，本次回答未联网，请勿作为最新信息使用。</p>}
-      {webSources.length > 0 && <aside className="services-message" aria-label="联网来源">
-        <span>已联网 · 来源：</span>
+      {webDegraded && <p className="services-message">{t("session.workspace.webDegraded")}</p>}
+      {webSources.length > 0 && <aside className="services-message" aria-label={t("session.workspace.webSourcesLabel")}>
+        <span>{t("session.workspace.webSourcesPrefix")}</span>
         {webSources.map((source) => <button key={source.url} title={source.url} type="button" onClick={() => void run(() => api.openWebSource(source.url))}>{source.title}</button>)}
       </aside>}
       {message && (
@@ -583,7 +582,7 @@ export function WorkspaceSession({
         turns={turns}
         historyTurns={historyTurns}
         roleName={roleName}
-        welcomeRoleName={config?.roleProfiles.find((role) => role.id === roleProfileId)?.name ?? "选择一个角色，让对话从这里开始"}
+        welcomeRoleName={config?.roleProfiles.find((role) => role.id === roleProfileId)?.name ?? t("session.workspace.welcomeFallback")}
         active={active}
         pendingConfirmation={pendingConfirmation}
         confirmationText={confirmationText}
@@ -608,16 +607,16 @@ export function WorkspaceSession({
               className="session-hint-pill"
               onClick={() => webAudioPlayerRef.current?.clear()}
             >
-              <Pause size={12} aria-hidden="true" />说话、输入或点击打断
+              <Pause size={12} aria-hidden="true" />{t("session.workspace.bargeHint")}
             </button>
           )}
         </div>
         <div className="session-compose">
           {videoKind !== "off" && (
-            <div className="session-pip" role="region" aria-label="视频画面预览">
+            <div className="session-pip" role="region" aria-label={t("session.workspace.pipRegion")}>
               <video ref={pipVideoRef} autoPlay muted playsInline />
-              <span className="session-pip-label">{videoKind === "camera" ? "摄像头" : "共享桌面"}</span>
-              <button type="button" className="session-pip-stop" aria-label="停止视频共享" onClick={() => setVideoKind("off")}>
+              <span className="session-pip-label">{videoKind === "camera" ? t("session.workspace.pipCamera") : t("session.workspace.pipScreen")}</span>
+              <button type="button" className="session-pip-stop" aria-label={t("session.workspace.stopShareAria")} onClick={() => setVideoKind("off")}>
                 <X size={13} aria-hidden="true" />
               </button>
             </div>
@@ -625,10 +624,10 @@ export function WorkspaceSession({
           {/* 官方实时通话布局：上方文本输入，下方左侧是工具与麦克风/视频，右侧是发送与通话按钮。 */}
           <form id="session-chat-form" className="composer-input" onSubmit={submitChat}>
             <input
-              aria-label="输入内容"
+              aria-label={t("session.workspace.inputAria")}
               value={chatText}
               onChange={(event) => setChatText(event.target.value)}
-              placeholder={active ? "说话，或输入文字继续对话" : "开始会话后即可说话或输入文字"}
+              placeholder={active ? t("session.workspace.inputActivePlaceholder") : t("session.workspace.inputIdlePlaceholder")}
               disabled={!active}
             />
           </form>
@@ -640,7 +639,7 @@ export function WorkspaceSession({
                 onToggle={(event) => setMoreOpen((event.currentTarget as HTMLDetailsElement).open)}
                 ref={moreRef}
               >
-                <summary className="composer-icon-button" aria-label="更多操作">
+                <summary className="composer-icon-button" aria-label={t("session.workspace.moreActions")}>
                   <Plus size={18} aria-hidden="true" />
                 </summary>
                 <AgentToolsPanel
@@ -665,8 +664,8 @@ export function WorkspaceSession({
                 <button
                   type="button"
                   className="composer-role-trigger"
-                  title="切换角色"
-                  aria-label="角色"
+                  title={t("session.workspace.switchRoleTitle")}
+                  aria-label={t("session.workspace.roleAria")}
                   aria-haspopup="listbox"
                   aria-expanded={roleMenuOpen}
                   disabled={busy || active || !config}
@@ -677,7 +676,7 @@ export function WorkspaceSession({
                   <ChevronDown size={13} aria-hidden="true" />
                 </button>
                 {roleMenuOpen && config && (
-                  <ul className="composer-role-menu" role="listbox" aria-label="切换角色">
+                  <ul className="composer-role-menu" role="listbox" aria-label={t("session.workspace.switchRoleTitle")}>
                     {config.roleProfiles.filter((role) => role.configVersion > 0).map((role) => (
                       <li key={role.id}>
                         <button
@@ -702,7 +701,7 @@ export function WorkspaceSession({
               <button
                 type="button"
                 className="composer-mic"
-                aria-label={!active ? "开始语音会话" : mode === "muted" ? "取消静音" : "静音麦克风"}
+                aria-label={!active ? t("session.workspace.micStart") : mode === "muted" ? t("session.workspace.micUnmute") : t("session.workspace.micMute")}
                 data-live={active && inputSource === "mic" && mode === "ai_active"}
                 disabled={busy}
                 onClick={() => {
@@ -728,7 +727,7 @@ export function WorkspaceSession({
                   <button
                     type="button"
                     className="composer-icon-button composer-video"
-                    aria-label={videoKind === "camera" ? "关闭摄像头共享" : "共享摄像头"}
+                    aria-label={videoKind === "camera" ? t("session.workspace.cameraOff") : t("session.workspace.cameraOn")}
                     data-active={videoKind === "camera"}
                     disabled={!active || busy}
                     onClick={() => setVideoKind(videoKind === "camera" ? "off" : "camera")}
@@ -738,7 +737,7 @@ export function WorkspaceSession({
                   <button
                     type="button"
                     className="composer-icon-button composer-video"
-                    aria-label={videoKind === "screen" ? "关闭桌面共享" : "共享桌面"}
+                    aria-label={videoKind === "screen" ? t("session.workspace.screenOff") : t("session.workspace.screenOn")}
                     data-active={videoKind === "screen"}
                     disabled={!active || busy}
                     onClick={() => setVideoKind(videoKind === "screen" ? "off" : "screen")}
@@ -753,20 +752,20 @@ export function WorkspaceSession({
                 type="submit"
                 form="session-chat-form"
                 className="composer-send"
-                aria-label="发送"
+                aria-label={t("session.workspace.sendAria")}
                 disabled={busy || !active || mode !== "ai_active" || !chatText.trim()}
               >
                 <Send size={15} aria-hidden="true" />
               </button>
               {/* 独立 key：开始/结束按钮占同一位置，复用同一 DOM 节点会让开始的那次点击触发结束。 */}
               {active ? (
-                <button key="call-end" type="button" className="session-call-pill" aria-label="结束通话" disabled={busy} onClick={() => void stop()}>
+                <button key="call-end" type="button" className="session-call-pill" aria-label={t("session.workspace.endCall")} disabled={busy} onClick={() => void stop()}>
                   <Square size={11} aria-hidden="true" />
                   <span className="session-call-time">{formatDuration(callSeconds)}</span>
                 </button>
               ) : (
                 <button key="call-start" className="button-primary composer-start" disabled={busy} type="button" onClick={() => void start()}>
-                  <Play size={14} aria-hidden="true" />开始会话
+                  <Play size={14} aria-hidden="true" />{t("session.workspace.startSession")}
                 </button>
               )}
             </div>
@@ -774,7 +773,7 @@ export function WorkspaceSession({
         </div>
         {(reportSummary || reportDetail) && (
           <section className="session-report" aria-labelledby="session-report-heading">
-            <h3 id="session-report-heading">会话纪要</h3>
+            <h3 id="session-report-heading">{t("session.workspace.reportHeading")}</h3>
             {reportSummary && <p>{reportSummary}</p>}
             {reportDetail && <p className="muted">{reportDetail}</p>}
           </section>

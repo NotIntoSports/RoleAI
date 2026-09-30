@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import * as api from "../../api/commands";
+import { t, useT } from "../../i18n";
 import type { AnswerMetrics, PracticeProgress, SessionTurnView } from "../../generated/bindings";
 import { formatDuration } from "../session/workspace-format";
 import "../../styles/practice.css";
@@ -35,18 +36,19 @@ function expressionHints(metrics: AnswerMetrics | null): string[] {
   const hints: string[] = [];
   const rate = metrics.speechRate;
   if (rate && rate.chinesePerMinute > FAST_CHINESE_PER_MINUTE) {
-    hints.push(`语速过快：约 ${Math.round(rate.chinesePerMinute)} 字/分钟，试着放慢节奏。`);
+    hints.push(t("practice.hud.rateFastChars", { n: Math.round(rate.chinesePerMinute) }));
   } else if (rate && rate.englishPerMinute > FAST_ENGLISH_PER_MINUTE) {
-    hints.push(`语速过快：约 ${Math.round(rate.englishPerMinute)} 词/分钟，试着放慢节奏。`);
+    hints.push(t("practice.hud.rateFastWords", { n: Math.round(rate.englishPerMinute) }));
   }
   const fillerTotal = metrics.fillers.reduce((sum, hit) => sum + hit.count, 0);
   if (fillerTotal >= MANY_FILLERS_PER_ANSWER) {
-    hints.push(`口头禅较多：本条回答共 ${fillerTotal} 次，留意“嗯、那个、就是”这类词。`);
+    hints.push(t("practice.hud.fillersMany", { n: fillerTotal }));
   }
   return hints;
 }
 
 export function PracticeHud({ sessionId, active, turns, onNotify }: PracticeHudProps) {
+  useT();
   const [progress, setProgress] = useState<PracticeProgress | null>(null);
   const [turnMetrics, setTurnMetrics] = useState<AnswerMetrics | null>(null);
   const [skipBusy, setSkipBusy] = useState(false);
@@ -113,10 +115,10 @@ export function PracticeHud({ sessionId, active, turns, onNotify }: PracticeHudP
       if (result.ok) {
         setProgress(result.data);
       } else {
-        onNotify?.(`跳过失败：${result.error.code}`);
+        onNotify?.(t("practice.hud.skipFailed", { code: result.error.code }));
       }
     } catch {
-      onNotify?.("跳过失败：本地操作未完成，可重试。");
+      onNotify?.(t("practice.hud.skipFailedLocal"));
     } finally {
       setSkipBusy(false);
     }
@@ -129,12 +131,12 @@ export function PracticeHud({ sessionId, active, turns, onNotify }: PracticeHudP
     try {
       const result = await api.generatePracticeReport(sessionId);
       if (result.ok) {
-        onNotify?.("训练报告已生成，可到「模拟面试」页查看评分与逐题点评。");
+        onNotify?.(t("practice.hud.reportGenerated"));
       } else {
-        onNotify?.(`报告生成失败：${result.error.code}`);
+        onNotify?.(t("practice.hud.reportFailed", { code: result.error.code }));
       }
     } catch {
-      onNotify?.("报告生成失败：本地操作未完成，可重试。");
+      onNotify?.(t("practice.hud.reportFailedLocal"));
     } finally {
       setReportBusy(false);
     }
@@ -143,15 +145,15 @@ export function PracticeHud({ sessionId, active, turns, onNotify }: PracticeHudP
   if (!progress) return null;
   const hints = expressionHints(turnMetrics);
   return (
-    <section className="practice-hud" aria-label="模拟面试训练进度" data-finished={progress.finished ? "true" : undefined}>
+    <section className="practice-hud" aria-label={t("practice.hud.regionAria")} data-finished={progress.finished ? "true" : undefined}>
       <span className="practice-hud-progress">
         {progress.finished
-          ? `全部 ${progress.totalQuestions} 题已完成，结束会话后可生成训练报告。`
-          : `第 ${progress.questionIndex + 1} / ${progress.totalQuestions} 题`}
+          ? t("practice.hud.finishedAll", { n: progress.totalQuestions })
+          : t("practice.hud.questionProgress", { n: progress.questionIndex + 1, total: progress.totalQuestions })}
       </span>
       {!progress.finished && (
-        <span className="practice-hud-timer" role="timer" aria-label="本题计时">
-          本题 {formatDuration(questionSeconds)}
+        <span className="practice-hud-timer" role="timer" aria-label={t("practice.hud.timerAria")}>
+          {t("practice.hud.timer", { time: formatDuration(questionSeconds) })}
         </span>
       )}
       {!progress.finished && (
@@ -161,7 +163,7 @@ export function PracticeHud({ sessionId, active, turns, onNotify }: PracticeHudP
           disabled={skipBusy || !active}
           onClick={() => void handleSkip()}
         >
-          {skipBusy ? "跳过中…" : "跳过本题"}
+          {skipBusy ? t("practice.hud.skipping") : t("practice.hud.skip")}
         </button>
       )}
       {progress.finished && (
@@ -171,7 +173,7 @@ export function PracticeHud({ sessionId, active, turns, onNotify }: PracticeHudP
           disabled={reportBusy}
           onClick={() => void handleGenerateReport()}
         >
-          {reportBusy ? "正在生成报告…" : "生成训练报告"}
+          {reportBusy ? t("practice.hud.generatingReport") : t("practice.hud.generateReport")}
         </button>
       )}
       {hints.length > 0 && (

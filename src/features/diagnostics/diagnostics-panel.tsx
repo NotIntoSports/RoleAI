@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { EmptyState } from "../../components/empty-state";
 import { ErrorNotice } from "../../components/error-notice";
+import { t, useT } from "../../i18n";
 import {
   setLatencyWaterfallEnabled,
   useLatencyWaterfallPreference,
@@ -13,13 +14,14 @@ export type { DiagnosticsLatencySummary, RouteLatencySummary };
 // 面板每次拉取的会话扫描上限；与后端 getDiagnosticsLatencySummary 的 limit 参数对应，联调时可调整。
 const DEFAULT_LIMIT = 20;
 
-const MODE_LABELS: Record<string, string> = {
-  realtime: "实时",
-  cascade: "级联",
+const MODE_LABEL_KEYS: Record<string, "diagnostics.modeRealtime" | "diagnostics.modeCascade"> = {
+  realtime: "diagnostics.modeRealtime",
+  cascade: "diagnostics.modeCascade",
 };
 
 function modeLabel(mode: string): string {
-  return MODE_LABELS[mode] ?? mode;
+  const key = MODE_LABEL_KEYS[mode];
+  return key ? t(key) : mode;
 }
 
 type PanelState =
@@ -60,7 +62,7 @@ export function LatencySparkline({ samples }: SparklineProps) {
       width={width}
       height={height}
       role="img"
-      aria-label={`最近 ${samples.length} 轮总延迟折线，范围 ${Math.round(min)}～${Math.round(max)} 毫秒`}
+      aria-label={t("diagnostics.sparklineAria", { n: samples.length, min: Math.round(min), max: Math.round(max) })}
       viewBox={`0 0 ${width} ${height}`}
     >
       <polyline points={points} fill="none" stroke="currentColor" strokeWidth="1.5" />
@@ -69,6 +71,7 @@ export function LatencySparkline({ samples }: SparklineProps) {
 }
 
 export function DiagnosticsPanel({ loadSummary }: DiagnosticsPanelProps) {
+  useT();
   const [state, setState] = useState<PanelState>({ kind: "loading" });
   const [selectedEntry, setSelectedEntry] = useState(0);
   const epochRef = useRef(0);
@@ -104,24 +107,24 @@ export function DiagnosticsPanel({ loadSummary }: DiagnosticsPanelProps) {
   const busy = state.kind === "loading";
   return (
     <section className="service-panel diagnostics-panel" aria-labelledby="diagnostics-panel-heading">
-      <h3 className="section-heading" id="diagnostics-panel-heading">性能面板</h3>
+      <h3 className="section-heading" id="diagnostics-panel-heading">{t("diagnostics.heading")}</h3>
       <label className="diagnostics-waterfall-toggle">
         <input
           type="checkbox"
           checked={latencyWaterfallEnabled}
           onChange={(event) => setLatencyWaterfallEnabled(event.target.checked)}
         />
-        在对话中显示每轮延迟瀑布条
+        {t("diagnostics.waterfallToggle")}
       </label>
       {state.kind === "ready" && (
-        <p className="muted">已扫描会话：{state.data.sessionsScanned}</p>
+        <p className="muted">{t("diagnostics.scannedSessions", { n: state.data.sessionsScanned })}</p>
       )}
-      {busy && <p className="services-message" role="status">正在读取延迟统计…</p>}
+      {busy && <p className="services-message" role="status">{t("diagnostics.reading")}</p>}
       {state.kind === "error" && <ErrorNotice error={{ code: state.code, message: state.message }} />}
       {state.kind === "ready" && state.data.routes.length === 0 && (
         <EmptyState
-          title="暂无线路延迟样本。"
-          hint="开始语音会话后，这里会显示各语音线路的延迟与丢帧统计。"
+          title={t("diagnostics.emptyTitle")}
+          hint={t("diagnostics.emptyHint")}
         />
       )}
       {state.kind === "ready" && state.data.routes.length > 0 && entry && (
@@ -129,12 +132,12 @@ export function DiagnosticsPanel({ loadSummary }: DiagnosticsPanelProps) {
           <table className="diagnostics-table">
             <thead>
               <tr>
-                <th scope="col">线路</th>
-                <th scope="col">模式</th>
-                <th scope="col">样本数</th>
-                <th scope="col">首响 P50（毫秒）</th>
-                <th scope="col">首响 P95（毫秒）</th>
-                <th scope="col">累计丢帧</th>
+                <th scope="col">{t("diagnostics.colRoute")}</th>
+                <th scope="col">{t("diagnostics.colMode")}</th>
+                <th scope="col">{t("diagnostics.colSamples")}</th>
+                <th scope="col">{t("diagnostics.colFirstP50")}</th>
+                <th scope="col">{t("diagnostics.colFirstP95")}</th>
+                <th scope="col">{t("diagnostics.colDropped")}</th>
               </tr>
             </thead>
             <tbody>
@@ -153,24 +156,24 @@ export function DiagnosticsPanel({ loadSummary }: DiagnosticsPanelProps) {
                       aria-pressed={index === selectedEntry}
                       onClick={() => setSelectedEntry(index)}
                     >
-                      {index === selectedEntry ? "查看中" : "查看"}
+                      {index === selectedEntry ? t("diagnostics.viewing") : t("diagnostics.view")}
                     </button>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
-          <h4 className="section-subheading">分阶段延迟（{entry.routeLabel} · {modeLabel(entry.mode)}）</h4>
+          <h4 className="section-subheading">{t("diagnostics.stagesHeading", { route: entry.routeLabel, mode: modeLabel(entry.mode) })}</h4>
           {entry.stages.length === 0 ? (
-            <p className="muted">该线路暂无分阶段时间线数据（旧记录或纯文本轮）。</p>
+            <p className="muted">{t("diagnostics.stagesEmpty")}</p>
           ) : (
-            <table className="diagnostics-table" aria-label="分阶段延迟百分位">
+            <table className="diagnostics-table" aria-label={t("diagnostics.stagesTableAria")}>
               <thead>
                 <tr>
-                  <th scope="col">阶段</th>
-                  <th scope="col">样本数</th>
-                  <th scope="col">P50（毫秒）</th>
-                  <th scope="col">P95（毫秒）</th>
+                  <th scope="col">{t("diagnostics.colStage")}</th>
+                  <th scope="col">{t("diagnostics.colSamples")}</th>
+                  <th scope="col">{t("diagnostics.colP50")}</th>
+                  <th scope="col">{t("diagnostics.colP95")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -185,15 +188,15 @@ export function DiagnosticsPanel({ loadSummary }: DiagnosticsPanelProps) {
               </tbody>
             </table>
           )}
-          <h4 className="section-subheading">最近 50 轮总延迟（{entry.routeLabel} · {modeLabel(entry.mode)}）</h4>
+          <h4 className="section-subheading">{t("diagnostics.recentHeading", { route: entry.routeLabel, mode: modeLabel(entry.mode) })}</h4>
           {recentSamples.length >= 2 ? (
             <LatencySparkline samples={recentSamples} />
           ) : (
-            <p className="muted">该线路暂无足够的最近轮样本（至少 2 轮才画折线）。</p>
+            <p className="muted">{t("diagnostics.recentEmpty")}</p>
           )}
         </>
       )}
-      <button type="button" disabled={busy} onClick={load}>刷新</button>
+      <button type="button" disabled={busy} onClick={load}>{t("diagnostics.refresh")}</button>
     </section>
   );
 }

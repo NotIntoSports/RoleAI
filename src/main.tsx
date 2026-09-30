@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import "./styles/foundation.css";
 import "./styles/shell.css";
 import { App } from "./app/app";
+import { I18nProvider } from "./i18n/I18nProvider";
 import { initializeTheme } from "./features/appearance/theme";
 
 const root = document.getElementById("root");
@@ -15,6 +16,8 @@ if (!root) {
 
 createRoot(root).render(
   <StrictMode>
-    <App />
+    <I18nProvider>
+      <App />
+    </I18nProvider>
   </StrictMode>,
 );

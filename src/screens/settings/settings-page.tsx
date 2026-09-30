@@ -9,18 +9,20 @@ import { ReenterSecretsBanner } from "../../features/migrate/reenter-secrets-ban
 import { RoleEditor } from "../../features/roles/role-editor";
 import { UpdaterPanel } from "../../features/updater/updater-panel";
 import type { LegacyMigrationStatus } from "../../generated/bindings";
+import { t, useT, type DictionaryStringKey } from "../../i18n";
 import { PageShell } from "../page-shell";
 import "../../styles/configuration.css";
 
 const categories = [
-  { id: "appearance", label: "外观", icon: Palette },
-  { id: "roles", label: "角色", icon: UserRound },
-  { id: "updater", label: "应用更新", icon: RefreshCw },
-  { id: "migration", label: "数据迁移", icon: ArchiveRestore },
-  { id: "diagnostics", label: "诊断", icon: Activity },
-] as const;
+  { id: "appearance", labelKey: "settings.page.categories.appearance", icon: Palette },
+  { id: "roles", labelKey: "settings.page.categories.roles", icon: UserRound },
+  { id: "updater", labelKey: "settings.page.categories.updater", icon: RefreshCw },
+  { id: "migration", labelKey: "settings.page.categories.migration", icon: ArchiveRestore },
+  { id: "diagnostics", labelKey: "settings.page.categories.diagnostics", icon: Activity },
+] as const satisfies ReadonlyArray<{ id: string; labelKey: DictionaryStringKey; icon: typeof Palette }>;
 
 export function SettingsPage() {
+  useT();
   const [migration, setMigration] = useState<LegacyMigrationStatus | null>(null);
   const [category, setCategory] = useState<(typeof categories)[number]["id"]>(() => {
     const requested = new URLSearchParams(window.location.search).get("category");
@@ -42,10 +44,10 @@ export function SettingsPage() {
       <PageShell id="settings" />
       <ReenterSecretsBanner status={migration} />
       <div className="configuration-layout">
-        <nav className="settings-nav" aria-label="设置分类">
-          {categories.map(({ id, label, icon: Icon }) => (
+        <nav className="settings-nav" aria-label={t("settings.page.navAria")}>
+          {categories.map(({ id, labelKey, icon: Icon }) => (
             <button key={id} id={`settings-category-${id}`} type="button" aria-current={category === id ? "page" : undefined} aria-controls={`settings-panel-${id}`} onClick={() => setCategory(id)}>
-              <Icon size={16} aria-hidden="true" />{label}
+              <Icon size={16} aria-hidden="true" />{t(labelKey)}
             </button>
           ))}
         </nav>

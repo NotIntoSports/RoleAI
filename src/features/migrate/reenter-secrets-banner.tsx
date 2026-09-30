@@ -1,4 +1,5 @@
 import type { LegacyMigrationStatus } from "../../generated/bindings";
+import { t } from "../../i18n";
 
 interface ReenterSecretsBannerProps {
   status: LegacyMigrationStatus | null;
@@ -10,8 +11,8 @@ export function ReenterSecretsBanner({ status }: ReenterSecretsBannerProps) {
   }
   return (
     <p className="reenter-secrets-banner" role="status">
-      需要重新填写密钥
-      <a href="#/services">去服务页填写</a>
+      {t("migrate.banner.title")}
+      <a href="#/services">{t("migrate.banner.action")}</a>
     </p>
   );
 }

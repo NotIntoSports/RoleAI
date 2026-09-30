@@ -1,13 +1,14 @@
 import { describe, expect, it } from "vitest";
 
+import { setLanguagePreference } from "../../i18n";
 import {
   ACTIVE_PHASES,
   BAR_FACTORS,
-  RATE_LIMIT_HINT,
   clockOf,
   errorText,
   formatDuration,
   humanizeRemoteError,
+  rateLimitHint,
   roleScenario,
 } from "./workspace-format";
 import type { PublicConfig } from "../../generated/bindings";
@@ -88,10 +89,23 @@ describe("humanizeRemoteError", () => {
   });
 });
 
-describe("RATE_LIMIT_HINT", () => {
+describe("rateLimitHint", () => {
   it("is a non-empty actionable hint", () => {
-    expect(RATE_LIMIT_HINT.length).toBeGreaterThan(0);
-    expect(RATE_LIMIT_HINT).toContain("限流");
+    expect(rateLimitHint().length).toBeGreaterThan(0);
+    expect(rateLimitHint()).toContain("限流");
+  });
+});
+
+describe("errorText in English", () => {
+  it("localizes known error codes after switching the interface language", () => {
+    try {
+      setLanguagePreference("en");
+      expect(errorText({ code: "SESSION_SIDECAR_MISSING", message: "raw" })).toContain("AudioBridge");
+      expect(humanizeRemoteError("1113: no quota")).toContain("balance");
+      expect(rateLimitHint()).toContain("rate limit");
+    } finally {
+      setLanguagePreference("system");
+    }
   });
 });
 

@@ -4,6 +4,8 @@
  * Design spec: docs/superpowers/specs/2026-09-04-tauri-local-monolith-design.md §6.1–6.5
  */
 
+import { t, tList } from "../i18n";
+
 export const routeIds = ["workspace", "livestream", "practice", "materials", "records", "services", "settings"] as const;
 
 export type RouteId = typeof routeIds[number];
@@ -26,18 +28,9 @@ export function formatHash(id: RouteId): string {
   return `#/${id}`;
 }
 
-/** Chinese display label for each route. */
+/** Display label for each route, in the active interface language. */
 export function routeLabel(id: RouteId): string {
-  const labels: Record<RouteId, string> = {
-    workspace: "工作台",
-    livestream: "虚拟直播",
-    practice: "模拟面试",
-    materials: "资料",
-    records: "记录",
-    services: "服务",
-    settings: "设置",
-  };
-  return labels[id];
+  return t(`app.routes.labels.${id}`);
 }
 
 /** Design spec section reference for each route. */
@@ -55,57 +48,9 @@ export function routeDesignRef(id: RouteId): string {
   return refs[id];
 }
 
-/** Future capabilities to be migrated into each page (from design spec §6). */
+/** Future capabilities to be migrated into each page (from design spec §6), in the active interface language. */
 export function routeCapabilities(id: RouteId): readonly string[] {
-  const capabilities: Record<RouteId, readonly string[]> = {
-    workspace: [
-      "当前会话状态与控制（启动/暂停/恢复/停止）",
-      "AI 实时回复与字幕显示",
-      "人工接管与干预控制",
-      "音视频连接状态指示",
-      "会议桥接卡片",
-    ],
-    livestream: [
-      "本地产品资料生成分段讲稿",
-      "图片或循环视频舞台",
-      "讲稿确认与分段控制",
-      "OBS Virtual Camera 输出",
-    ],
-    practice: [
-      "岗位方向与 JD/简历资料选择",
-      "面试官风格选择（面试官/HR/严苛面试官）",
-      "题量、难度与预计时长配置",
-      "题单预览、编辑与保存",
-    ],
-    materials: [
-      "简历导入与管理",
-      "知识库切片与索引状态",
-      "FTS 全文检索",
-      "向量嵌入（sqlite-vec）",
-      "资料预览与筛选",
-    ],
-    records: [
-      "会话记录列表与分页",
-      "纪要详情（摘要/优势/跟进/局限/证据）",
-      "记录导出",
-      "记录删除（两步确认）",
-    ],
-    services: [
-      "模型提供方配置与状态",
-      "语音路由配置与测试",
-      "密钥管理（Windows Credential Manager）",
-      "连接测试与健康检查",
-    ],
-    settings: [
-      "系统诊断导出",
-      "配置位置选择与显示",
-      "会议画面输出模式",
-      "助手声音与形象",
-      "OBS 与虚拟摄像头",
-      "音频路由与设备检查",
-    ],
-  };
-  return capabilities[id];
+  return tList(`app.routes.capabilities.${id}`);
 }
 
 /** Type guard for RouteId. */

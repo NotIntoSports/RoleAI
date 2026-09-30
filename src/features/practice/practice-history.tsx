@@ -1,3 +1,4 @@
+import { t, useT, type DictionaryStringKey } from "../../i18n";
 import { formatDuration } from "../session/workspace-format";
 import type { PracticeDimensions, PracticeReportSummary } from "../../generated/bindings";
 
@@ -6,11 +7,11 @@ import type { PracticeDimensions, PracticeReportSummary } from "../../generated/
  * 与各维度成长曲线（SVG 折线，与报告页雷达图同一套手写图表方案，不引入图表库）。
  */
 
-const DIMENSIONS: Array<{ key: keyof PracticeDimensions; label: string; color: string }> = [
-  { key: "contentDepth", label: "内容深度", color: "var(--accent-strong)" },
-  { key: "structureClarity", label: "结构清晰", color: "var(--success)" },
-  { key: "fluency", label: "表达流畅", color: "var(--danger)" },
-  { key: "jobFit", label: "岗位匹配", color: "var(--text-muted)" },
+const DIMENSIONS: Array<{ key: keyof PracticeDimensions; labelKey: DictionaryStringKey; color: string }> = [
+  { key: "contentDepth", labelKey: "practice.report.dimensions.contentDepth", color: "var(--accent-strong)" },
+  { key: "structureClarity", labelKey: "practice.report.dimensions.structureClarity", color: "var(--success)" },
+  { key: "fluency", labelKey: "practice.report.dimensions.fluency", color: "var(--danger)" },
+  { key: "jobFit", labelKey: "practice.report.dimensions.jobFit", color: "var(--text-muted)" },
 ];
 
 function clampScore(value: number): number {
@@ -25,6 +26,7 @@ function formatScore(value: number): string {
 
 /** 时间升序（最旧在左）；只有一条记录时只画数据点。 */
 export function PracticeGrowthChart({ reports }: { reports: PracticeReportSummary[] }) {
+  useT();
   const ordered = [...reports].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const width = 340;
   const height = 170;
@@ -35,9 +37,9 @@ export function PracticeGrowthChart({ reports }: { reports: PracticeReportSummar
     const y = height - pad - (clampScore(score) / 5) * (height - pad * 2);
     return [x, y];
   };
-  const describe = DIMENSIONS.map(({ label, key }) => {
+  const describe = DIMENSIONS.map(({ labelKey, key }) => {
     const values = ordered.map((report) => formatScore(report.dimensions[key]));
-    return `${label}（${values.join("→")}）`;
+    return `${t(labelKey)}（${values.join("→")}）`;
   }).join("，");
   return (
     <figure className="practice-growth">
@@ -46,7 +48,7 @@ export function PracticeGrowthChart({ reports }: { reports: PracticeReportSummar
         width={width}
         height={height}
         role="img"
-        aria-label={`各维度成长曲线（时间从左到右）：${describe}`}
+        aria-label={t("practice.history.growthAria", { items: describe })}
       >
         {/* 5 分与 0 分参考线 */}
         <line x1={pad} y1={pad} x2={width - pad} y2={pad} stroke="var(--border)" strokeDasharray="4 3" />
@@ -76,10 +78,10 @@ export function PracticeGrowthChart({ reports }: { reports: PracticeReportSummar
         </text>
       </svg>
       <figcaption className="practice-growth-legend">
-        {DIMENSIONS.map(({ label, color }) => (
-          <span key={label}>
+        {DIMENSIONS.map(({ labelKey, color }) => (
+          <span key={labelKey}>
             <span className="practice-growth-swatch" style={{ background: color }} aria-hidden="true" />
-            {label}
+            {t(labelKey)}
           </span>
         ))}
       </figcaption>
@@ -94,8 +96,9 @@ export interface PracticeHistorySectionProps {
 }
 
 export function PracticeHistorySection({ reports, selectedSessionId, onSelect }: PracticeHistorySectionProps) {
+  useT();
   return (
-    <section className="practice-history" aria-label="训练历史">
+    <section className="practice-history" aria-label={t("practice.history.regionAria")}>
       <PracticeGrowthChart reports={reports} />
       <ul className="practice-history-list">
         {reports.map((report) => (
@@ -107,11 +110,11 @@ export function PracticeHistorySection({ reports, selectedSessionId, onSelect }:
               aria-pressed={report.sessionId === selectedSessionId}
               onClick={() => onSelect(report.sessionId)}
             >
-              <span className="practice-history-position">{report.position || "模拟面试训练"}</span>
+              <span className="practice-history-position">{report.position || t("practice.report.untitledPosition")}</span>
               <span className="status-badge">{report.interviewerStyle}</span>
               <span className="practice-history-score">{formatScore(report.totalScore)} / 5</span>
               <span className="muted practice-history-meta">
-                {report.durationSeconds !== null ? formatDuration(Math.round(report.durationSeconds)) : "时长不可用"}
+                {report.durationSeconds !== null ? formatDuration(Math.round(report.durationSeconds)) : t("practice.history.durationUnavailable")}
                 {" · "}
                 {report.createdAt.slice(0, 10)}
               </span>

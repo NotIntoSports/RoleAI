@@ -3,9 +3,20 @@ import { Camera, ChevronLeft, ChevronRight, CircleStop, Hand, MessageSquare, Pau
 
 import * as api from "../../api/commands";
 import type { LivestreamMediaKind, LivestreamRuntime, MaterialSummary, ObsRuntimeStatus } from "../../generated/bindings";
+import { t, useT, type DictionaryStringKey } from "../../i18n";
 import "../../styles/workspace.css";
 
+const OUTPUT_STATE_KEYS: Record<string, DictionaryStringKey> = {
+  idle: "livestream.outputState.idle",
+  synthesizing: "livestream.outputState.synthesizing",
+  playing: "livestream.outputState.playing",
+  played: "livestream.outputState.played",
+  cancelled: "livestream.outputState.cancelled",
+  failed: "livestream.outputState.failed",
+};
+
 export function LivestreamStudio() {
+  useT();
   const [materials, setMaterials] = useState<MaterialSummary[]>([]);
   const [selectedMaterials, setSelectedMaterials] = useState<string[]>([]);
   const [title, setTitle] = useState("");
@@ -39,11 +50,11 @@ export function LivestreamStudio() {
 
   async function generate() {
     if (!title.trim() || selectedMaterials.length === 0) {
-      setMessage("请输入产品标题并至少选择一份已就绪资料。");
+      setMessage(t("livestream.messages.needTitleAndMaterials"));
       return;
     }
     setBusy(true);
-    setMessage("正在根据本地资料生成有限分段讲稿…");
+    setMessage(t("livestream.messages.generating"));
     try {
       const result = await api.generateLivestream({
         title: title.trim(),
@@ -54,9 +65,9 @@ export function LivestreamStudio() {
         mediaPath: mediaPath.trim() || null,
         mediaKind: mediaKind || null,
       });
-      if (result.ok) { setRuntime(result.data); setMessage("讲稿已生成，请编辑并确认后播放。"); }
+      if (result.ok) { setRuntime(result.data); setMessage(t("livestream.messages.generated")); }
       else setMessage(`${result.error.code}：${result.error.message}`);
-    } catch { setMessage("IPC_UNAVAILABLE：讲稿生成失败"); }
+    } catch { setMessage(t("livestream.messages.ipcGenerateFailed")); }
     finally { setBusy(false); }
   }
 
@@ -76,7 +87,7 @@ export function LivestreamStudio() {
         mediaPath: mediaPath.trim() || null,
         mediaKind: mediaKind || null,
       });
-      if (result.ok) { setRuntime(result.data); setMessage("修改已保存，请确认讲稿。"); }
+      if (result.ok) { setRuntime(result.data); setMessage(t("livestream.messages.saved")); }
       else setMessage(`${result.error.code}：${result.error.message}`);
     } finally { setBusy(false); }
   }
@@ -87,19 +98,19 @@ export function LivestreamStudio() {
       const result = await api.controlLivestream(action);
       if (result.ok) { setRuntime(result.data); setMessage(""); }
       else setMessage(`${result.error.code}：${result.error.message}`);
-    } catch { setMessage("IPC_UNAVAILABLE：直播控制失败"); }
+    } catch { setMessage(t("livestream.messages.ipcControlFailed")); }
     finally { setBusy(false); }
   }
 
   async function askQuestion() {
     if (!question.trim()) return;
     setBusy(true);
-    setMessage("正在根据已确认讲稿回答人工问题…");
+    setMessage(t("livestream.messages.answering"));
     try {
       const result = await api.insertLivestreamQuestion(question.trim());
-      if (result.ok) { setRuntime(result.data); setQuestion(""); setMessage("人工问题已插入，回答完成后可继续原讲稿。"); }
+      if (result.ok) { setRuntime(result.data); setQuestion(""); setMessage(t("livestream.messages.questionInserted")); }
       else setMessage(`${result.error.code}：${result.error.message}`);
-    } catch { setMessage("IPC_UNAVAILABLE：人工问题处理失败"); }
+    } catch { setMessage(t("livestream.messages.ipcQuestionFailed")); }
     finally { setBusy(false); }
   }
 
@@ -107,9 +118,9 @@ export function LivestreamStudio() {
     setBusy(true);
     try {
       const result = action === "start" ? await api.startObsVirtualCamera() : await api.stopObsVirtualCamera();
-      if (result.ok) { setObs(result.data); setMessage(result.data.errorCode ? `OBS：${result.data.errorCode}` : ""); }
+      if (result.ok) { setObs(result.data); setMessage(result.data.errorCode ? t("livestream.messages.obsError", { code: result.data.errorCode }) : ""); }
       else setMessage(`${result.error.code}：${result.error.message}`);
-    } catch { setMessage("OBS_CONTROL_FAILED：无法连接本机 OBS"); }
+    } catch { setMessage(t("livestream.messages.obsStartFailed")); }
     finally { setBusy(false); }
   }
 
@@ -117,9 +128,9 @@ export function LivestreamStudio() {
     setBusy(true);
     try {
       const result = await api.saveObsPassword(obsPassword);
-      if (result.ok) { setObsPasswordConfigured(result.data.configured); setObsPassword(""); setMessage(result.data.configured ? "OBS 密码已安全保存。" : "OBS 密码已清除。"); }
+      if (result.ok) { setObsPasswordConfigured(result.data.configured); setObsPassword(""); setMessage(result.data.configured ? t("livestream.messages.obsPasswordSaved") : t("livestream.messages.obsPasswordCleared")); }
       else setMessage(`${result.error.code}：${result.error.message}`);
-    } catch { setMessage("SECRET_BACKEND_UNAVAILABLE：OBS 密码保存失败"); }
+    } catch { setMessage(t("livestream.messages.obsPasswordSaveFailed")); }
     finally { setBusy(false); }
   }
 
@@ -138,55 +149,55 @@ export function LivestreamStudio() {
 
   return <section className="workspace-session livestream-studio" aria-labelledby="livestream-heading">
     <header className="session-toolbar">
-      <div><h2 id="livestream-heading">虚拟直播</h2><p>使用本地产品资料生成可控讲稿，图片或循环视频通过 OBS Virtual Camera 输出。</p></div>
+      <div><h2 id="livestream-heading">{t("livestream.heading")}</h2><p>{t("livestream.description")}</p></div>
       <div className="service-actions">
-        <span className="status-badge" data-active={obs?.virtualCameraActive ?? false}>{obs?.virtualCameraActive ? "虚拟摄像头已启动" : "虚拟摄像头未启动"}</span>
-        <button disabled={busy || !runtime?.script.confirmed} onClick={() => void obsControl("start")}><Camera size={15} />启动 OBS 输出</button>
-        <button disabled={busy || !obs?.virtualCameraActive} onClick={() => void obsControl("stop")}><CircleStop size={15} />停止 OBS 输出</button>
+        <span className="status-badge" data-active={obs?.virtualCameraActive ?? false}>{obs?.virtualCameraActive ? t("livestream.cameraActive") : t("livestream.cameraInactive")}</span>
+        <button disabled={busy || !runtime?.script.confirmed} onClick={() => void obsControl("start")}><Camera size={15} />{t("livestream.startObs")}</button>
+        <button disabled={busy || !obs?.virtualCameraActive} onClick={() => void obsControl("stop")}><CircleStop size={15} />{t("livestream.stopObs")}</button>
       </div>
     </header>
 
     {message && <p role="status">{message}</p>}
-    {runtime && <p role="status">语音线路：{{ idle: "待机", synthesizing: "正在合成", playing: "正在实际播放", played: "已实际播放", cancelled: "已取消/人工接管", failed: "播放失败" }[runtime.stage.outputState]}{runtime.stage.outputErrorCode ? `（${runtime.stage.outputErrorCode}）` : ""}</p>}
+    {runtime && <p role="status">{t("livestream.voiceRouteStage", { state: OUTPUT_STATE_KEYS[runtime.stage.outputState] ? t(OUTPUT_STATE_KEYS[runtime.stage.outputState]) : runtime.stage.outputState })}{runtime.stage.outputErrorCode ? `（${runtime.stage.outputErrorCode}）` : ""}</p>}
     <details className="livestream-configuration" open={!runtime}>
-    <summary>直播配置与产品资料</summary>
-    <section className="session-selection livestream-setup" aria-label="直播向导">
-      <label>OBS WebSocket 密码<input type="password" value={obsPassword} onChange={(event) => setObsPassword(event.target.value)} placeholder={obsPasswordConfigured ? "已配置；留空并保存可清除" : "仅保存到 Windows 凭据管理器"} /></label>
-      <button disabled={busy} onClick={() => void saveObsCredential()}>{obsPasswordConfigured && !obsPassword ? "清除 OBS 密码" : "保存 OBS 密码"}</button>
-      <label>产品标题<input value={title} onChange={(event) => setTitle(event.target.value)} /></label>
-      <label>讲解语言<input value={language} onChange={(event) => setLanguage(event.target.value)} /></label>
-      <label>最多段数<input type="number" min={1} max={12} value={maxSegments} onChange={(event) => setMaxSegments(Number(event.target.value))} /></label>
-      <label>人物图片或循环视频路径<input value={mediaPath} onChange={(event) => setMediaPath(event.target.value)} placeholder="可选：本机图片或视频文件" /></label>
-      <label>素材类型<select value={mediaKind} onChange={(event) => setMediaKind(event.target.value as LivestreamMediaKind | "")}><option value="">无素材</option><option value="image">图片</option><option value="video">循环视频</option></select></label>
-      <label><input type="checkbox" checked={loopEnabled} onChange={(event) => setLoopEnabled(event.target.checked)} />讲稿播完后循环</label>
-      <fieldset><legend>产品资料</legend>{materials.length === 0 ? <p>暂无已就绪资料，请先到“资料”页导入并建立索引。</p> : materials.map((material) => <label key={material.id}><input type="checkbox" checked={selectedMaterials.includes(material.id)} onChange={(event) => setSelectedMaterials((current) => event.target.checked ? [...current, material.id] : current.filter((id) => id !== material.id))} />{material.fileName}</label>)}</fieldset>
-      <button className="button-primary" disabled={busy} onClick={() => void generate()}>生成分段讲稿</button>
+    <summary>{t("livestream.config.summary")}</summary>
+    <section className="session-selection livestream-setup" aria-label={t("livestream.config.wizardAria")}>
+      <label>{t("livestream.config.obsPasswordLabel")}<input type="password" value={obsPassword} onChange={(event) => setObsPassword(event.target.value)} placeholder={obsPasswordConfigured ? t("livestream.config.obsPasswordConfiguredPlaceholder") : t("livestream.config.obsPasswordPlaceholder")} /></label>
+      <button disabled={busy} onClick={() => void saveObsCredential()}>{obsPasswordConfigured && !obsPassword ? t("livestream.config.clearObsPassword") : t("livestream.config.saveObsPassword")}</button>
+      <label>{t("livestream.config.titleLabel")}<input value={title} onChange={(event) => setTitle(event.target.value)} /></label>
+      <label>{t("livestream.config.languageLabel")}<input value={language} onChange={(event) => setLanguage(event.target.value)} /></label>
+      <label>{t("livestream.config.maxSegmentsLabel")}<input type="number" min={1} max={12} value={maxSegments} onChange={(event) => setMaxSegments(Number(event.target.value))} /></label>
+      <label>{t("livestream.config.mediaPathLabel")}<input value={mediaPath} onChange={(event) => setMediaPath(event.target.value)} placeholder={t("livestream.config.mediaPathPlaceholder")} /></label>
+      <label>{t("livestream.config.mediaKindLabel")}<select value={mediaKind} onChange={(event) => setMediaKind(event.target.value as LivestreamMediaKind | "")}><option value="">{t("livestream.config.mediaNone")}</option><option value="image">{t("livestream.config.mediaImage")}</option><option value="video">{t("livestream.config.mediaVideo")}</option></select></label>
+      <label><input type="checkbox" checked={loopEnabled} onChange={(event) => setLoopEnabled(event.target.checked)} />{t("livestream.config.loopLabel")}</label>
+      <fieldset><legend>{t("livestream.config.materialsLegend")}</legend>{materials.length === 0 ? <p>{t("livestream.config.noReadyMaterials")}</p> : materials.map((material) => <label key={material.id}><input type="checkbox" checked={selectedMaterials.includes(material.id)} onChange={(event) => setSelectedMaterials((current) => event.target.checked ? [...current, material.id] : current.filter((id) => id !== material.id))} />{material.fileName}</label>)}</fieldset>
+      <button className="button-primary" disabled={busy} onClick={() => void generate()}>{t("livestream.config.generate")}</button>
     </section>
     </details>
 
-    {runtime && <section className="livestream-script" aria-label="讲稿编辑">
+    {runtime && <section className="livestream-script" aria-label={t("livestream.script.editorAria")}>
       <h3>{runtime.script.title}</h3>
       {runtime.script.segments.map((segment, index) => <article className="preflight-card" key={segment.id}>
-        <label>段落标题<input value={segment.title} onChange={(event) => updateSegment(index, "title", event.target.value)} /></label>
-        <label>讲稿内容<textarea value={segment.text} onChange={(event) => updateSegment(index, "text", event.target.value)} /></label>
-        <small>预计 {segment.estimatedSeconds} 秒 · 来源：{segment.sources.join("、") || "本地资料"}</small>
+        <label>{t("livestream.script.segmentTitleLabel")}<input value={segment.title} onChange={(event) => updateSegment(index, "title", event.target.value)} /></label>
+        <label>{t("livestream.script.segmentTextLabel")}<textarea value={segment.text} onChange={(event) => updateSegment(index, "text", event.target.value)} /></label>
+        <small>{t("livestream.script.estimatedSeconds", { n: segment.estimatedSeconds, sources: segment.sources.join("、") || t("livestream.script.localSources") })}</small>
       </article>)}
       <div className="service-actions">
-        <button disabled={busy || runtime.script.confirmed} onClick={() => void saveEdits()}>保存修改</button>
-        <button disabled={busy || runtime.script.confirmed} onClick={() => void control("confirm")}>确认讲稿</button>
-        <button disabled={busy || !runtime.script.confirmed || runtime.script.state === "playing"} onClick={() => void control("start")}><Play size={15} />开始播报</button>
-        <button disabled={busy || runtime.script.state !== "playing"} onClick={() => void control("pause")}><Pause size={15} />暂停</button>
-        <button disabled={busy || runtime.script.state !== "playing"} onClick={() => void control("takeover")}><Hand size={15} />人工接管</button>
-        <button disabled={busy || runtime.script.state !== "paused"} onClick={() => void control("resume")}><Play size={15} />继续</button>
-        <button disabled={busy || runtime.script.currentIndex === null} onClick={() => void control("previous")}><ChevronLeft size={15} />上一段</button>
-        <button disabled={busy || runtime.script.currentIndex === null} onClick={() => void control("next")}><ChevronRight size={15} />下一段</button>
-        <button disabled={busy || runtime.script.currentIndex === null} onClick={() => void control("replay")}><RotateCcw size={15} />重讲</button>
+        <button disabled={busy || runtime.script.confirmed} onClick={() => void saveEdits()}>{t("livestream.script.save")}</button>
+        <button disabled={busy || runtime.script.confirmed} onClick={() => void control("confirm")}>{t("livestream.script.confirm")}</button>
+        <button disabled={busy || !runtime.script.confirmed || runtime.script.state === "playing"} onClick={() => void control("start")}><Play size={15} />{t("livestream.script.start")}</button>
+        <button disabled={busy || runtime.script.state !== "playing"} onClick={() => void control("pause")}><Pause size={15} />{t("livestream.script.pause")}</button>
+        <button disabled={busy || runtime.script.state !== "playing"} onClick={() => void control("takeover")}><Hand size={15} />{t("livestream.script.takeover")}</button>
+        <button disabled={busy || runtime.script.state !== "paused"} onClick={() => void control("resume")}><Play size={15} />{t("livestream.script.resume")}</button>
+        <button disabled={busy || runtime.script.currentIndex === null} onClick={() => void control("previous")}><ChevronLeft size={15} />{t("livestream.script.previous")}</button>
+        <button disabled={busy || runtime.script.currentIndex === null} onClick={() => void control("next")}><ChevronRight size={15} />{t("livestream.script.next")}</button>
+        <button disabled={busy || runtime.script.currentIndex === null} onClick={() => void control("replay")}><RotateCcw size={15} />{t("livestream.script.replay")}</button>
       </div>
       <div className="service-actions">
-        <label>插入人工问题<input value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="例如：这款产品适合什么场景？" /></label>
-        <button disabled={busy || !runtime.script.confirmed || !question.trim()} onClick={() => void askQuestion()}><MessageSquare size={15} />回答并播报</button>
+        <label>{t("livestream.script.questionLabel")}<input value={question} onChange={(event) => setQuestion(event.target.value)} placeholder={t("livestream.script.questionPlaceholder")} /></label>
+        <button disabled={busy || !runtime.script.confirmed || !question.trim()} onClick={() => void askQuestion()}><MessageSquare size={15} />{t("livestream.script.answerAndSpeak")}</button>
       </div>
     </section>}
-    <p className="muted">首期不读取弹幕，不配置平台账号，不自动持续生成内容。Virtual Camera 只传视频，声音使用独立虚拟音频线路。</p>
+    <p className="muted">{t("livestream.footnote")}</p>
   </section>;
 }

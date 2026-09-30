@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useRef, type FormEvent } from "react";
 import { Bot, Copy, MessageSquare, Volume2 } from "lucide-react";
 
+import { t, useT } from "../../i18n";
 import { clockOf } from "./workspace-format";
 import { LatencyWaterfall } from "./latency-waterfall";
 import type { SessionTurnView } from "../../generated/bindings";
@@ -49,6 +50,7 @@ export function TranscriptPanel({
   onCopy,
   onAdjustConfiguration,
 }: TranscriptPanelProps) {
+  useT();
   const conversationRef = useRef<HTMLDivElement | null>(null);
   const conversationBottomRef = useRef<HTMLDivElement | null>(null);
   // 仅最后一轮仅转写轮旁提供追答：更早的转写轮的应答素材已被后续轮消费，
@@ -63,40 +65,40 @@ export function TranscriptPanel({
   }, [turns.length, transcript, reply]);
 
   return (
-    <div className="session-conversation" role="region" aria-label="会话对话" tabIndex={0} ref={conversationRef}>
+    <div className="session-conversation" role="region" aria-label={t("session.transcript.region")} tabIndex={0} ref={conversationRef}>
       {!transcript && !reply && turns.length === 0 ? (
         <div className="session-welcome">
           <span className="session-welcome-icon"><MessageSquare size={25} strokeWidth={1.5} aria-hidden="true" /></span>
-          <span className="session-welcome-eyebrow">ROLEAI · 你的对话助手</span>
-          <h3>{active ? "正在等待你的输入" : "开始一段新对话"}</h3>
-          <p>{active ? "开口说出问题，停顿后自动提交。" : "点击「开始会话」，与 RoleAI 交流。"}</p>
+          <span className="session-welcome-eyebrow">{t("session.transcript.eyebrow")}</span>
+          <h3>{active ? t("session.transcript.waitingTitle") : t("session.transcript.newTitle")}</h3>
+          <p>{active ? t("session.transcript.waitingHint") : t("session.transcript.newHint")}</p>
           <p>{welcomeRoleName}</p>
-          {!active && <button className="button-ghost" type="button" onClick={onAdjustConfiguration}>调整会话配置</button>}
+          {!active && <button className="button-ghost" type="button" onClick={onAdjustConfiguration}>{t("session.transcript.adjustConfig")}</button>}
         </div>
       ) : (
         <div className="session-turn">
           {historyTurns.map((item) => (
             <Fragment key={item.id}>
               {item.userText && (
-                <article className="session-bubble session-bubble-user" aria-label={`用户转写 · 第 ${item.turnIndex + 1} 轮`}>
+                <article className="session-bubble session-bubble-user" aria-label={t("session.transcript.userTurnAria", { n: item.turnIndex + 1 })}>
                   <p>{item.userText}</p>
                 </article>
               )}
               {item.userText && !item.assistantText && showTranscriptOnlyNotes && (
-                <p className="session-transcript-note" aria-label={`未点名仅转写 · 第 ${item.turnIndex + 1} 轮`}>
-                  未点名，仅转写
+                <p className="session-transcript-note" aria-label={t("session.transcript.transcriptOnlyAria", { n: item.turnIndex + 1 })}>
+                  {t("session.transcript.transcriptOnlyNote")}
                   {active && item === lastTurn && (
-                    <button type="button" className="session-transcript-followup" disabled={busy} onClick={onTriggerAssistant}>让助手回答</button>
+                    <button type="button" className="session-transcript-followup" disabled={busy} onClick={onTriggerAssistant}>{t("session.transcript.followUp")}</button>
                   )}
                 </p>
               )}
               {item.assistantText && (
-                <article className="session-bubble session-bubble-assistant" aria-label={`AI 回复 · 第 ${item.turnIndex + 1} 轮`}>
+                <article className="session-bubble session-bubble-assistant" aria-label={t("session.transcript.assistantTurnAria", { n: item.turnIndex + 1 })}>
                   <header className="bubble-head">
                     <span className="bubble-avatar" aria-hidden="true"><Bot size={15} /></span>
                     <h3>{roleName}</h3>
                     {clockOf(item.createdAt) && <time className="bubble-time">{clockOf(item.createdAt)}</time>}
-                    <button type="button" className="bubble-copy" aria-label={`复制第 ${item.turnIndex + 1} 轮回复`} onClick={() => onCopy(item.assistantText)}>
+                    <button type="button" className="bubble-copy" aria-label={t("session.transcript.copyTurnAria", { n: item.turnIndex + 1 })} onClick={() => onCopy(item.assistantText)}>
                       <Copy size={13} aria-hidden="true" />
                     </button>
                   </header>
@@ -108,14 +110,14 @@ export function TranscriptPanel({
               )}
             </Fragment>
           ))}
-          {historyTurns.length > 0 && <p className="session-turn-label">当前轮</p>}
+          {historyTurns.length > 0 && <p className="session-turn-label">{t("session.transcript.currentTurn")}</p>}
           {transcript && (
-            <article className="session-bubble session-bubble-user session-bubble-live" aria-label="用户转写">
+            <article className="session-bubble session-bubble-user session-bubble-live" aria-label={t("session.transcript.liveUserAria")}>
               <p>{transcript}</p>
             </article>
           )}
           {reply && (
-            <article className="session-bubble session-bubble-assistant session-bubble-live" aria-label="AI 回复">
+            <article className="session-bubble session-bubble-assistant session-bubble-live" aria-label={t("session.transcript.liveReplyAria")}>
               <header className="bubble-head">
                 <span className="bubble-avatar" aria-hidden="true"><Bot size={15} /></span>
                 <h3>{roleName}</h3>
@@ -125,21 +127,21 @@ export function TranscriptPanel({
           )}
           {pendingConfirmation && (
             <form className="candidate-confirmation" onSubmit={onConfirmCandidate}>
-              <label htmlFor="candidate-confirmation-text">确认播报内容</label>
+              <label htmlFor="candidate-confirmation-text">{t("session.transcript.confirmLabel")}</label>
               <textarea
                 id="candidate-confirmation-text"
                 value={confirmationText}
                 onChange={(event) => onConfirmationTextChange(event.target.value)}
               />
-              <p>求职者模式不会自动播报。请核对或编辑后再确认。</p>
+              <p>{t("session.transcript.confirmHint")}</p>
               <button className="button-primary" disabled={busy || !active || !confirmationText.trim()} type="submit">
-                <Volume2 size={15} aria-hidden="true" />确认并播报
+                <Volume2 size={15} aria-hidden="true" />{t("session.transcript.confirmAction")}
               </button>
             </form>
           )}
         </div>
       )}
-      {unusedMaterials && <p className="session-materials-note">本轮未使用资料</p>}
+      {unusedMaterials && <p className="session-materials-note">{t("session.transcript.unusedMaterials")}</p>}
       <div ref={conversationBottomRef} aria-hidden="true" />
     </div>
   );

@@ -10,6 +10,8 @@ import type {
 import { getState, updateState } from "./state";
 import { demoId, err, latency, ok } from "./util";
 
+import { demoT } from "./demo-text";
+
 const OBS_CONNECTED: ObsRuntimeStatus = {
   connected: true,
   sceneReady: true,
@@ -26,7 +28,7 @@ const OBS_IDLE: ObsRuntimeStatus = {
   errorCode: null,
 };
 
-function emptyRuntime(title = "演示讲稿"): LivestreamRuntime {
+function emptyRuntime(title = demoT().misc.demoScriptTitle): LivestreamRuntime {
   return {
     script: {
       id: demoId("script"),
@@ -135,11 +137,11 @@ export function handleLivestreamCommand(cmd: string, payload: Record<string, unk
     case "livestream_generate": {
       const input = payload.input as LivestreamGenerateInput;
       if (!input.title.trim() || !input.materialIds.length) {
-        return err("LIVESTREAM_INPUT_INVALID", "请输入产品标题并选择至少一份资料。");
+        return err("LIVESTREAM_INPUT_INVALID", demoT().livestream.inputInvalid);
       }
       return latency(500, 1200).then(() => {
         const segments = buildSegments(input, true);
-        if (!segments.length) return err("LIVESTREAM_NO_MATERIAL", "所选资料没有可用的内容小节。");
+        if (!segments.length) return err("LIVESTREAM_NO_MATERIAL", demoT().livestream.noMaterial);
         return ok(
           persist(runtimeFromSegments(input.title, segments, input.loopEnabled, input.mediaPath, input.mediaKind, false, "ready")),
         );
@@ -165,7 +167,7 @@ export function handleLivestreamCommand(cmd: string, payload: Record<string, unk
             state = "ready";
             break;
           case "start":
-            if (!current.script.confirmed) return err("LIVESTREAM_NOT_CONFIRMED", "请先确认讲稿再开始播放。");
+            if (!current.script.confirmed) return err("LIVESTREAM_NOT_CONFIRMED", demoT().livestream.notConfirmed);
             state = "playing";
             index = 0;
             break;
@@ -191,7 +193,7 @@ export function handleLivestreamCommand(cmd: string, payload: Record<string, unk
             state = "finished";
             break;
           default:
-            return err("LIVESTREAM_ACTION_UNKNOWN", `未知的直播控制动作（${action}）`);
+            return err("LIVESTREAM_ACTION_UNKNOWN", demoT().livestream.unknownAction(action));
         }
         const next = runtimeFromSegments(
           current.script.title,
@@ -213,16 +215,16 @@ export function handleLivestreamCommand(cmd: string, payload: Record<string, unk
     }
     case "livestream_insert_question": {
       const question = String(payload.question ?? "").trim();
-      if (!question) return err("LIVESTREAM_QUESTION_EMPTY", "请输入人工提问。");
+      if (!question) return err("LIVESTREAM_QUESTION_EMPTY", demoT().livestream.questionEmpty);
       return latency(300, 800).then(() => {
         const current = getState().livestream;
         if (!current || !current.script.confirmed) {
-          return err("LIVESTREAM_NOT_CONFIRMED", "请先确认讲稿，再插入人工提问。");
+          return err("LIVESTREAM_NOT_CONFIRMED", demoT().livestream.notConfirmed);
         }
         const answerSegment = {
           id: demoId("seg"),
-          title: `回答提问：${question.slice(0, 12)}`,
-          text: `关于「${question}」：依据已确认讲稿与资料，直播讲解员只陈述资料中写明的内容，不做额外承诺。具体数据与口径以资料为准。`,
+          title: demoT().livestream.questionSegmentTitle(question),
+          text: demoT().livestream.questionSegmentText(question),
           estimatedSeconds: 20,
           sources: [] as string[],
           status: "ready" as const,

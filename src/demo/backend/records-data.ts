@@ -330,3 +330,14 @@ export const DEMO_SESSIONS: DemoSeedSession[] = [
     ],
   },
 ];
+
+import { currentLanguage, type Language } from "../../i18n";
+
+import { DEMO_SESSIONS_EN } from "./records-data-en";
+
+const ALL_SESSIONS: Record<Language, DemoSeedSession[]> = { "zh-CN": DEMO_SESSIONS, en: DEMO_SESSIONS_EN };
+
+/** 按当前界面语言取会话种子；数值时间线与语言无关，仍由 seedTurnLatency 生成。 */
+export function demoSessions(): DemoSeedSession[] {
+  return ALL_SESSIONS[currentLanguage()];
+}

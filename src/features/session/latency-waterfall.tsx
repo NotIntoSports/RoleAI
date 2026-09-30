@@ -2,30 +2,31 @@
 // 纯 CSS/flex 实现，不引入图表库（与设置页性能面板同一方案）。
 import { useState } from "react";
 
+import { t, useT, type DictionaryStringKey } from "../../i18n";
 import type { TurnLatencyView } from "../../generated/bindings";
 
 interface StageAnchor {
   field: string;
-  label: string;
+  label: DictionaryStringKey;
   color: string;
 }
 
 // 各模式的锚点顺序（时间线字段声明序）。条形图显示相邻锚点之间的耗时段。
 const REALTIME_ANCHORS: StageAnchor[] = [
-  { field: "speechStartedMs", label: "听到说话", color: "#8fb4d9" },
-  { field: "speechStoppedMs", label: "说完（断句）", color: "#5f8fc4" },
-  { field: "transcriptDoneMs", label: "转写完成", color: "#7fbf8e" },
-  { field: "responseCreatedMs", label: "请求发出", color: "#d9b25f" },
-  { field: "firstAudioMs", label: "首包音频", color: "#d98a5f" },
-  { field: "responseDoneMs", label: "回答完成", color: "#b78fd9" },
+  { field: "speechStartedMs", label: "session.latency.heardSpeech", color: "#8fb4d9" },
+  { field: "speechStoppedMs", label: "session.latency.speechStopped", color: "#5f8fc4" },
+  { field: "transcriptDoneMs", label: "session.latency.transcriptDone", color: "#7fbf8e" },
+  { field: "responseCreatedMs", label: "session.latency.requestSent", color: "#d9b25f" },
+  { field: "firstAudioMs", label: "session.latency.firstAudio", color: "#d98a5f" },
+  { field: "responseDoneMs", label: "session.latency.responseDone", color: "#b78fd9" },
 ];
 
 const CASCADE_ANCHORS: StageAnchor[] = [
-  { field: "asrDoneMs", label: "转写完成", color: "#5f8fc4" },
-  { field: "retrievalDoneMs", label: "资料检索", color: "#8fceb0" },
-  { field: "llmFirstTokenMs", label: "首词生成", color: "#d9b25f" },
-  { field: "llmDoneMs", label: "回答生成", color: "#e0a04f" },
-  { field: "ttsDoneMs", label: "语音合成", color: "#d98a5f" },
+  { field: "asrDoneMs", label: "session.latency.transcriptDone", color: "#5f8fc4" },
+  { field: "retrievalDoneMs", label: "session.latency.retrieval", color: "#8fceb0" },
+  { field: "llmFirstTokenMs", label: "session.latency.firstToken", color: "#d9b25f" },
+  { field: "llmDoneMs", label: "session.latency.llmDone", color: "#e0a04f" },
+  { field: "ttsDoneMs", label: "session.latency.ttsDone", color: "#d98a5f" },
 ];
 
 export interface WaterfallSegment {
@@ -49,15 +50,15 @@ export function buildWaterfallSegments(latency: TurnLatencyView): WaterfallSegme
   for (let index = 1; index < present.length; index += 1) {
     const ms = present[index].value - present[index - 1].value;
     if (ms > 0) {
-      segments.push({ label: present[index].anchor.label, ms, color: present[index].anchor.color });
+      segments.push({ label: t(present[index].anchor.label), ms, color: present[index].anchor.color });
     }
   }
   return segments;
 }
 
 export function formatLatencyTotal(ms: number): string {
-  if (ms >= 1_000) return `${(ms / 1_000).toFixed(1)} 秒`;
-  return `${Math.round(ms)} 毫秒`;
+  if (ms >= 1_000) return t("session.latency.seconds", { n: (ms / 1_000).toFixed(1) });
+  return t("session.latency.millis", { n: Math.round(ms) });
 }
 
 interface LatencyWaterfallProps {
@@ -66,6 +67,7 @@ interface LatencyWaterfallProps {
 }
 
 export function LatencyWaterfall({ latency, turnIndex }: LatencyWaterfallProps) {
+  useT();
   const [open, setOpen] = useState(false);
   const segments = buildWaterfallSegments(latency);
   if (segments.length === 0) return null;
@@ -76,7 +78,7 @@ export function LatencyWaterfall({ latency, turnIndex }: LatencyWaterfallProps) 
         type="button"
         className="latency-waterfall-bar"
         aria-expanded={open}
-        aria-label={`第 ${turnIndex + 1} 轮延迟 ${formatLatencyTotal(total)}，点击${open ? "收起" : "展开"}明细`}
+        aria-label={t("session.latency.barAria", { n: turnIndex + 1, total: formatLatencyTotal(total), state: open ? t("session.latency.collapse") : t("session.latency.expand") })}
         onClick={() => setOpen((previous) => !previous)}
       >
         <span className="latency-waterfall-track" aria-hidden="true">
@@ -91,14 +93,14 @@ export function LatencyWaterfall({ latency, turnIndex }: LatencyWaterfallProps) 
         </span>
         <span className="latency-waterfall-total">{formatLatencyTotal(total)}</span>
       </button>
-      {latency.interrupted && <span className="latency-waterfall-flag">被打断</span>}
+      {latency.interrupted && <span className="latency-waterfall-flag">{t("session.latency.interrupted")}</span>}
       {open && (
         <table className="latency-waterfall-details">
-          <caption className="sr-only">第 {turnIndex + 1} 轮分阶段耗时</caption>
+          <caption className="sr-only">{t("session.latency.detailsCaption", { n: turnIndex + 1 })}</caption>
           <thead>
             <tr>
-              <th scope="col">阶段</th>
-              <th scope="col">耗时</th>
+              <th scope="col">{t("session.latency.stageCol")}</th>
+              <th scope="col">{t("session.latency.durationCol")}</th>
             </tr>
           </thead>
           <tbody>

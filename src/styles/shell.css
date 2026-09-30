@@ -67,6 +67,10 @@
 .app-shell [hidden] { display: none; }
 
 .appearance-settings { padding: 4px 0; }
+.appearance-language { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; border: 0; margin: 16px 0 0; padding: 0; }
+.appearance-language > label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-muted); }
+.appearance-language select { min-width: 170px; color: var(--text); }
+.appearance-language > .muted { margin: 0; font-size: 12px; }
 .theme-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; border: 0; margin: 0; padding: 0; }
 .theme-option { position: relative; min-width: 0; display: flex; flex-direction: column; cursor: pointer; border: 1px solid var(--border); border-radius: 10px; padding: 10px; gap: 6px; }
 .theme-option:hover { border-color: var(--border-strong); }

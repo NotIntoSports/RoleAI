@@ -6,6 +6,7 @@
 // 可注入 emitEvent，单测用假时钟驱动；脚本轮与用户插话共用一条串行队列。
 import type { RuntimeStatus, TurnLatencyView, TurnTimeline } from "../../generated/bindings";
 
+import { demoT } from "./demo-text";
 import type { DemoScript, DemoScriptTurn } from "./scripts";
 import { cancelDemoVoice, isDemoVoiceEnabled, speakDemoText } from "./demo-voice";
 
@@ -225,7 +226,7 @@ export class ScriptedLiveSession {
       await this.pauseBetween(this.randMs(THINKING_MS));
       if (this.disposed) return;
       await this.emitStatus("speaking");
-      await this.streamReplyChunks(retry, retry.assistantText || "（重答）好的，我们再讲一遍。", null);
+      await this.streamReplyChunks(retry, retry.assistantText || demoT().live.retryFallback, null);
       if (this.disposed) return;
       await this.emitStatus("listening");
     });
@@ -363,7 +364,8 @@ export class ScriptedLiveSession {
 
   /** 用户文字插话：落库并回答（脚本耗尽后用兜底回复）。 */
   private async runUserTurn(text: string): Promise<void> {
-    const reply = SCRIPT_TAIL[this.tailCursor % SCRIPT_TAIL.length];
+    const tail = demoT().live.tailReplies;
+    const reply = tail[this.tailCursor % tail.length];
     this.tailCursor += 1;
     await this.runUserSpeech(text);
     if (this.disposed) return;
@@ -423,8 +425,3 @@ export class ScriptedLiveSession {
     return emitted;
   }
 }
-
-const SCRIPT_TAIL = [
-  "演示脚本到这里就播完了。桌面的真实版本会持续进行语音对话；在线演示里你可以输入文字继续体验，或结束会话回看记录。",
-  "这段是演示的固定结尾：想再看一遍完整脚本，可以结束会话后重新开始；想体验真实语音，请下载桌面版。",
-];
