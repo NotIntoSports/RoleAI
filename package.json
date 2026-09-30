@@ -8,6 +8,7 @@
     "dev:tauri-ui": "vite --config vite.config.ts",
     "build:tauri-ui": "tsc -p tsconfig.tauri.json && vite build --config vite.config.ts",
     "test:tauri-ui": "vitest run --config vite.config.ts",
+    "test:coverage:ui": "vitest run --config vite.config.ts --coverage",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "test:tauri": "cargo test --manifest-path src-tauri/Cargo.toml && npm run test:tauri-ui && node --test tests/tauri/*.test.mjs && npm run build:tauri-ui",
@@ -15,6 +16,8 @@
     "dev:demo": "vite --config vite.demo.config.ts",
     "build:demo": "tsc -p tsconfig.tauri.json && vite build --config vite.demo.config.ts",
     "test:e2e:demo": "playwright test --config playwright.config.ts",
+    "test:e2e:desktop": "node e2e/desktop/wd-smoke.mjs",
+    "test:e2e:desktop:main": "node e2e/desktop/main-flow.mjs",
     "screenshots": "node scripts/screenshots.mjs",
     "demo:video": "node scripts/demo-video.mjs"
   },
@@ -36,7 +39,9 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "19.2.7",
     "@vitejs/plugin-react": "6.1.1",
+    "@vitest/coverage-v8": "5.0.0",
     "jsdom": "29.0.0",
+    "selenium-webdriver": "4.49.0",
     "typescript": "5.8.3",
     "vite": "8.2.2",
     "vitest": "5.0.0"

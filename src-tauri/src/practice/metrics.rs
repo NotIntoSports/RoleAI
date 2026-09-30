@@ -683,4 +683,18 @@ mod tests {
         // 混合语料同时计入两套语速分母。
         assert!(answer_metrics.chinese_chars > 0 && answer_metrics.english_words > 0);
     }
+
+    /// 空字符串条目必须被忽略：没有守卫时中文空串会命中每个字符边界、
+    /// 英文空串会命中每个词间隙，产出 word 为空的垃圾统计。
+    #[test]
+    fn empty_filler_entries_are_ignored() {
+        let mut cfg = MetricsConfig::default();
+        cfg.chinese_fillers.push(String::new());
+        cfg.english_fillers.push(String::new());
+        let metrics = compute_answers(&[answer("嗯，um，好的")], &cfg);
+        let hits = &metrics.answers[0].fillers;
+        assert_eq!(hits.len(), 2, "只应有 嗯 与 um 两条：{hits:?}");
+        assert!(hits.iter().all(|hit| !hit.word.is_empty()));
+        assert!(hits.iter().all(|hit| hit.count > 0));
+    }
 }

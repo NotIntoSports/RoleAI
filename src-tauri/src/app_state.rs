@@ -17,10 +17,10 @@ use crate::{
     sessions::SessionStore,
 };
 // Windows 凭据管理器后端仅在 Windows 编译；其它平台回退内存实现（见 default_secret_store）。
-#[cfg(windows)]
-use crate::secrets::WindowsSecretStore;
 #[cfg(not(windows))]
 use crate::secrets::MemorySecretStore;
+#[cfg(windows)]
+use crate::secrets::WindowsSecretStore;
 
 #[derive(Debug, Clone)]
 pub struct AppPaths {

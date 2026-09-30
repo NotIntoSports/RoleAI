@@ -12,6 +12,10 @@ export default defineConfig({
   use: {
     baseURL: "http://127.0.0.1:1421",
     viewport: { width: 1440, height: 900 },
+    // 失败时保留截图与 trace 到 test-results/（已 gitignore），
+    // 供 CI 的 e2e-demo job 作为 artifact 上传（I01）。
+    screenshot: "only-on-failure",
+    trace: "retain-on-failure",
     launchOptions: {
       // 演示默认输入源是本机麦克风：无头模式用假设备自动授权，避免权限弹窗卡住。
       args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream"],

@@ -318,4 +318,30 @@ mod tests {
             PlanParseError::ResponseInvalid
         );
     }
+
+    /// 围栏解析的退化输入：只有开头围栏没有换行（```json{...}）、
+    /// 有开头没有收尾围栏，都必须产出可用正文而不是原样带围栏。
+    #[test]
+    fn strip_code_fence_handles_missing_newline_and_missing_close() {
+        assert_eq!(
+            strip_code_fence(
+                "```json
+{\"a\":1}
+```"
+            ),
+            "{\"a\":1}"
+        );
+        // 无换行：标注行与正文粘连，剥掉标注前缀。
+        assert_eq!(strip_code_fence("```json{\"a\":1}"), "json{\"a\":1}");
+        // 无收尾围栏：正文取到末尾。
+        assert_eq!(
+            strip_code_fence(
+                "```json
+{\"a\":1}"
+            ),
+            "{\"a\":1}"
+        );
+        // 无围栏：原样 trim。
+        assert_eq!(strip_code_fence("  {\"a\":1}  "), "{\"a\":1}");
+    }
 }

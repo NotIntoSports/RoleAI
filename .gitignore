@@ -30,6 +30,7 @@ dist/
 dist-verify/
 dist-new/
 dist-desktop/
+coverage/
 _tmp_*.png
 crop_*.png
 *.tsbuildinfo
@@ -50,6 +51,10 @@ resources/prerequisites/*
 .local-archive/
 test-results/
 playwright-report/
+
+# cargo-mutants 变异测试产物（lane-I I07，scripts/run-mutants.ps1 可再生成）
+src-tauri/mutants.out/
+src-tauri/mutants.out.old/
 
 # 演示视频为可再生成产物（npm run demo:video），不入库
 .github/assets/demo/

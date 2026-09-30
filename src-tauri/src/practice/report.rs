@@ -362,4 +362,99 @@ mod tests {
         );
         assert_eq!(parse_generated_review("").unwrap_err(), ReviewUnavailable);
     }
+
+    /// 题目标记行提取的退化输入：只有【第 没有右括号时取到行尾，
+    /// 完全没有标记时截取前 80 字作题面占位。
+    #[test]
+    fn marker_line_extraction_degrades_gracefully() {
+        assert_eq!(extract_marker_line("【第3题"), "【第3题");
+        assert_eq!(
+            extract_marker_line("【第3题 没有右括号"),
+            "【第3题 没有右括号"
+        );
+        let long = "这是一段完全没有题目标记的回答文本。".repeat(10);
+        let extracted = extract_marker_line(&long);
+        assert_eq!(extracted.chars().count(), 80);
+        assert_eq!(extract_marker_line("短文本"), "短文本");
+    }
+
+    /// 点评通道失败必须以 ReviewUnavailable 收尾，且恰好重试两次；
+    /// 第一次失败、第二次成功的恢复路径也要接得住。
+    use crate::providers::{CascadeError, CascadeStage};
+
+    struct BrokenModel {
+        failures: std::sync::atomic::AtomicUsize,
+        fail_times: usize,
+        payload: &'static str,
+    }
+
+    impl ChatModel for BrokenModel {
+        fn complete(
+            &self,
+            _: &ProviderEndpoint,
+            _: Option<&str>,
+            _: &str,
+            _: &[ChatMessage],
+        ) -> Result<String, CascadeError> {
+            if self.failures.load(std::sync::atomic::Ordering::SeqCst) < self.fail_times {
+                self.failures
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                return Err(CascadeError::RequestFailed(CascadeStage::Llm));
+            }
+            Ok(self.payload.to_owned())
+        }
+    }
+
+    #[test]
+    fn review_generation_fails_closed_after_two_attempts() {
+        let model = BrokenModel {
+            failures: std::sync::atomic::AtomicUsize::new(0),
+            fail_times: 2,
+            payload: "",
+        };
+        let messages = build_review_messages("后端", "严苛面试官", &[]);
+        let result = generate_review_with_model(
+            &model,
+            &ProviderEndpoint {
+                provider_id: "fake".into(),
+                base_url: String::new(),
+            },
+            None,
+            "model-x",
+            &messages,
+        );
+        assert_eq!(result.unwrap_err(), ReviewUnavailable);
+        assert_eq!(
+            model.failures.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "必须恰好尝试两次"
+        );
+    }
+
+    #[test]
+    fn review_generation_retries_after_transport_failure() {
+        let model = BrokenModel {
+            failures: std::sync::atomic::AtomicUsize::new(0),
+            fail_times: 1,
+            payload: r#"{"perQuestion":[{"index":1,"score":3}],"totalScore":3}"#,
+        };
+        let messages = build_review_messages("后端", "严苛面试官", &[]);
+        let result = generate_review_with_model(
+            &model,
+            &ProviderEndpoint {
+                provider_id: "fake".into(),
+                base_url: String::new(),
+            },
+            None,
+            "model-x",
+            &messages,
+        );
+        let (_, _, total, _) = result.unwrap();
+        assert!((total - 3.0).abs() < f64::EPSILON);
+        assert_eq!(
+            model.failures.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "第二次尝试必须成功"
+        );
+    }
 }

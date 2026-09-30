@@ -43,6 +43,134 @@ jobs:
       - run: node --test tests/tauri/*.test.mjs
       - run: npm run test:tauri
 
+  e2e-demo:
+    # 演示版（GitHub Pages 在线 demo）端到端测试：真实浏览器走六页面 + 脚本会话主流程。
+    # ubuntu 比 windows 快；webServer 由 playwright.config.ts 拉起 npm run dev:demo，
+    # 纯浏览器产物（桌面壳与 Rust 工具链都不涉及）。
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Install Playwright Chromium
+        # --with-deps 安装 Linux 系统依赖（runner 用户有免密 sudo）。
+        run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e:demo
+      - name: Upload failure artifacts (screenshots and traces)
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-demo-artifacts
+          path: test-results
+          if-no-files-found: ignore
+
+  e2e-desktop:
+    # 真实桌面应用（debug 构建）端到端测试：官方 tauri-driver + msedgedriver 驱动
+    # WebView2，走配置/持久化/资料/文本对话导出/模拟面试闭环主流程
+    # （e2e/desktop/main-flow.mjs，模型交互全部指向本地 mock 服务器）。
+    # 全链路含冷缓存 debug 构建与 cargo install tauri-driver，远超 15 分钟，
+    # 按分线卡片只在 main 推送与手动触发时运行。
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable 分支（2026-09-30）
+        with:
+          toolchain: "1.96"
+      - run: npm ci
+      - name: Build Tauri UI (debug embed)
+        run: npm run build:tauri-ui
+      - name: Build desktop app (debug, no bundle)
+        run: npx tauri build --debug --no-bundle
+      - name: Install tauri-driver
+        run: cargo install tauri-driver --locked --version 2.1.0
+      - name: Install msedgedriver matching WebView2 Runtime
+        shell: pwsh
+        run: |
+          # msedgedriver 版本必须与本机 WebView2 Runtime 一致，否则会话建立挂起
+          # （官方文档行为，I02 选型已核实）。runner 的 Runtime 版本随镜像漂移，
+          # 从注册表读取后下载官方同版本驱动。
+          $keys = @(
+            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
+            'HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          )
+          $pv = $null
+          foreach ($key in $keys) {
+            if (Test-Path $key) {
+              $pv = (Get-ItemProperty -Path $key).pv
+              if ($pv) { break }
+            }
+          }
+          if (-not $pv) { throw 'WebView2 Runtime version not found in registry.' }
+          Write-Host "WebView2 Runtime version: $pv"
+          New-Item -ItemType Directory -Force .tools/msedgedriver | Out-Null
+          Invoke-WebRequest -Uri "https://msedgedriver.microsoft.com/$pv/edgedriver_win64.zip" -OutFile msedgedriver.zip
+          Expand-Archive msedgedriver.zip -DestinationPath .tools/msedgedriver -Force
+      - name: Run desktop e2e (smoke)
+        env:
+          TAURI_E2E_ARTIFACT_DIR: ${{ github.workspace }}/artifacts/desktop-e2e
+        run: npm run test:e2e:desktop
+      - name: Run desktop e2e (main flow)
+        env:
+          TAURI_E2E_ARTIFACT_DIR: ${{ github.workspace }}/artifacts/desktop-e2e
+        run: npm run test:e2e:desktop:main
+      - name: Upload failure artifacts (screenshots)
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-desktop-artifacts
+          path: artifacts/desktop-e2e
+          if-no-files-found: ignore
+
+  coverage:
+    # 覆盖率展示（lane-I I05）：前端 @vitest/coverage-v8，Rust cargo-llvm-cov。
+    # 只展示不设阈值门禁；不接入需要令牌的第三方覆盖率服务。
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable 分支（2026-09-30）
+        with:
+          toolchain: "1.96"
+      - run: rustup component add llvm-tools-preview
+      - run: npm ci
+      # 输出重定向不影响退出码：覆盖率测试失败时步骤保持红色。
+      - name: Frontend coverage (vitest + @vitest/coverage-v8)
+        run: npm run test:coverage:ui > coverage/ui-summary.txt 2>&1
+      - name: Rust coverage (cargo-llvm-cov)
+        run: cargo llvm-cov --manifest-path src-tauri/Cargo.toml --summary-only > coverage/rust-summary.txt 2>&1
+      - name: Write coverage summary
+        shell: pwsh
+        run: |
+          "## 覆盖率报告（总覆盖率 + 各模块）" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "### Frontend（vitest + @vitest/coverage-v8）" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          '```' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          Get-Content coverage/ui-summary.txt | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          '```' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "### Rust（cargo-llvm-cov，语句覆盖率）" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          '```' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          Get-Content coverage/rust-summary.txt | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          '```' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-reports
+          path: |
+            coverage/ui
+            coverage/ui-summary.txt
+            coverage/rust-summary.txt
+          if-no-files-found: ignore
+
   portable:
     # 跨平台可移植性证明：Linux / macOS 上 cargo check + lib 单测通过。
     # Windows 专属能力（凭据管理器、AudioBridge sidecar、会议进程采集）已在

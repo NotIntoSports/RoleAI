@@ -3,9 +3,7 @@
 //! 不引入新协议代码；模板只补缺失项，与角色预设同一策略（用户已配置的条目
 //! 优先，已删除的模板在下次启动时回补）。端点与默认模型见 `guide/local-models.md`。
 
-use super::{
-    AppConfigV1, EmbeddingConfig, EmbeddingDistance, ProviderConfig, VoiceRouteConfig,
-};
+use super::{AppConfigV1, EmbeddingConfig, EmbeddingDistance, ProviderConfig, VoiceRouteConfig};
 
 /// 本地模型预设供应商模板 ID（与角色预设 `PRESET_IDS` 并列）。
 pub const LOCAL_PRESET_PROVIDER_IDS: [&str; 4] = [
@@ -129,7 +127,10 @@ mod tests {
     fn seeds_once_and_passes_config_validation() {
         let mut config = AppConfigV1::default();
         assert!(ensure_local_model_presets(&mut config));
-        assert_eq!(config.models.providers.len(), LOCAL_PRESET_PROVIDER_IDS.len());
+        assert_eq!(
+            config.models.providers.len(),
+            LOCAL_PRESET_PROVIDER_IDS.len()
+        );
         config.validate().unwrap();
         // 第二次启动不再变更（幂等）。
         assert!(!ensure_local_model_presets(&mut config));

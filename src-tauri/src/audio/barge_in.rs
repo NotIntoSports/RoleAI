@@ -281,4 +281,166 @@ mod tests {
         m.ingest(&frames48(0, 200));
         assert!(m.take_staged().is_none());
     }
+
+    /// 触发后未取走前停止收集；取走后从干净状态重新积累，
+    /// 触发时刻滞留的旧 pending 不得混入下一轮话轮。
+    #[test]
+    fn staged_restart_collects_only_fresh_audio() {
+        // 第一轮：响人声触发并取走。
+        let mut probs = vec![0.9f32; 8];
+        probs.extend(vec![0.0f32; 40]);
+        let mut m = monitor(&probs);
+        m.ingest(&frames48(2000, 20));
+        assert!(m.triggered());
+        let first = m.take_staged().expect("staged");
+        assert_eq!(
+            first.len() % WINDOW_BYTES_48K,
+            0,
+            "话轮必须是完整窗的整数倍"
+        );
+
+        // 第二轮：同一监听器改喂安静的 100 幅度音频。若触发时刻滞留在
+        // pending 里的 2000 幅度旧字节泄漏进新一轮，最大样本幅度会是 2000。
+        let mut probs = vec![0.9f32; 8];
+        probs.extend(vec![0.0f32; 40]);
+        let mut m = monitor(&probs);
+        m.ingest(&frames48(100, 20));
+        assert!(m.triggered(), "取走后必须能重新触发");
+        let second = m.take_staged().expect("second staged");
+        let max_abs = second
+            .chunks_exact(2)
+            .map(|b| i16::from_le_bytes([b[0], b[1]]).unsigned_abs())
+            .max()
+            .unwrap_or(0);
+        assert_eq!(
+            max_abs, 100,
+            "新一轮话轮必须只含取走后新收集的音频，不得混入旧 pending"
+        );
+    }
+
+    /// 触发前的未取走状态：ingest 直接短路，缓冲冻结在触发时刻。
+    #[test]
+    fn staged_but_untaken_monitor_stops_buffering() {
+        let mut probs = vec![0.9f32; 8];
+        probs.extend(vec![0.0f32; 40]);
+        let mut m = monitor(&probs);
+        m.ingest(&frames48(2000, 20));
+        assert!(m.triggered());
+        let before = format!("{m:?}");
+        // 触发未取走时继续喂音频：缓冲必须原封不动。
+        m.ingest(&frames48(2000, 20));
+        assert_eq!(
+            format!("{m:?}"),
+            before,
+            "staged 未取走时 ingest 必须是空操作"
+        );
+    }
+
+    /// `CaptureState` 派生 `Debug` 走这条手工实现：暴露可观测状态、不 panic。
+    #[test]
+    fn debug_impl_reports_observable_state() {
+        let m = monitor(&[0.9f32; 4]);
+        let text = format!("{m:?}");
+        assert!(text.contains("BargeInMonitor"), "实际输出：{text}");
+        assert!(text.contains("buffered_windows"));
+        assert!(text.contains("echo_floor"));
+    }
+
+    /// 从 Debug 输出抽取 `key: value` 的浮点值（value 截到 ',' 或 '}'）。
+    fn debug_field_f32(text: &str, key: &str) -> f32 {
+        let needle = format!("{key}: ");
+        let start = text.find(needle.as_str()).expect("字段存在") + needle.len();
+        let rest = &text[start..];
+        let end = rest.find([',', '}']).expect("字段结束");
+        rest[..end].trim().parse().expect("浮点数值")
+    }
+
+    /// Debug 暴露的状态必须数值正确：人声连击数、缓冲窗数、回声底噪。
+    /// 这是 voiced_run 维护（+→* 会把计数卡在 0）与 fmt 内算术变异的唯一观测面。
+    #[test]
+    fn debug_pins_voiced_run_buffer_and_floor_after_two_windows() {
+        let mut m = monitor(&[0.9f32; 4]);
+        m.ingest(&window48_bytes(2000));
+        m.ingest(&window48_bytes(2000));
+        let text = format!("{m:?}");
+        assert!(text.contains("buffered_windows: 2"), "实际输出：{text}");
+        assert!(text.contains("voiced_run: 2"), "实际输出：{text}");
+        let floor = debug_field_f32(&text, "echo_floor");
+        assert!(
+            (floor - 2000f32 / 32768.0).abs() < 1e-6,
+            "echo_floor 必须等于常数幅度窗口的 RMS（2000/32768），实际 {floor}"
+        );
+    }
+
+    /// 回声底噪状态机三段式：建底期取 min（不吃大窗）、稳态只按 2% 慢上浮、
+    /// 更安静窗立刻下探。底噪是能量辅助判定的基准，数值必须逐段钉住。
+    #[test]
+    fn echo_floor_primes_to_min_then_rises_slowly_and_drops_fast() {
+        let mut m = monitor(&[0.1f32; 40]);
+        // 建底期 16 窗幅度递增（100..1600）：底噪必须钉在首窗最小值 100/32768。
+        // 递增序是刻意的：若"建底"退化成稳态规则，底噪会被逐窗上浮抬高。
+        for k in 1..=16_i16 {
+            m.ingest(&window48_bytes(100 * k));
+        }
+        let primed_floor = debug_field_f32(&format!("{m:?}"), "echo_floor");
+        assert!(
+            (primed_floor - 100f32 / 32768.0).abs() < 1e-9,
+            "建底期底噪必须是首窗最小 RMS（100/32768），实际 {primed_floor}"
+        );
+        // 稳态大窗：底噪只上浮 2%，绝不能跳到窗口幅度。
+        m.ingest(&window48_bytes(2000));
+        let floor_before = 100f32 / 32768.0;
+        let rms = 2000f32 / 32768.0;
+        let expected = floor_before + (rms - floor_before) * 0.02;
+        let risen = debug_field_f32(&format!("{m:?}"), "echo_floor");
+        assert!(
+            (risen - expected).abs() < 1e-6,
+            "稳态底噪必须只上浮 2%：期望 {expected}，实际 {risen}"
+        );
+        // 更安静的一窗：底噪立刻下探到该窗 RMS（min 追踪，不等时间常数）。
+        m.ingest(&window48_bytes(50));
+        let dropped = debug_field_f32(&format!("{m:?}"), "echo_floor");
+        assert!(
+            (dropped - 50f32 / 32768.0).abs() < 1e-9,
+            "更安静窗口必须立刻拉低底噪（min 追踪），实际 {dropped}"
+        );
+    }
+
+    /// 缓冲上界（~20s）：久未触发的监听只保留最近 40 窗原文；
+    /// 迟到触发的话轮必须恰好是 40 窗，而不是空缓冲或无界积累。
+    #[test]
+    fn late_trigger_stages_exactly_the_capped_40_window_history() {
+        let mut probs = vec![0.1f32; 50]; // 50 窗安静：缓冲只保留最近 40 窗
+        probs.extend(vec![0.9f32; 8]); // 滑动 8 窗内凑满 6 人声即触发
+        let mut m = monitor(&probs);
+        for _ in 0..50 {
+            m.ingest(&window48_bytes(300));
+        }
+        for _ in 0..6 {
+            m.ingest(&window48_bytes(2000));
+        }
+        assert!(m.triggered());
+        let utterance = m.take_staged().expect("staged");
+        // 触发快照发生在"扩窗之后、截断之前"：= 上限 40 窗 + 触发当窗 1 窗。
+        assert_eq!(
+            utterance.len(),
+            41 * WINDOW_BYTES_48K,
+            "迟到触发的话轮必须是封顶历史 + 触发当窗"
+        );
+    }
+
+    /// 能量辅助判定的前提是"回声底噪已建底"：全程静音时底噪恒为 0，
+    /// 概率落在 [ENERGY_ASSIST_PROB, START_PROB) 的窗口不得借道辅助判定触发。
+    #[test]
+    fn assisted_voicing_requires_a_built_echo_floor() {
+        let mut m = monitor(&[0.35f32; 12]);
+        for _ in 0..12 {
+            m.ingest(&window48_bytes(0)); // 全静音：RMS=0，底噪始终为 0
+        }
+        assert!(!m.triggered(), "静音不得进入触发态");
+        assert!(
+            m.take_staged().is_none(),
+            "静音 + 底噪未建底不得借道能量辅助触发"
+        );
+    }
 }
