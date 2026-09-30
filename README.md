@@ -4,8 +4,11 @@
   <a href="README.en.md">English</a> ·
   <a href="https://notintosports.github.io/RoleAI/">在线演示</a> ·
   <a href="https://github.com/NotIntoSports/RoleAI/releases">下载</a> ·
-  <a href="guide/README.md">文档</a>
+  <a href="guide/README.md">文档</a> ·
+  <a href="guide/benchmarks.md">基准与评测</a>
 </p>
+
+<p align="center"><sub>在线演示与下载链接在仓库首次发布后生效（GitHub Pages 部署 + Release 工作流出包）。</sub></p>
 
 <p align="center">
   <img src="src-tauri/icons/128x128@2x.png" width="96" alt="RoleAI 图标" />
@@ -24,6 +27,8 @@
 
 ![RoleAI 工作台深色界面](.github/assets/screenshots/workspace-dark.png)
 
+> 本文截图由内置演示模式自动生成：脚本化对话与虚构数据，未连接任何 AI 服务。
+
 ## 为什么做这个项目
 
 实时语音是最自然的表达练习方式：说得完不完整、有没有答非所问，只有真的开口才知道。RoleAI 把语音识别、大模型和语音合成跑成一条全双工管线，让 AI 以你设定的角色（面试官、HR、表达教练、会议助手、直播讲解员）和你实时对话，说完就给反馈。所有角色、资料和会话记录都保存在本机，模型服务由你自己配置和付费，没有账号，也不上传数据到我们的服务器。
@@ -34,9 +39,22 @@
 
 ### 模拟面试训练
 
-- 内置面试官、HR、严苛面试官、求职者陪练、表达教练五种面试相关角色，预设提示词要求 AI 只依据你提供的真实经历提问与反馈，不编造履历、不作录用决定。
-- 支持导入岗位 JD 与个人资料，AI 结合资料提问；每次会话生成结构化纪要（摘要、优势、跟进建议、局限、证据），可在「记录」页回看与导出。
-- 全双工对话：你说到一半 AI 能被打断，AI 说到一半你也能插话，接近真实面试的节奏。
+完整的训练闭环：导入岗位 JD 与简历 → AI 生成题单 → 全双工对练 → 评分报告 → 历史成长曲线。
+
+- **题单**：按岗位方向、面试官风格（面试官 / HR / 严苛面试官）、题量与难度生成题单，每题带考察点、预期要点与追问，预览时可手工增删改；JD 与简历从本地资料库引用，不上传。
+- **对练**：AI 面试官按题单提问与追问，你说到一半 AI 能被打断，AI 说到一半你也能插话，接近真实面试的节奏；训练过程同步统计语速、停顿、口头禅与 STAR 覆盖（情境 / 任务 / 行动 / 结果），这些客观指标在本地按规则计算，不依赖大模型。
+- **评分报告**：结束后生成结构化报告——总分、内容深度 / 结构清晰 / 表达流畅 / 岗位匹配四维雷达图、逐题点评（亮点、问题、参考答案）与改进建议。
+- **成长曲线**：历史报告按时间回看，四维得分折线看清进步与短板。
+
+| 题单向导 | 训练报告 |
+| --- | --- |
+| ![题单向导](.github/assets/screenshots/practice-wizard.png) | ![训练报告](.github/assets/screenshots/practice-report.png) |
+
+| 训练实录 | 成长曲线 |
+| --- | --- |
+| ![训练实录](.github/assets/screenshots/interview-live.png) | ![成长曲线](.github/assets/screenshots/practice-history.png) |
+
+内置面试官、HR、严苛面试官、求职者陪练、表达教练五种面试相关角色，预设提示词要求 AI 只依据你提供的真实经历提问与反馈，不编造履历、不作录用决定。
 
 | 工作台 | 资料库 |
 | --- | --- |
@@ -62,6 +80,18 @@
 | --- | --- |
 | ![虚拟直播](.github/assets/screenshots/livestream.png) | ![会话记录](.github/assets/screenshots/records.png) |
 
+### 延迟可观测性
+
+- 每轮 AI 回复下方有延迟瀑布条：断句、资料检索、LLM 首 token、TTS 合成各阶段耗时一目了然，可在设置中关闭。
+- 「设置 → 性能面板」按线路与模式汇总首响 p50/p95 和最近轮次的延迟趋势。
+- 会话可导出延迟 CSV（Excel / pandas 直接分析）或 Chrome Trace JSON（拖进 [Perfetto](https://ui.perfetto.dev) 看每轮时间线）；导出只含时间线与轮次文本，不含提示词、凭据或音频。
+
+| 延迟瀑布 | 性能面板 |
+| --- | --- |
+| ![延迟瀑布](.github/assets/screenshots/latency-waterfall.png) | ![性能面板](.github/assets/screenshots/performance-panel.png) |
+
+详细说明见[延迟可观测性指南](guide/latency.md)。
+
 ### 会话记录与安全
 
 - 每轮对话自动生成带证据引用的纪要，支持导出与两步确认删除。
@@ -71,7 +101,10 @@
 
 - **两级语义断句**：Silero VAD（16 kHz / 32 ms 窗）判断「在说话」，Smart Turn 回合完成度模型（ONNX int8，随包分发）判断「说完了」，解决「一句话停顿就被抢答」的问题。见 [audio/vad.rs](src-tauri/src/audio/vad.rs)、[audio/smart_turn.rs](src-tauri/src/audio/smart_turn.rs)。
 - **静态链接 onnxruntime**：ort 构建期静态链接 onnxruntime 1.22，避免运行时误加载系统目录里的旧版 DLL——这是真踩过的坑。见 [Cargo.toml](src-tauri/Cargo.toml)。
-- **回声闸门与打断（barge-in）**：播报期间用滑动窗人声计数 + 能量辅助判定识别插话（触发延迟约 200–260 ms）；文本层再用 bigram Dice 系数把「AI 自己的声音被麦克风回收」的转写整轮丢弃，杜绝自问自答。见 [audio/barge_in.rs](src-tauri/src/audio/barge_in.rs)、[services/echo_guard.rs](src-tauri/src/services/echo_guard.rs)。
+- **回声闸门与打断（barge-in）**：播报期间用滑动窗人声计数 + 能量辅助判定识别插话；文本层再用 bigram Dice 系数把「AI 自己的声音被麦克风回收」的转写整轮丢弃，杜绝自问自答。离线评测中真实打断 4/4 检出、首次触发延迟中位 217 ms（合成语料，见[评测报告](guide/reports/audio-eval.md)）。见 [audio/barge_in.rs](src-tauri/src/audio/barge_in.rs)、[services/echo_guard.rs](src-tauri/src/services/echo_guard.rs)。
+- **可复现的基准与评测**：Criterion 基准显示音频热路径实时因子约 370× 以上（Silero 单窗推理约 80 µs，帧长 32 ms）、混合检索 4900 块中位 0.48 ms；离线评测显示两级断句把句中犹豫场景的过早截断率从 50% 降到 25%。一键复现，环境与全部数字见[基准与评测报告](guide/benchmarks.md)。
+- **每轮延迟时间线**：Realtime 与级联两条线路分别按阶段打点（`TurnTimeline`），随会话事件持久化；前端瀑布条、性能面板与 CSV / Chrome Trace 导出同源。见 [services/realtime_pump/shared.rs](src-tauri/src/services/realtime_pump/shared.rs)。
+- **本地模型预设**：Ollama、LM Studio、本地 Whisper（speaches）、本地 TTS（Kokoro-FastAPI）四套预设，全链路可以不出本机，见[本地模型指南](guide/local-models.md)。
 - **级联与端到端两种模式**：级联模式 ASR → LLM → TTS 三阶段自由组合任意 OpenAI 兼容服务（带连接错误与 429/502/503/504 的有界重试）；Realtime 模式走 WebSocket 全双工长连接，对 OpenAI、阿里云 DashScope、智谱三种协议方言做了适配。见 [providers/cascade.rs](src-tauri/src/providers/cascade.rs)、[providers/realtime_protocol.rs](src-tauri/src/providers/realtime_protocol.rs)。
 - **断线重连与上下文回放**：Realtime 断线按指数退避重连（500 ms 起、30 s 封顶），重连后上下文逐条确认回放并跳过 AI 自己的轮次，修复过 qwen 断连死循环。见 [providers/realtime_session.rs](src-tauri/src/providers/realtime_session.rs)。
 - **混合检索**：SQLite FTS5 全文检索与 sqlite-vec 向量检索两路召回，倒数排序融合（RRF）打分；嵌入维度变化自动重建向量表。见 [materials/hybrid.rs](src-tauri/src/materials/hybrid.rs)。
@@ -79,13 +112,14 @@
 - **ts-rs 类型契约**：Rust DTO 自动生成 [src/generated/bindings.ts](src/generated/bindings.ts)，前端与后端字段改一边就会编译失败；另有契约测试锁定 IPC 面不可膨胀。见 [contracts.rs](src-tauri/src/contracts.rs)。
 - **安全面基线测试**：能力白名单、IPC 命令面等关键文件哈希固定在 [tests/tauri/security-surface-baseline.json](tests/tauri/security-surface-baseline.json)，任何漂移直接红测。
 - **C# AudioBridge 子进程**：复用 MIT 许可的 NAudio.Wasapi 做会议进程回环采集与指定设备流式播放，帧协议支持打断清空、播净回执，发布产物自带 .NET 运行时。见 [native/AudioBridge](native/AudioBridge/README.md)。
+- **跨平台 CI 与发布流水线**：Windows 全量测试之外，Linux / macOS 每次提交跑 `cargo check --all-targets` 与单元测试；打 `v*` 标签自动构建 Windows 安装包上传 draft Release 并附 SHA256SUMS；另有 CodeQL、Scorecard、Dependabot 常规守护。见 [.github/workflows/](.github/workflows/ci.yml)。
 
 ## 架构
 
 ```mermaid
 flowchart LR
     subgraph UI["React UI（WebView）"]
-        P["工作台 / 虚拟直播 / 资料 / 记录 / 服务 / 设置"]
+        P["工作台 / 模拟面试 / 虚拟直播 / 资料 / 记录 / 服务 / 设置"]
     end
     P <-->|"Tauri IPC（ts-rs 类型契约）"| C
     subgraph Core["Rust 核心（Tauri 主进程）"]
@@ -112,6 +146,7 @@ flowchart LR
 | 声音复刻 | 智谱（上传→克隆两步）、阿里云 DashScope（含 qwen 单调用复刻） | 上传参考音频生成音色，用于 TTS / Realtime |
 | Embedding | OpenAI 兼容 | 可选供应商或自定义 URL |
 | 联网搜索 | 供应商原生联网能力 | 注入级联 LLM 阶段，可选 |
+| 本地模型 | Ollama / LM Studio（LLM）、speaches（本地 Whisper ASR）、Kokoro-FastAPI（TTS） | 本机 OpenAI 兼容端点，断网可用，见[本地模型指南](guide/local-models.md) |
 | 会议音频 | 本机虚拟声卡（如 VB-CABLE） | AudioBridge 采集 / 播放，不改动系统默认设备 |
 
 服务商列表、密钥与连通性测试都在应用内「服务」页完成，不需要手改配置文件。
@@ -120,7 +155,7 @@ flowchart LR
 
 ### 方式一：下载安装包
 
-到 [Releases](https://github.com/NotIntoSports/RoleAI/releases) 下载最新的 Windows x64 安装包。安装包未做代码签名，首次运行 SmartScreen 可能提示「已保护你的电脑」，点击「更多信息 → 仍要运行」即可；介意的话可以按下面的方式从源码构建。
+到 [Releases](https://github.com/NotIntoSports/RoleAI/releases) 下载最新的 Windows x64 安装包：打 `v*` 标签时 Release 工作流会自动构建并附 SHA256 校验文件，也可以用 Scoop 安装（清单见 [scoop/roleai.json](scoop/roleai.json)，指向 Release 产物）。安装包未做代码签名，首次运行 SmartScreen 可能提示「已保护你的电脑」，点击「更多信息 → 仍要运行」即可；介意的话可以按下面的方式从源码构建。
 
 ### 方式二：从源码构建
 
@@ -143,8 +178,8 @@ npm run tauri:build    # 产出安装包
 ```
 ├── src/                    # React 前端（页面、功能模块、Tauri IPC 封装）
 │   ├── app/                # 路由与页面壳
-│   ├── screens/            # 六个页面
-│   ├── features/           # 会话、资料、直播、诊断等功能模块
+│   ├── screens/            # 七个页面（工作台、模拟面试、虚拟直播等）
+│   ├── features/           # 会话、训练、资料、直播、延迟观测等功能模块
 │   ├── api/                # 唯一的 Tauri IPC 入口（commands.ts）
 │   └── generated/          # ts-rs 自动生成的类型（勿手改）
 ├── src-tauri/              # Rust 核心
@@ -168,7 +203,9 @@ npm run test:tauri          # 全量门禁
 npm run test:tauri-package  # 打包冒烟
 ```
 
-`test:tauri` 依次运行 600+ 个 Rust 单元测试、前端 vitest 测试、Node 契约测试，并构建前端产物。`test:tauri-package` 在隔离的临时配置目录中启动已打包的可执行文件，等待主窗口可见，并断言进程树里没有 Node、Go、Python、PostgreSQL 或 Nginx，安装包目录也没有混入本地配置、数据库、日志或凭据测试文件。
+`test:tauri` 依次运行 700+ 个 Rust 单元测试、前端 vitest 测试、Node 契约测试，并构建前端产物。`test:tauri-package` 在隔离的临时配置目录中启动已打包的可执行文件，等待主窗口可见，并断言进程树里没有 Node、Go、Python、PostgreSQL 或 Nginx，安装包目录也没有混入本地配置、数据库、日志或凭据测试文件。
+
+性能与质量数字有专门的可复现入口：Criterion 基准（`powershell -File scripts/run-benchmarks.ps1`）与离线评测（断句 / 打断 / RAG 检索），报告与测试环境见[基准与评测报告](guide/benchmarks.md)。
 
 契约测试把几类回归钉死：前端只有 `src/api/commands.ts` 能碰 Tauri IPC；Tauri 能力白名单与关键文件哈希漂移即失败；README 与 CI 只描述 Tauri 单一产品路径。
 
@@ -179,10 +216,15 @@ npm run test:tauri-package  # 打包冒烟
 - [x] 本地知识库（PDF / DOCX / 文本，混合检索）
 - [x] 会话纪要与导出、声音复刻、直播讲稿
 - [x] Windows 凭据管理器保管密钥、安全面基线测试
-- [ ] 在线演示版（浏览器里跑真实界面 + 模拟后端）
-- [ ] 基准测试与离线音频评测报告（断句准确率、误打断率、端到端延迟）
+- [x] 模拟面试训练闭环：题单 → 对练 → 评分报告 → 成长曲线
+- [x] 每轮延迟瀑布、性能面板与延迟数据导出（CSV / Chrome Trace）
+- [x] 基准测试与离线评测报告（Criterion、断句 / 打断、RAG 检索）
+- [x] 在线演示版（浏览器里跑真实界面 + 模拟后端）
+- [x] Release 工作流（`v*` 标签自动出 Windows 安装包）与跨平台 CI（Linux / macOS 编译与单测）
+- [x] 本地模型预设（Ollama / LM Studio / 本地 Whisper / 本地 TTS）
+- [ ] 自动更新（设置页手动检查更新已就绪，配置发布签名公钥后启用）
 - [ ] 托管 OBS、虚拟摄像头一键启停与快捷键 UI —— 已延期；当前客户端只做本机 OBS / AudioBridge 路径解析和前置探测，不会创建场景、浏览器源或启动 Virtual Camera
-- [ ] macOS / Linux 支持
+- [ ] macOS / Linux 完整支持（CI 已覆盖两平台的编译与单元测试；AudioBridge、凭据管理器等平台相关件仍为 Windows 实现）
 
 ## 负责任使用
 

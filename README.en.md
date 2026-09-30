@@ -7,8 +7,11 @@
 <p align="center">
   <a href="https://notintosports.github.io/RoleAI/">Live demo</a> ·
   <a href="https://github.com/NotIntoSports/RoleAI/releases">Download</a> ·
-  <a href="guide/README.md">Docs</a>
+  <a href="guide/README.md">Docs</a> ·
+  <a href="guide/benchmarks.md">Benchmarks</a>
 </p>
+
+<p align="center"><sub>The live-demo and download links go live with the project's first release (GitHub Pages deployment + the Release workflow).</sub></p>
 
 <p align="center">
   <img src="src-tauri/icons/128x128@2x.png" width="96" alt="RoleAI icon" />
@@ -27,6 +30,8 @@
 
 ![RoleAI workspace, dark theme](.github/assets/screenshots/workspace-dark.png)
 
+> Screenshots are generated automatically from the built-in demo mode: scripted conversations with fictional data, no AI services connected.
+
 ## Why this project
 
 Real-time voice is the most natural way to practice speaking: whether you finish your thought, go off topic, or ramble — you only find out by actually talking. RoleAI wires speech recognition, an LLM, and speech synthesis into one full-duplex pipeline, so an AI in the role you define (interviewer, HR, speaking coach, meeting assistant, product presenter) talks with you live and responds the moment you finish. Roles, documents, and session records all stay on your machine; model services are configured and paid for by you. No accounts, no data sent to our servers.
@@ -37,9 +42,22 @@ Typical uses: mock interview training, live meeting assistance, live-stream prod
 
 ### Mock interview practice
 
-- Five interview-related role presets — Interviewer, HR, Strict Interviewer, Candidate Partner, Speaking Coach. The preset prompts require the AI to ask questions and give feedback based only on the experience and materials you provide: no fabricated résumés, no hiring decisions.
-- Import a job description and your own documents; the AI asks questions grounded in them. Every session produces a structured summary (highlights, action items, limitations, evidence) you can review and export on the Records page.
-- True full-duplex conversation: the AI can be interrupted mid-sentence, and so can you — much closer to the rhythm of a real interview.
+A complete training loop: import the job description and your résumé → the AI builds a question plan → full-duplex rehearsal → a scored report → a growth curve over time.
+
+- **Question plans**: generated from a target position, interviewer style (Interviewer / HR / Strict Interviewer), question count, and difficulty. Every question carries its focus, expected points, and follow-ups; you can edit the plan before starting. The JD and résumé are referenced from your local knowledge base — nothing is uploaded.
+- **Rehearsal**: the AI interviewer asks and follows up plan question by plan question. It can be interrupted mid-sentence, and so can you — much closer to the rhythm of a real interview. While you practice, the app tracks objective local metrics: speech rate, pauses, filler words, and STAR coverage (Situation / Task / Action / Result) — computed by rules on-device, no LLM required.
+- **Scored report**: after each session you get a structured report — overall score, a radar chart across four dimensions (content depth, structure, fluency, job fit), per-question reviews with strengths, issues, and model answers, plus top suggestions.
+- **Growth curve**: past reports are plotted over time so you can see progress and weak spots across the four dimensions.
+
+| Plan wizard | Scored report |
+| --- | --- |
+| ![Plan wizard](.github/assets/screenshots/practice-wizard.png) | ![Scored report](.github/assets/screenshots/practice-report.png) |
+
+| Live rehearsal | Growth curve |
+| --- | --- |
+| ![Live rehearsal](.github/assets/screenshots/interview-live.png) | ![Growth curve](.github/assets/screenshots/practice-history.png) |
+
+Five interview-related role presets ship in addition — Interviewer, HR, Strict Interviewer, Candidate Partner, Speaking Coach. The preset prompts require the AI to ask questions and give feedback based only on the experience and materials you provide: no fabricated résumés, no hiring decisions.
 
 | Workspace | Knowledge base |
 | --- | --- |
@@ -65,6 +83,18 @@ Typical uses: mock interview training, live meeting assistance, live-stream prod
 | --- | --- |
 | ![Live-stream](.github/assets/screenshots/livestream.png) | ![Session records](.github/assets/screenshots/records.png) |
 
+### Latency observability
+
+- Every AI reply carries a latency waterfall bar: time spent in turn detection, document retrieval, LLM first token, and TTS synthesis at a glance. Optional, toggleable in Settings.
+- Settings → Performance panel aggregates first-response p50/p95 per transport and mode, plus a trend over recent turns.
+- Sessions export latency as CSV (drops straight into Excel / pandas) or Chrome Trace JSON (load it in [Perfetto](https://ui.perfetto.dev) to see each turn's timeline). Exports contain timeline and turn text only — no prompts, credentials, or audio.
+
+| Latency waterfall | Performance panel |
+| --- | --- |
+| ![Latency waterfall](.github/assets/screenshots/latency-waterfall.png) | ![Performance panel](.github/assets/screenshots/performance-panel.png) |
+
+See the [latency observability guide](guide/latency.md) for details.
+
 ### Records & security
 
 - Every session produces an evidence-cited summary; export it, or delete records behind a two-step confirmation.
@@ -74,7 +104,10 @@ Typical uses: mock interview training, live meeting assistance, live-stream prod
 
 - **Two-stage turn detection**: Silero VAD (16 kHz / 32 ms windows) decides whether someone is speaking; a Smart Turn completeness model (ONNX int8, bundled with the app) decides whether they are done — no more getting cut off mid-sentence. See [audio/vad.rs](src-tauri/src/audio/vad.rs) and [audio/smart_turn.rs](src-tauri/src/audio/smart_turn.rs).
 - **Statically linked onnxruntime**: ort links onnxruntime 1.22 at build time, so the app never picks up a stale DLL from the system directory — a bug we actually hit. See [Cargo.toml](src-tauri/Cargo.toml).
-- **Echo gate and barge-in**: during playback, a sliding window of voiced frames plus an energy-assist check detects interruptions (roughly 200–260 ms trigger latency); a text-level filter then drops transcriptions that match what the AI itself just said (bigram Dice ≥ 0.85), killing self-question-self-answer loops. See [audio/barge_in.rs](src-tauri/src/audio/barge_in.rs) and [services/echo_guard.rs](src-tauri/src/services/echo_guard.rs).
+- **Echo gate and barge-in**: during playback, a sliding window of voiced frames plus an energy-assist check detects interruptions; a text-level filter then drops transcriptions that match what the AI itself just said (bigram Dice ≥ 0.85), killing self-question-self-answer loops. In the offline evaluation, 4/4 real interruptions were detected with a median first-trigger latency of 217 ms (synthetic corpus — see the [evaluation report](guide/reports/audio-eval.md)). See [audio/barge_in.rs](src-tauri/src/audio/barge_in.rs) and [services/echo_guard.rs](src-tauri/src/services/echo_guard.rs).
+- **Reproducible benchmarks and evaluations**: Criterion benchmarks put the audio hot path at a ≈370× real-time factor (Silero inference ≈80 µs per 32 ms frame) and hybrid retrieval at 0.48 ms median over 4,900 chunks; offline evaluation cut premature turn-end cutoffs from 50% to 25% on a hesitation corpus. One command reproduces it all — see [Benchmarks](guide/benchmarks.md).
+- **Per-turn latency timeline**: both the Realtime and cascade transports record per-stage timings (`TurnTimeline`) persisted with session events; the waterfall bar, performance panel, and CSV / Chrome Trace exports all read the same source. See [services/realtime_pump/shared.rs](src-tauri/src/services/realtime_pump/shared.rs).
+- **Local model presets**: four presets — Ollama, LM Studio, local Whisper (speaches), and local TTS (Kokoro-FastAPI) — keep the whole voice chain on your machine. See the [local models guide](guide/local-models.md).
 - **Cascade and end-to-end modes**: the cascade mode chains ASR → LLM → TTS, each stage configurable to any OpenAI-compatible API (with bounded retries for connection errors and HTTP 429/502/503/504); the Realtime mode runs a full-duplex WebSocket with adapters for the OpenAI, Alibaba DashScope, and Zhipu protocol dialects. See [providers/cascade.rs](src-tauri/src/providers/cascade.rs) and [providers/realtime_protocol.rs](src-tauri/src/providers/realtime_protocol.rs).
 - **Reconnect with context replay**: a dropped Realtime connection reconnects with exponential backoff (500 ms base, 30 s cap), then replays the conversation with per-item confirmation, skipping the assistant's own turns — this fixed a Qwen disconnect loop. See [providers/realtime_session.rs](src-tauri/src/providers/realtime_session.rs).
 - **Hybrid retrieval**: SQLite FTS5 full-text search and sqlite-vec vector search run in parallel, fused by reciprocal rank fusion; the vector table is rebuilt automatically when the embedding dimensions change. See [materials/hybrid.rs](src-tauri/src/materials/hybrid.rs).
@@ -82,13 +115,14 @@ Typical uses: mock interview training, live meeting assistance, live-stream prod
 - **ts-rs type contracts**: Rust DTOs generate [src/generated/bindings.ts](src/generated/bindings.ts), so a field change on either side breaks the build; contract tests also pin the IPC surface. See [contracts.rs](src-tauri/src/contracts.rs).
 - **Security surface baseline**: the capability whitelist and other critical files are hash-pinned in [tests/tauri/security-surface-baseline.json](tests/tauri/security-surface-baseline.json) — any drift turns the suite red.
 - **C# AudioBridge child process**: MIT-licensed NAudio.Wasapi handles meeting-process loopback capture and streaming playback to a chosen device, with a frame protocol for interrupt-and-clear and drain acknowledgements; the published binary ships its own .NET runtime. See [native/AudioBridge](native/AudioBridge/README.md).
+- **Cross-platform CI and release pipeline**: beyond the full Windows suite, every commit runs `cargo check --all-targets` and unit tests on Linux and macOS; pushing a `v*` tag builds the Windows installer, uploads it to a draft Release with a SHA256SUMS file; CodeQL, Scorecard, and Dependabot keep watch. See [.github/workflows/](.github/workflows/ci.yml).
 
 ## Architecture
 
 ```mermaid
 flowchart LR
     subgraph UI["React UI (WebView)"]
-        P["Workspace / Live-stream / Materials / Records / Services / Settings"]
+        P["Workspace / Mock interview / Live-stream / Materials / Records / Services / Settings"]
     end
     P <-->|"Tauri IPC (ts-rs type contracts)"| C
     subgraph Core["Rust core (Tauri main process)"]
@@ -115,6 +149,7 @@ flowchart LR
 | Voice cloning | Zhipu (upload → clone), Alibaba DashScope (incl. one-call qwen enrollment) | Clone a voice from a reference recording for TTS / Realtime |
 | Embeddings | OpenAI-compatible | Built-in providers or a custom URL |
 | Web search | Provider-native browsing | Optional capability injected into the cascade LLM stage |
+| Local models | Ollama / LM Studio (LLM), speaches (local Whisper ASR), Kokoro-FastAPI (TTS) | Local OpenAI-compatible endpoints, works offline — see the [local models guide](guide/local-models.md) |
 | Meeting audio | Local virtual audio cable (e.g. VB-CABLE) | Captured / played by AudioBridge; system defaults are never changed |
 
 Providers, keys, and connectivity tests are managed in the in-app Services page — no config files to hand-edit.
@@ -123,7 +158,7 @@ Providers, keys, and connectivity tests are managed in the in-app Services page 
 
 ### Option 1: download the installer
 
-Grab the latest Windows x64 installer from [Releases](https://github.com/NotIntoSports/RoleAI/releases). The installer is not code-signed yet, so SmartScreen may show "Windows protected your PC" on first run — click "More info → Run anyway". If you'd rather not, build from source instead.
+Grab the latest Windows x64 installer from [Releases](https://github.com/NotIntoSports/RoleAI/releases): the Release workflow builds it automatically whenever a `v*` tag is pushed, together with a SHA256SUMS file. A Scoop manifest ([scoop/roleai.json](scoop/roleai.json)) pointing at the Release artifact is also provided. The installer is not code-signed yet, so SmartScreen may show "Windows protected your PC" on first run — click "More info → Run anyway". If you'd rather not, build from source instead.
 
 ### Option 2: build from source
 
@@ -146,8 +181,8 @@ npm run tauri:build    # produce the installer
 ```
 ├── src/                    # React frontend (pages, feature modules, Tauri IPC wrapper)
 │   ├── app/                # Routing and page shell
-│   ├── screens/            # The six pages
-│   ├── features/           # Session, materials, live-stream, diagnostics modules
+│   ├── screens/            # The seven pages (workspace, mock interview, live-stream…)
+│   ├── features/           # Session, practice, materials, live-stream, latency modules
 │   ├── api/                # The single Tauri IPC entry point (commands.ts)
 │   └── generated/          # ts-rs generated types (do not edit by hand)
 ├── src-tauri/              # Rust core
@@ -171,7 +206,9 @@ npm run test:tauri          # full gate
 npm run test:tauri-package  # packaged smoke test
 ```
 
-`test:tauri` runs 600+ Rust unit tests, the frontend vitest suite, the Node contract tests, and then builds the frontend. `test:tauri-package` launches the packaged executable in an isolated temporary config directory, waits for the main window, and asserts the process tree contains no Node, Go, Python, PostgreSQL, or Nginx — and that the install directory carries no local config, database, logs, or credential test files.
+`test:tauri` runs 700+ Rust unit tests, the frontend vitest suite, the Node contract tests, and then builds the frontend. `test:tauri-package` launches the packaged executable in an isolated temporary config directory, waits for the main window, and asserts the process tree contains no Node, Go, Python, PostgreSQL, or Nginx — and that the install directory carries no local config, database, logs, or credential test files.
+
+Performance and quality numbers have their own reproducible entry points: Criterion benchmarks (`powershell -File scripts/run-benchmarks.ps1`) and offline evaluations (turn detection / interruption / RAG retrieval) — see [Benchmarks](guide/benchmarks.md) for reports and the test environment.
 
 Contract tests pin several classes of regressions: only `src/api/commands.ts` may touch the Tauri IPC; drift in the capability whitelist or any hash-pinned file fails the suite; the README and CI must describe the single Tauri product path.
 
@@ -182,10 +219,15 @@ Contract tests pin several classes of regressions: only `src/api/commands.ts` ma
 - [x] Local knowledge base (PDF / DOCX / text, hybrid retrieval)
 - [x] Session summaries with export, voice cloning, live-stream scripts
 - [x] Windows Credential Manager key storage, security surface baseline tests
-- [ ] In-browser demo (real UI + mocked backend)
-- [ ] Benchmarks and offline audio evaluation reports (turn-end accuracy, false-interruption rate, end-to-end latency)
+- [x] Mock interview training loop: question plan → rehearsal → scored report → growth curve
+- [x] Per-turn latency waterfall, performance panel, and latency exports (CSV / Chrome Trace)
+- [x] Benchmark and offline evaluation reports (Criterion, turn detection / interruption, RAG)
+- [x] In-browser demo (real UI + mocked backend)
+- [x] Release workflow (`v*` tag builds the Windows installer) and cross-platform CI (Linux / macOS build + unit tests)
+- [x] Local model presets (Ollama / LM Studio / local Whisper / local TTS)
+- [ ] Automatic updates (manual "check for updates" is in Settings; enable after configuring the release signing key)
 - [ ] Managed OBS, one-click virtual camera, and hotkey UI — deferred; the client currently only resolves local OBS / AudioBridge paths and probes prerequisites, and never creates scenes, browser sources, or starts the Virtual Camera
-- [ ] macOS / Linux support
+- [ ] Full macOS / Linux support (CI already covers compilation and unit tests on both; platform pieces like AudioBridge and Credential Manager remain Windows-only)
 
 ## Responsible use
 

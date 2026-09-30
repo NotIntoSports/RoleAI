@@ -8,17 +8,24 @@
 
 - [架构说明](architecture.md) —— 模块职责、进程模型、IPC 与数据存储
 - [实时语音管线深度解析](realtime-voice-pipeline.md) —— 断句、回声、打断、断线重连的设计与取舍
+- [基准测试与评测报告](benchmarks.md) —— Criterion 基准与离线评测的数字、环境与复现步骤
 
 ### 使用指南
 
 - [配置指南](configuration.md) —— 服务商、语音线路、配置文件与环境变量
+- [本地模型指南](local-models.md) —— Ollama / LM Studio / 本地 Whisper / 本地 TTS，全链路可离线
 - [本地知识库与混合检索](knowledge-base.md) —— 资料导入、分块、检索打分与备份
+- [延迟可观测性指南](latency.md) —— 每轮延迟时间线、性能面板与 CSV / Chrome Trace 导出
 - [故障排查](troubleshooting.md) —— 按现象查找原因与解决方法
 
 ### 设计与安全
 
 - [安全设计与数据去向](security.md) —— 威胁模型、密钥保管、Tauri 能力白名单
 - [架构决策记录（ADR）](adr/) —— 关键技术决策的背景、选项与后果
+
+### 技术文章
+
+- [技术博客](blog/) —— 管线、本地 RAG 与架构演进的深度长文
 
 ## 相关链接
 
