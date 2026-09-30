@@ -165,6 +165,14 @@ export type LivestreamGenerateInput = { title: string, materialIds: Array<string
 
 export type LivestreamRuntime = { script: LivestreamScript, stage: LivestreamStageState, };
 
+export type PracticeQuestion = { prompt: string, focus: string, expectedPoints: Array<string>, followups: Array<string>, };
+
+export type PracticePlan = { id: string, title: string, position: string, interviewerStyle: string, difficulty: string, questions: Array<PracticeQuestion>, createdAt: string, updatedAt: string, };
+
+export type PracticePlanSummary = { id: string, title: string, position: string, interviewerStyle: string, difficulty: string, questionCount: number, createdAt: string, updatedAt: string, };
+
+export type PracticePlanGenerateInput = { position: string, jdMaterialId?: string, resumeMaterialId?: string, interviewerStyle: string, questionCount: number, difficulty: string, };
+
 export type ObsRuntimeStatus = { connected: boolean, sceneReady: boolean, browserSourceReady: boolean, virtualCameraActive: boolean, errorCode: string | null, };
 
 export type CommandResult<T> = { ok: true; data: T } | { ok: false; error: PublicError };

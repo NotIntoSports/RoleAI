@@ -341,3 +341,23 @@ commands.allow = ["obs_password_status"]
 identifier = "allow-obs-password-save"
 description = "Allows saving or clearing the local OBS WebSocket password in Windows Credential Manager."
 commands.allow = ["obs_password_save"]
+
+[[permission]]
+identifier = "allow-practice-plan-generate"
+description = "Allows generating a mock-interview question plan from the configured LLM route and optional library materials."
+commands.allow = ["practice_plan_generate"]
+
+[[permission]]
+identifier = "allow-practice-plan-save"
+description = "Allows saving or editing a local practice question plan."
+commands.allow = ["practice_plan_save"]
+
+[[permission]]
+identifier = "allow-practice-plan-list"
+description = "Allows listing locally saved practice question plans."
+commands.allow = ["practice_plan_list"]
+
+[[permission]]
+identifier = "allow-practice-plan-delete"
+description = "Allows deleting a locally saved practice question plan."
+commands.allow = ["practice_plan_delete"]

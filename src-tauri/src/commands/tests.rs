@@ -1749,3 +1749,243 @@ fn session_start_rollback_keeps_routing_when_restore_fails() {
                 .exists()
     );
 }
+
+// ---------- practice 题单命令（mock LLM） ----------
+
+use crate::contracts::CommandResult;
+
+mod practice_mock {
+    use std::{
+        io::{Read, Write},
+        net::{TcpListener, TcpStream},
+        thread,
+    };
+
+    /// 启动一次性 mock LLM：返回 `content_body` 作为 chat.completions 的 message.content；
+    /// `None` 表示接受连接后立即断开（模拟连接失败/超时类通道故障）。
+    pub(in crate::commands::tests) fn serve_chat_content(content_body: Option<&str>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let payload = content_body.map(|body| {
+            let message = serde_json::json!({ "choices": [{ "message": { "content": body } }] });
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                message.to_string().len(),
+                message
+            )
+        });
+        thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            if drain_request(&mut stream).is_err() {
+                return;
+            }
+            if let Some(response) = payload {
+                let _ = stream.write_all(response.as_bytes());
+            }
+            // payload 为 None：直接 drop(stream) 断开，客户端得到通道错误。
+        });
+        format!("http://{address}/v1")
+    }
+
+    fn drain_request(stream: &mut TcpStream) -> std::io::Result<()> {
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
+        let mut received = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        let header_end = loop {
+            let count = stream.read(&mut buffer)?;
+            if count == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "request ended early",
+                ));
+            }
+            received.extend_from_slice(&buffer[..count]);
+            if let Some(position) = received.windows(4).position(|part| part == b"\r\n\r\n") {
+                break position + 4;
+            }
+        };
+        let headers = String::from_utf8_lossy(&received[..header_end]).to_string();
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().ok())?
+            })
+            .unwrap_or(0);
+        while received.len() - header_end < content_length {
+            let count = stream.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            received.extend_from_slice(&buffer[..count]);
+        }
+        Ok(())
+    }
+}
+
+fn practice_generate_input(position: &str) -> crate::practice::PracticePlanGenerateInput {
+    crate::practice::PracticePlanGenerateInput {
+        position: position.into(),
+        jd_material_id: None,
+        resume_material_id: None,
+        interviewer_style: "严苛面试官".into(),
+        question_count: 2,
+        difficulty: "standard".into(),
+    }
+}
+
+fn practice_llm_state(directory: &tempfile::TempDir, base_url: &str) -> AppState {
+    let config = format!(
+        r#"{{
+            "configVersion":1,
+            "models":{{"providers":[
+                {{"id":"llm-1","baseUrl":"{base_url}","credential":{{"reference":"providers/llm-1/api-key","configured":true}}}}
+            ]}},
+            "speech":{{"voiceRoutes":[{{
+                "id":"route-1","name":"R","mode":"cascaded",
+                "asrProviderId":"llm-1","asrModelId":"whisper",
+                "llmProviderId":"llm-1","llmModelId":"gpt",
+                "ttsProviderId":"llm-1","ttsModelId":"tts",
+                "voiceId":"alloy","active":true,"ready":true,"status":"ready","configVersion":1
+            }}],"activeVoiceRouteId":"route-1"}}
+        }}"#
+    );
+    let paths = AppPaths {
+        data_directory: directory.path().join("data"),
+        logs_directory: directory.path().join("logs"),
+        config_path: directory.path().join("config.json"),
+        legacy_search_roots: Vec::new(),
+    };
+    std::fs::write(&paths.config_path, config).unwrap();
+    let state = AppState::initialize(paths, Arc::new(MemorySecretStore::default())).unwrap();
+    state
+        .secrets
+        .set("providers/llm-1/api-key", "sk-test")
+        .unwrap();
+    state
+}
+
+#[test]
+fn practice_plan_generate_success_with_mock_llm() {
+    let directory = tempfile::tempdir().unwrap();
+    let plan_json = serde_json::json!({
+        "questions": [
+            {"prompt": "介绍一个你负责的项目", "focus": "项目深度", "expectedPoints": ["背景", "结果"], "followups": ["最大的困难"]},
+            {"prompt": "如何设计限流", "focus": "工程判断"}
+        ]
+    })
+    .to_string();
+    let base_url = practice_mock::serve_chat_content(Some(&plan_json));
+    let state = practice_llm_state(&directory, &base_url);
+
+    let result = super::practice_plan_generate_cmd(&state, practice_generate_input("后端工程师"));
+    let plan = match result {
+        CommandResult::Ok { data } => data,
+        CommandResult::Err { error } => panic!("generate failed: {} {}", error.code, error.message),
+    };
+    assert_eq!(plan.questions.len(), 2);
+    assert_eq!(plan.questions[0].prompt, "介绍一个你负责的项目");
+    assert_eq!(plan.position, "后端工程师");
+    assert!(plan.title.contains("后端工程师"));
+    assert!(!plan.id.is_empty());
+
+    // 生成结果可以直接保存并再次列表读取。
+    let saved = match super::practice_plan_save_cmd(&state, plan) {
+        CommandResult::Ok { data } => data,
+        CommandResult::Err { error } => panic!("save failed: {}", error.code),
+    };
+    let list = match super::practice_plan_list_cmd(&state) {
+        CommandResult::Ok { data } => data,
+        CommandResult::Err { error } => panic!("list failed: {}", error.code),
+    };
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].id, saved.id);
+    assert_eq!(list[0].question_count, 2);
+    let deleted = match super::practice_plan_delete_cmd(&state, saved.id) {
+        CommandResult::Ok { data } => data,
+        CommandResult::Err { error } => panic!("delete failed: {}", error.code),
+    };
+    assert!(deleted.ready);
+    assert_eq!(
+        super::practice_plan_list_cmd(&state).unwrap_err_code(),
+        "OK"
+    );
+}
+
+#[test]
+fn practice_plan_generate_invalid_model_json_fails_closed() {
+    let directory = tempfile::tempdir().unwrap();
+    let base_url = practice_mock::serve_chat_content(Some("这不是 JSON"));
+    let state = practice_llm_state(&directory, &base_url);
+
+    let result = super::practice_plan_generate_cmd(&state, practice_generate_input("后端工程师"));
+    assert_eq!(result.unwrap_err_code(), "PRACTICE_MODEL_RESPONSE_INVALID");
+}
+
+#[test]
+fn practice_plan_generate_channel_failure_is_retryable_unavailable() {
+    // 通道故障（连接被断开；真实超时同样走该分支，30s 等待由 provider 层测试覆盖）
+    // 表现为 PRACTICE_MODEL_UNAVAILABLE，可重试。
+    let directory = tempfile::tempdir().unwrap();
+    let base_url = practice_mock::serve_chat_content(None);
+    let state = practice_llm_state(&directory, &base_url);
+
+    let result = super::practice_plan_generate_cmd(&state, practice_generate_input("后端工程师"));
+    assert_eq!(result.unwrap_err_code(), "PRACTICE_MODEL_UNAVAILABLE");
+}
+
+#[test]
+fn practice_plan_generate_validates_input_and_material_state() {
+    let directory = tempfile::tempdir().unwrap();
+    let base_url = practice_mock::serve_chat_content(Some("{\"questions\":[{\"prompt\":\"q\"}]}"));
+    let state = practice_llm_state(&directory, &base_url);
+
+    let mut invalid = practice_generate_input("后端工程师");
+    invalid.question_count = 0;
+    assert_eq!(
+        super::practice_plan_generate_cmd(&state, invalid).unwrap_err_code(),
+        "PRACTICE_PLAN_INVALID"
+    );
+
+    let mut missing_material = practice_generate_input("后端工程师");
+    missing_material.jd_material_id = Some("no-such-material".into());
+    assert_eq!(
+        super::practice_plan_generate_cmd(&state, missing_material).unwrap_err_code(),
+        "PRACTICE_MATERIAL_NOT_READY"
+    );
+}
+
+#[test]
+fn practice_plan_save_rejects_invalid_payload() {
+    let directory = tempfile::tempdir().unwrap();
+    let base_url = practice_mock::serve_chat_content(Some("{\"questions\":[{\"prompt\":\"q\"}]}"));
+    let state = practice_llm_state(&directory, &base_url);
+
+    let mut plan = match super::practice_plan_generate_cmd(&state, practice_generate_input("后端"))
+    {
+        CommandResult::Ok { data } => data,
+        CommandResult::Err { error } => panic!("generate failed: {}", error.code),
+    };
+    plan.questions.clear();
+    assert_eq!(
+        super::practice_plan_save_cmd(&state, plan).unwrap_err_code(),
+        "PRACTICE_PLAN_INVALID"
+    );
+}
+
+/// CommandResult 的测试辅助：错误码提取（Ok 时返回 "OK"）。
+trait PracticeResultExt {
+    fn unwrap_err_code(&self) -> String;
+}
+
+impl<T: serde::Serialize + ts_rs::TS> PracticeResultExt for CommandResult<T> {
+    fn unwrap_err_code(&self) -> String {
+        match self {
+            CommandResult::Ok { .. } => "OK".into(),
+            CommandResult::Err { error } => error.code.clone(),
+        }
+    }
+}

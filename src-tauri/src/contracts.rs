@@ -440,6 +440,10 @@ fn generated_bindings() -> String {
         LivestreamDraftInput::decl(&config),
         LivestreamGenerateInput::decl(&config),
         LivestreamRuntime::decl(&config),
+        crate::practice::PracticeQuestion::decl(&config),
+        crate::practice::PracticePlan::decl(&config),
+        crate::practice::PracticePlanSummary::decl(&config),
+        crate::practice::PracticePlanGenerateInput::decl(&config),
         crate::obs::ObsRuntimeStatus::decl(&config),
         CommandResult::<FoundationStatus>::decl(&config),
     ];
@@ -551,6 +555,10 @@ mod tests {
             "LivestreamDraftInput",
             "LivestreamGenerateInput",
             "LivestreamRuntime",
+            "PracticeQuestion",
+            "PracticePlan",
+            "PracticePlanSummary",
+            "PracticePlanGenerateInput",
             "ObsRuntimeStatus",
         ] {
             assert!(
