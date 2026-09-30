@@ -501,3 +501,61 @@ enum VecTablePlan {
     DimensionChange,
     Missing,
 }
+
+#[cfg(test)]
+mod helper_tests {
+    use super::*;
+
+    /// 维度解析必须从 `float[N]` 提取尺寸，解析不了时宁可降级为 None。
+    #[test]
+    fn parse_vec_dimensions_extracts_size_or_fails_closed() {
+        assert_eq!(
+            parse_vec_dimensions(
+                "CREATE VIRTUAL TABLE material_chunk_vectors USING vec0(
+                    chunk_id TEXT PRIMARY KEY,
+                    embedding float[4] distance_metric=cosine
+                )"
+            ),
+            Some(4)
+        );
+        assert_eq!(parse_vec_dimensions("float[1024]"), Some(1024));
+        assert_eq!(parse_vec_dimensions("embedding float[abc]"), None);
+        assert_eq!(parse_vec_dimensions("no vector column here"), None);
+        assert_eq!(parse_vec_dimensions("truncated float[128"), None);
+    }
+
+    /// chunk 序号解析：`<material_id>:<n>` 才有序号；缺段、前缀不符、
+    /// 非数字一律回退 0，保证合并排序对脏数据仍然稳定。
+    #[test]
+    fn chunk_index_falls_back_to_zero_for_untagged_ids() {
+        assert_eq!(chunk_index("mat-1:3", "mat-1"), 3);
+        assert_eq!(chunk_index("mat-1", "mat-1"), 0, "缺冒号索引段");
+        assert_eq!(chunk_index("other:3", "mat-1"), 0, "material 前缀不符");
+        assert_eq!(chunk_index("mat-1:x", "mat-1"), 0, "非数字索引");
+        assert_eq!(chunk_index("mat-1:", "mat-1"), 0, "空索引段");
+    }
+
+    /// 向量可用性 = 长度精确匹配且全部有限；NaN/Inf 必须判不可用。
+    #[test]
+    fn usable_vector_requires_exact_length_and_finite_values() {
+        assert!(usable_vector(&[1.0, 2.0], 2));
+        assert!(!usable_vector(&[1.0], 2), "长度不符");
+        assert!(!usable_vector(&[1.0, 2.0, 3.0], 2), "长度不符（偏长）");
+        assert!(!usable_vector(&[1.0, f32::NAN], 2), "NaN 不可用");
+        assert!(!usable_vector(&[1.0, f32::INFINITY], 2), "Inf 不可用");
+    }
+
+    /// 相邻片段合并：右片段为空时只保留左边；合并结果截到 snippet 上限。
+    #[test]
+    fn merge_snippets_appends_with_space_and_caps_length() {
+        assert_eq!(merge_snippets("前半", "后半"), "前半 后半");
+        assert_eq!(merge_snippets("只有左边", ""), "只有左边");
+        assert_eq!(merge_snippets("", "只有右边"), "只有右边");
+        let long = "字".repeat(SNIPPET_CHARS + 10);
+        assert_eq!(
+            merge_snippets("", &long).chars().count(),
+            SNIPPET_CHARS,
+            "合并结果必须截到 snippet 上限"
+        );
+    }
+}

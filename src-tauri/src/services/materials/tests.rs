@@ -1255,3 +1255,223 @@ fn well_formed_markdown_preserves_every_sentence_across_chunks() {
         assert!(found, "句子被分块丢弃：{sentence}");
     }
 }
+
+// ---- I06 覆盖率补洞：hybrid 索引/检索的未覆盖分支 ----
+
+/// vec0 的 embedding 列以 float32 LE Blob 存储（写入 TEXT JSON 会被转换）。
+fn stored_vector(database: &Database) -> Vec<f32> {
+    let blob: Vec<u8> = database
+        .with_connection(|connection| {
+            connection.query_row(
+                "SELECT embedding FROM material_chunk_vectors LIMIT 1",
+                [],
+                |row| row.get::<_, Vec<u8>>(0),
+            )
+        })
+        .unwrap();
+    blob.chunks_exact(4)
+        .map(|bytes| f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+        .collect()
+}
+
+fn vector_row_count(database: &Database) -> i64 {
+    database
+        .with_connection(|connection| {
+            connection.query_row("SELECT COUNT(*) FROM material_chunk_vectors", [], |row| {
+                row.get(0)
+            })
+        })
+        .unwrap()
+}
+
+/// 维度越界（0 与 65537）必须在写库前拒绝，而不是建出坏表。
+#[test]
+fn index_chunks_rejects_dimensions_out_of_range() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = opened(&directory);
+    let service = MaterialService::new(&database, directory.path());
+    service
+        .import_file(write_import(&directory, "a.txt", "向量甲标记。"))
+        .unwrap();
+
+    assert!(
+        service
+            .index_chunks(&space("embed-0", 0), &Fake4dProbe)
+            .is_err()
+    );
+    assert!(
+        service
+            .index_chunks(&space("embed-huge", 65_537), &Fake4dProbe)
+            .is_err()
+    );
+    assert!(
+        vec_table_sql(&database).is_none(),
+        "被拒绝的维度不得留下向量表"
+    );
+}
+
+/// 同维度重建走 SameDimension 计划：清空旧向量行再重灌，
+/// 结果无重复行、状态保持 ready、活动空间不变。
+#[test]
+fn reindex_same_dimension_replaces_vectors_without_duplicates() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = opened(&directory);
+    let service = MaterialService::new(&database, directory.path());
+    service
+        .import_file(write_import(&directory, "a.txt", "向量甲 订单服务第一段。"))
+        .unwrap();
+
+    service
+        .index_chunks(&space("embed-4", 4), &Fake4dProbe)
+        .unwrap();
+    let chunk_count = database
+        .with_connection(|connection| {
+            connection.query_row("SELECT COUNT(*) FROM material_chunks", [], |row| {
+                row.get::<_, i64>(0)
+            })
+        })
+        .unwrap();
+    assert!(chunk_count > 0);
+
+    // 第二次同维度索引：主键冲突会让坏实现直接报错，也绝不留重复行。
+    service
+        .index_chunks(&space("embed-4", 4), &Fake4dProbe)
+        .unwrap();
+    assert_eq!(vector_row_count(&database), chunk_count);
+    let rows = chunk_embedding_rows(&database);
+    assert!(rows.iter().all(|(_, status, _)| status == "ready"));
+    assert_eq!(
+        active_space_fingerprint(&database),
+        "fake|embed-4|4|cosine|true"
+    );
+}
+
+/// 空白检索词（含带向量时）直接返回空结果，不触库也不报错。
+#[test]
+fn search_hybrid_blank_query_returns_empty() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = opened(&directory);
+    let service = MaterialService::new(&database, directory.path());
+    service
+        .import_file(write_import(&directory, "a.txt", "向量甲 订单服务。"))
+        .unwrap();
+    service
+        .index_chunks(&space("embed-4", 4), &Fake4dProbe)
+        .unwrap();
+
+    assert!(
+        service
+            .search_hybrid("   ", Some(&[1.0, 0.0, 0.0, 0.0]), None)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(service.search_hybrid("", None, None).unwrap().is_empty());
+}
+
+/// 向量表存在但 SQL 无法解析出维度（如被换成普通表）时，
+/// 检索必须降级为全文路径并返回有效结果，而不是报错或空手而归。
+#[test]
+fn search_hybrid_falls_back_to_text_when_vec_table_unparsable() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = opened(&directory);
+    let service = MaterialService::new(&database, directory.path());
+    let imported = service
+        .import_file(write_import(
+            &directory,
+            "a.txt",
+            "向量甲 订单服务与 Kafka。",
+        ))
+        .unwrap();
+    service
+        .index_chunks(&space("embed-4", 4), &Fake4dProbe)
+        .unwrap();
+
+    database
+        .with_connection(|connection| {
+            connection.execute_batch(
+                "DROP TABLE material_chunk_vectors;
+                 CREATE TABLE material_chunk_vectors (chunk_id TEXT PRIMARY KEY, embedding TEXT);",
+            )
+        })
+        .unwrap();
+
+    let hybrid = service
+        .search_hybrid("订单服务", Some(&[1.0, 0.0, 0.0, 0.0]), None)
+        .unwrap();
+    let text = service.search_text("订单服务", None).unwrap();
+    assert!(!hybrid.is_empty(), "降级后必须仍有全文结果");
+    assert_eq!(
+        hybrid
+            .iter()
+            .map(|hit| hit.chunk_id.clone())
+            .collect::<Vec<_>>(),
+        text.iter()
+            .map(|hit| hit.chunk_id.clone())
+            .collect::<Vec<_>>(),
+        "降级结果必须与纯全文检索一致"
+    );
+    assert!(hybrid.iter().any(|hit| hit.material_id == imported.id));
+}
+
+/// normalized=false 的空间必须原样存向量（不做单位化）。
+#[test]
+fn index_chunks_with_unnormalized_space_stores_raw_vectors() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = opened(&directory);
+    let service = MaterialService::new(&database, directory.path());
+    service
+        .import_file(write_import(&directory, "a.txt", "向量丙标记。"))
+        .unwrap();
+
+    let raw_space = super::EmbeddingSpace {
+        provider_id: "fake".into(),
+        model_id: "embed-4".into(),
+        dimensions: 4,
+        normalized: false,
+    };
+    service.index_chunks(&raw_space, &Fake4dProbe).unwrap();
+
+    let stored = stored_vector(&database);
+    assert_eq!(
+        stored,
+        vec![0.3, 0.0, 0.7, 0.0],
+        "未归一化空间必须存原始向量"
+    );
+}
+
+/// 全零向量在归一化空间下不得产生 NaN：模长为 0 时跳过除法原样保留。
+struct ZeroVectorProbe;
+
+impl crate::providers::EmbeddingProbe for ZeroVectorProbe {
+    fn embed(
+        &self,
+        _: &crate::providers::ProviderEndpoint,
+        _: Option<&str>,
+        _: &str,
+        dimensions: u32,
+        _: &str,
+    ) -> Result<Vec<f32>, crate::providers::EmbeddingError> {
+        Ok(vec![0.0; dimensions as usize])
+    }
+}
+
+#[test]
+fn index_chunks_zero_vector_stays_finite_in_normalized_space() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = opened(&directory);
+    let service = MaterialService::new(&database, directory.path());
+    service
+        .import_file(write_import(&directory, "a.txt", "普通文本一段。"))
+        .unwrap();
+
+    service
+        .index_chunks(&space("embed-4", 4), &ZeroVectorProbe)
+        .unwrap();
+
+    let stored = stored_vector(&database);
+    assert!(
+        stored.iter().all(|v| v.is_finite()),
+        "零向量路径不得产生 NaN"
+    );
+    assert_eq!(stored, vec![0.0, 0.0, 0.0, 0.0], "零向量必须原样保留");
+}
