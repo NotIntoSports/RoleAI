@@ -94,3 +94,93 @@ export const DEMO_MATERIALS: DemoMaterialDoc[] = [
     ],
   },
 ];
+
+/** 英文演示数据集：与中文版同构（同 id、同文件名语义），内容为对应译文。 */
+export const DEMO_MATERIALS_EN: DemoMaterialDoc[] = [
+  {
+    id: "mat-demo-handbook",
+    fileName: "Yunfan Collaboration Suite Product Handbook v2.3.pdf",
+    mediaType: "application/pdf",
+    byteSize: 1187424,
+    status: "text_ready",
+    chunkCount: 42,
+    contentSha256: "demo-9f21c7a4handbook",
+    sections: [
+      {
+        title: "Product overview",
+        text: "Yunfan Collaboration Suite (a fictional product) serves companies with 50–5,000 people, combining messaging, documents, schedules, and approvals. v2.3 strengthens cross-team project spaces and offline message sync; clients cover Windows, macOS, and the browser.",
+      },
+      {
+        title: "Messaging and collaboration",
+        text: "Messaging supports direct chats, group chats, and channels, with a 32 MB per-message limit, read receipts, and quoted replies. Offline messages stay on the server for 90 days and are pulled incrementally per conversation when you come back online. The meeting assistant can answer questions that @-mention it during a meeting, using locally uploaded materials.",
+      },
+      {
+        title: "Document collaboration",
+        text: "Online documents support real-time multi-user editing and version history kept for 180 days. Sheets cover common functions and pivot tables. A document can become a review task with one click and be assigned to teammates; review comments roll up into the project space.",
+      },
+      {
+        title: "Security and compliance",
+        text: "TLS 1.3 covers the whole transport path; storage is encrypted per tenant. Admins can configure watermarks, outbound approval, and device allowlists. Audit logs are kept for 365 days and can be exported to SIEM platforms. The v2.3 client crash rate (a fictional metric) is 0.12%, down about 40% from v2.2.",
+      },
+      {
+        title: "Release notes",
+        text: "v2.3 (2026-09) adds project spaces and offline sync improvements; v2.2 (2026-06) added the meeting assistant and audit export; v2.1 (2026-03) rebuilt the mobile message list. Known limitation: sheet functions do not recalculate automatically when editing documents offline.",
+      },
+    ],
+  },
+  {
+    id: "mat-demo-article",
+    fileName: "Three fixes for high-concurrency cache failures.md",
+    mediaType: "text/markdown",
+    byteSize: 14210,
+    status: "text_ready",
+    chunkCount: 18,
+    contentSha256: "demo-3b7e11ccarticle",
+    sections: [
+      {
+        title: "Cache breakdown",
+        text: "A cache breakdown happens the instant a single hot key expires and many concurrent requests hit the database at once. Two common fixes: mutual-exclusion rebuild (singleflight), where only one request rebuilds under a lock while others wait or get stale values; and logical expiry, where the key never physically expires but carries an expiry time, and an async thread rebuilds it when it notices. Set lock timeouts and retry limits on the rebuild thread to avoid deadlocks.",
+      },
+      {
+        title: "Cache penetration",
+        text: "Cache penetration is querying data that does not exist, so every request reaches the database. Defenses: a Bloom filter in front of the cache rejects keys that certainly do not exist; short-TTL caching of empty results (say, 60 seconds); and input validation at the entry point. Size the Bloom filter's false-positive rate to your data volume and rebuild it periodically.",
+      },
+      {
+        title: "Cache avalanche",
+        text: "A cache avalanche is many keys expiring at the same time, or a cache instance going down and pushing all traffic onto the database. Defenses: add random jitter to expiry times; build multi-level caches (local plus distributed); apply rate limiting and fallback plans on the origin path; deploy the cache cluster for high availability.",
+      },
+      {
+        title: "Cache consistency",
+        text: "The common consistency strategy is update-the-database-then-evict-the-cache (Cache Aside). For stronger guarantees, subscribe to the binlog (e.g. Canal) and evict asynchronously, downgrading strong consistency to eventual consistency with a short TTL as a backstop. During replication lag, avoid reading stale replica data and writing it back into the cache.",
+      },
+    ],
+  },
+  {
+    id: "mat-demo-jd",
+    fileName: "Backend Engineer Job Description (Yunfan Tech).pdf",
+    mediaType: "application/pdf",
+    byteSize: 88064,
+    status: "text_ready",
+    chunkCount: 6,
+    contentSha256: "demo-55aa0d12jd",
+    sections: [
+      {
+        title: "Responsibilities",
+        text: "Design and build the server side of the collaboration suite's messaging and collaboration paths; take part in capacity planning and stability work for high-concurrency scenarios (message push, caching, storage); work with client and test teams on delivery and incident retrospectives.",
+      },
+      {
+        title: "Requirements",
+        text: "Three or more years of backend experience; proficient in Java or Go; solid understanding of Redis, MySQL, and Kafka internals and tuning; familiar with common distributed-systems problems (consistency, idempotency, rate limiting, graceful degradation); cache system design experience is a plus; strong communication and documentation habits.",
+      },
+    ],
+  },
+];
+
+import { currentLanguage, type Language } from "../../i18n";
+
+const ALL_MATERIALS: Record<Language, DemoMaterialDoc[]> = { "zh-CN": DEMO_MATERIALS, en: DEMO_MATERIALS_EN };
+
+/** 按当前界面语言取资料种子。 */
+export function demoMaterials(): DemoMaterialDoc[] {
+  return ALL_MATERIALS[currentLanguage()];
+}

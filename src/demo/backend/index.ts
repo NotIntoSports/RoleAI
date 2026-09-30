@@ -26,6 +26,8 @@ import { getState, resetDemoState } from "./state";
 import { handleVoiceCommand } from "./voice";
 import { err, latency, ok } from "./util";
 
+import { demoT } from "./demo-text";
+
 // 与 mockIPC 回调的入参类型对齐（官方 InvokeArgs 的结构副本；
 // 不直接 import，前端契约测试只允许 src/api/commands.ts 引用 core 模块）。
 type DemoPayload = Record<string, unknown> | number[] | ArrayBuffer | Uint8Array;
@@ -51,11 +53,11 @@ const OBS_IDLE: ObsRuntimeStatus = {
 };
 
 const DEMO_MEETINGS: MeetingProcess[] = [
-  { pid: 41001, name: "ms-teams.exe", title: "演示会议室（虚构） | Microsoft Teams" },
+  { pid: 41001, name: "ms-teams.exe", title: demoT().misc.meetingTitle },
 ];
 
 const DEMO_AUDIO_OUTPUTS: AudioOutputDevice[] = [
-  { id: "demo-output-default", name: "扬声器（演示设备）" },
+  { id: "demo-output-default", name: demoT().misc.speakerName },
 ];
 
 function handleMeetingAndAudio(cmd: string): unknown {
@@ -69,7 +71,7 @@ function handleMeetingAndAudio(cmd: string): unknown {
         state: "ready",
         installed: true,
         rebootRequired: false,
-        detail: "虚拟声卡就绪（演示环境，未安装任何驱动）。",
+        detail: demoT().misc.virtualAudioReady,
         renderEndpointId: "demo-virtual-render",
         captureEndpointId: "demo-virtual-capture",
       } satisfies VirtualAudioPreparation);
@@ -79,7 +81,7 @@ function handleMeetingAndAudio(cmd: string): unknown {
           state: "ready",
           installed: true,
           rebootRequired: false,
-          detail: "演示环境无需安装驱动，虚拟声卡保持就绪。",
+          detail: demoT().misc.virtualAudioNoInstall,
           renderEndpointId: "demo-virtual-render",
           captureEndpointId: "demo-virtual-capture",
         } satisfies VirtualAudioPreparation),
@@ -101,7 +103,7 @@ function dispatch(cmd: string, payload: Record<string, unknown>): unknown {
     handleLivestreamCommand(cmd, payload) ??
     handlePracticeCommand(cmd, payload) ??
     handleMeetingAndAudio(cmd) ??
-    err("DEMO_NOT_IMPLEMENTED", `在线演示尚未模拟该能力（${cmd}）`)
+    err("DEMO_NOT_IMPLEMENTED", demoT().misc.notImplemented(cmd))
   );
 }
 

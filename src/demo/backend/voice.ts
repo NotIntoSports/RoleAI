@@ -6,6 +6,7 @@ import type {
   VoiceRouteSaveInput,
 } from "../../generated/bindings";
 
+import { demoT } from "./demo-text";
 import { getState, updateState } from "./state";
 import { demoId, err, latency, ok } from "./util";
 
@@ -13,7 +14,7 @@ export function handleVoiceCommand(cmd: string, payload: Record<string, unknown>
   switch (cmd) {
     case "speech_route_save": {
       const input = payload.input as VoiceRouteSaveInput;
-      if (!input.name.trim()) return err("SPEECH_ROUTE_INVALID", "线路名称不能为空。");
+      if (!input.name.trim()) return err("SPEECH_ROUTE_INVALID", demoT().voice.routeNameRequired);
       return latency(120, 300).then(() => {
         const existing = input.id
           ? getState().voiceRoutes.find((route) => route.id === input.id) ?? null
@@ -33,7 +34,7 @@ export function handleVoiceCommand(cmd: string, payload: Record<string, unknown>
           e2eModelId: input.e2eModelId,
           active: existing?.active ?? false,
           ready: true,
-          status: "已配置（演示）",
+          status: demoT().voice.statusConfigured,
           configVersion: (existing?.configVersion ?? 0) + 1,
         };
         updateState((s) => {
@@ -47,7 +48,7 @@ export function handleVoiceCommand(cmd: string, payload: Record<string, unknown>
     case "speech_route_test": {
       const routeId = payload.routeId as string;
       const route = getState().voiceRoutes.find((item) => item.id === routeId);
-      if (!route) return err("SPEECH_ROUTE_NOT_FOUND", "找不到该语音线路。");
+      if (!route) return err("SPEECH_ROUTE_NOT_FOUND", demoT().voice.routeNotFound);
       return latency(200, 600).then(() =>
         ok({
           routeId,
@@ -64,8 +65,8 @@ export function handleVoiceCommand(cmd: string, payload: Record<string, unknown>
     case "speech_route_activate": {
       const routeId = payload.routeId as string;
       const route = getState().voiceRoutes.find((item) => item.id === routeId);
-      if (!route) return err("SPEECH_ROUTE_NOT_FOUND", "找不到该语音线路。");
-      if (!route.ready) return err("SPEECH_ROUTE_NOT_READY", "线路尚未通过测试，无法启用。");
+      if (!route) return err("SPEECH_ROUTE_NOT_FOUND", demoT().voice.routeNotFound);
+      if (!route.ready) return err("SPEECH_ROUTE_NOT_READY", demoT().voice.routeNotReady);
       return latency(60, 160).then(() =>
         ok(
           updateState((s) => {
@@ -140,7 +141,7 @@ export function handleVoiceCommand(cmd: string, payload: Record<string, unknown>
       };
       return latency(80, 200).then(() => {
         const existing = getState().voiceReferences.find((item) => item.id === input.id);
-        if (!existing) return err("VOICE_REFERENCE_NOT_FOUND", "找不到该音色。");
+        if (!existing) return err("VOICE_REFERENCE_NOT_FOUND", demoT().voice.voiceNotFound);
         const next: VoiceReferenceSummary = {
           ...existing,
           name: input.name,
@@ -158,7 +159,7 @@ export function handleVoiceCommand(cmd: string, payload: Record<string, unknown>
     case "voice_reference_clone": {
       const id = payload.id as string;
       const reference = getState().voiceReferences.find((item) => item.id === id);
-      if (!reference) return err("VOICE_REFERENCE_NOT_FOUND", "找不到该音色。");
+      if (!reference) return err("VOICE_REFERENCE_NOT_FOUND", demoT().voice.voiceNotFound);
       return latency(400, 900).then(() => {
         const voiceId = `demo-voice-${id.slice(-6)}`;
         const cloned: VoiceReferenceSummary = {

@@ -6,21 +6,22 @@ import type {
   ProviderSaveInput,
 } from "../../generated/bindings";
 
+import { demoT } from "./demo-text";
 import { getState, updateState } from "./state";
 import { demoId, err, latency, ok } from "./util";
 
 const DEMO_MODELS = [
-  "qwen3.8-omni-flash-realtime（演示）",
-  "qwen-plus（演示）",
-  "qwen-max（演示）",
-  "text-embedding-v4（演示）",
+  `qwen3.8-omni-flash-realtime${demoT().providers.modelSuffix}`,
+  `qwen-plus${demoT().providers.modelSuffix}`,
+  `qwen-max${demoT().providers.modelSuffix}`,
+  `text-embedding-v4${demoT().providers.modelSuffix}`,
 ];
 
 export function handleProviderCommand(cmd: string, payload: Record<string, unknown> = {}): unknown {
   switch (cmd) {
     case "model_provider_save": {
       const input = payload.input as ProviderSaveInput;
-      if (!input.baseUrl.trim()) return err("PROVIDER_ENDPOINT_INVALID", "接入地址不能为空。");
+      if (!input.baseUrl.trim()) return err("PROVIDER_ENDPOINT_INVALID", demoT().providers.endpointRequired);
       return latency(120, 300).then(() => {
         const existing = input.id
           ? getState().providers.find((provider) => provider.id === input.id) ?? null
@@ -48,7 +49,7 @@ export function handleProviderCommand(cmd: string, payload: Record<string, unkno
     case "model_provider_test": {
       const providerId = payload.providerId as string;
       const provider = getState().providers.find((item) => item.id === providerId);
-      if (!provider) return err("PROVIDER_NOT_FOUND", "找不到该供应商。");
+      if (!provider) return err("PROVIDER_NOT_FOUND", demoT().providers.notFound);
       // 卡片要求：测试连接返回成功 + 200～600ms 模拟延迟。
       return latency(200, 600).then(() =>
         ok({
@@ -70,7 +71,7 @@ export function handleProviderCommand(cmd: string, payload: Record<string, unkno
     case "model_provider_activate": {
       const providerId = payload.providerId as string;
       const provider = getState().providers.find((item) => item.id === providerId);
-      if (!provider) return err("PROVIDER_NOT_FOUND", "找不到该供应商。");
+      if (!provider) return err("PROVIDER_NOT_FOUND", demoT().providers.notFound);
       return latency(60, 160).then(() => {
         updateState((s) => {
           s.activeProviderId = providerId;
@@ -104,7 +105,7 @@ export function handleProviderCommand(cmd: string, payload: Record<string, unkno
               || route.ttsProviderId === providerId || route.e2eProviderId === providerId,
           ) || s.embeddingConfigs.some((embedding) => embedding.providerId === providerId);
         if (inUse) {
-          return err("PROVIDER_IN_USE", "供应商仍被语音线路或 Embedding 配置引用。");
+          return err("PROVIDER_IN_USE", demoT().providers.inUse);
         }
         updateState((draft) => {
           draft.providers = draft.providers.filter((provider) => provider.id !== providerId);
@@ -136,7 +137,7 @@ export function handleProviderCommand(cmd: string, payload: Record<string, unkno
           normalized: input.normalized,
           active: existing?.active ?? false,
           ready: true,
-          status: "已配置（演示）",
+          status: demoT().providers.statusConfigured,
           configVersion: (existing?.configVersion ?? 0) + 1,
         };
         updateState((s) => {
@@ -154,7 +155,7 @@ export function handleProviderCommand(cmd: string, payload: Record<string, unkno
     case "embedding_config_activate": {
       const embeddingId = payload.embeddingId as string;
       const embedding = getState().embeddingConfigs.find((item) => item.id === embeddingId);
-      if (!embedding) return err("EMBEDDING_NOT_FOUND", "找不到该 Embedding 配置。");
+      if (!embedding) return err("EMBEDDING_NOT_FOUND", demoT().providers.embeddingNotFound);
       return latency(60, 160).then(() =>
         ok(
           updateState((s) => {

@@ -2,6 +2,7 @@
 // 同时为 B05 的脚本化实时会话提供落库助手（createLiveSession 等）。
 import type { SessionDetail, SessionSummary, SessionTurnView, TurnLatencyView } from "../../generated/bindings";
 
+import { demoT } from "./demo-text";
 import { getState, updateState } from "./state";
 import { demoId, err, latency, ok } from "./util";
 
@@ -11,22 +12,23 @@ function roleLabel(roleProfileId: string): string {
 
 function sessionToMarkdown(detail: SessionDetail): string {
   const { session, turns } = detail;
+  const md = demoT().records.markdown;
   const lines: string[] = [
-    `# 会话记录 ${session.id}`,
+    `# ${md.sessionHeading(session.id)}`,
     "",
-    `- 角色：${roleLabel(session.roleProfileId)}`,
-    `- 状态：${session.status}`,
-    `- 开始：${session.startedAt ?? "-"}`,
-    `- 结束：${session.finishedAt ?? "-"}`,
-    `- 传输：${session.transportMode}`,
+    `- ${md.role}：${roleLabel(session.roleProfileId)}`,
+    `- ${md.status}：${session.status}`,
+    `- ${md.started}：${session.startedAt ?? "-"}`,
+    `- ${md.finished}：${session.finishedAt ?? "-"}`,
+    `- ${md.transport}：${session.transportMode}`,
     "",
-    "> 在线演示数据，全部内容均为虚构。",
+    `> ${md.disclaimer}`,
     "",
   ];
   for (const turn of turns) {
-    lines.push(`## 轮 ${turn.turnIndex}`, "", `**用户**：${turn.userText}`, "", `**助手**：${turn.assistantText}`, "");
+    lines.push(`## ${md.turnHeading(turn.turnIndex)}`, "", `**${md.user}**：${turn.userText}`, "", `**${md.assistant}**：${turn.assistantText}`, "");
     if (turn.citations.length) {
-      lines.push("引用片段：");
+      lines.push(md.citations);
       for (const citation of turn.citations) {
         lines.push(`- [${citation.materialId}] ${citation.snippet}`);
       }
@@ -175,7 +177,7 @@ export function handleRecordCommand(cmd: string, payload: Record<string, unknown
       const sessionId = payload.sessionId as string;
       const s = getState();
       const session = s.sessions.find((item) => item.id === sessionId);
-      if (!session) return err("SESSION_NOT_FOUND", "找不到该会话记录。");
+      if (!session) return err("SESSION_NOT_FOUND", demoT().records.notFound);
       const detail: SessionDetail = { session, turns: s.sessionTurns[sessionId] ?? [] };
       return latency(30, 120).then(() => ok(detail));
     }
@@ -184,14 +186,14 @@ export function handleRecordCommand(cmd: string, payload: Record<string, unknown
       const format = payload.format as string;
       const s = getState();
       const session = s.sessions.find((item) => item.id === sessionId);
-      if (!session) return err("SESSION_NOT_FOUND", "找不到该会话记录。");
+      if (!session) return err("SESSION_NOT_FOUND", demoT().records.notFound);
       const detail: SessionDetail = { session, turns: s.sessionTurns[sessionId] ?? [] };
       return latency(120, 400).then(() => {
         const base = `roleai-${sessionId}`;
         if (format === "json") {
           const fileName = `${base}.json`;
           downloadMarkdown(fileName, JSON.stringify(detail, null, 2));
-          return ok({ path: `已通过浏览器下载：${fileName}（在线演示不写入本地磁盘）` });
+          return ok({ path: demoT().records.downloaded(fileName) });
         }
         const fileName = `${base}.${format === "text" ? "txt" : "md"}`;
         const content =
@@ -199,7 +201,7 @@ export function handleRecordCommand(cmd: string, payload: Record<string, unknown
             ? sessionToMarkdown(detail).replaceAll("**", "").replaceAll(/^#+ /gm, "")
             : sessionToMarkdown(detail);
         downloadMarkdown(fileName, content);
-        return ok({ path: `已通过浏览器下载：${fileName}（在线演示不写入本地磁盘）` });
+        return ok({ path: demoT().records.downloaded(fileName) });
       });
     }
     case "session_delete": {

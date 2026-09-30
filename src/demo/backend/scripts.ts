@@ -16,6 +16,10 @@ export interface DemoScript {
   turns: DemoScriptTurn[];
 }
 
+import { currentLanguage, type Language } from "../../i18n";
+
+import { COACH_SCRIPT_EN, INTERVIEW_SCRIPT_EN, MEETING_SCRIPT_EN } from "./scripts-en";
+
 const HANDBOOK = "mat-demo-handbook";
 
 /** 严苛面试官追问（第 3 轮演示打断）。 */
@@ -107,14 +111,21 @@ export const MEETING_SCRIPT: DemoScript = {
   ],
 };
 
-/** 脚本播完后的兜底回答（循环使用）。 */
-export const SCRIPT_TAIL_REPLIES: string[] = [
-  "演示脚本到这里就播完了。桌面的真实版本会持续进行语音对话；在线演示里你可以输入文字继续体验，或结束会话回看记录。",
-  "这段是演示的固定结尾：想再看一遍完整脚本，可以结束会话后重新开始；想体验真实语音，请下载桌面版。",
-];
+const ALL_SCRIPTS: Record<Language, Record<string, DemoScript>> = {
+  "zh-CN": { [INTERVIEW_SCRIPT.id]: INTERVIEW_SCRIPT, [COACH_SCRIPT.id]: COACH_SCRIPT, [MEETING_SCRIPT.id]: MEETING_SCRIPT },
+  en: { [INTERVIEW_SCRIPT_EN.id]: INTERVIEW_SCRIPT_EN, [COACH_SCRIPT_EN.id]: COACH_SCRIPT_EN, [MEETING_SCRIPT_EN.id]: MEETING_SCRIPT_EN },
+};
 
+/** 按脚本 id 取当前语言的脚本（演示回退与 live-commands 的显式选择共用）。 */
+export function demoScriptById(id: string): DemoScript {
+  const scripts = ALL_SCRIPTS[currentLanguage()];
+  return scripts[id] ?? scripts["interview-strict"];
+}
+
+/** 脚本播完后的兜底回答（循环使用；语言相关文案走 demoT）。 */
 export function scriptForRole(roleProfileId: string | null, scenario: string | undefined): DemoScript {
-  if (roleProfileId === "preset-expression-coach") return COACH_SCRIPT;
-  if (roleProfileId === "preset-meeting" || scenario === "meetingAssistant") return MEETING_SCRIPT;
-  return INTERVIEW_SCRIPT;
+  const scripts = ALL_SCRIPTS[currentLanguage()];
+  if (roleProfileId === "preset-expression-coach") return scripts["coach"];
+  if (roleProfileId === "preset-meeting" || scenario === "meetingAssistant") return scripts["meeting"];
+  return scripts["interview-strict"];
 }

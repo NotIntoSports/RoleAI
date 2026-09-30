@@ -14,9 +14,11 @@ import type {
 import type { LivePersistence } from "./live-session";
 import { ScriptedLiveSession } from "./live-session";
 import { appendLiveTurn, createLiveSession, finishLiveSession, updateLiveTurnAssistant } from "./records";
-import { COACH_SCRIPT, INTERVIEW_SCRIPT, MEETING_SCRIPT, scriptForRole } from "./scripts";
+import { demoScriptById, scriptForRole } from "./scripts";
 import { getState } from "./state";
 import { latency, ok, err } from "./util";
+
+import { demoT } from "./demo-text";
 
 const EMPTY_TURN: SessionTurnView = {
   id: "demo-empty-turn",
@@ -29,12 +31,12 @@ const EMPTY_TURN: SessionTurnView = {
 };
 
 function scriptFor(roleProfileId: string | null) {
-  // 直播讲解员复用会议脚本（讲稿口播场景）；其余按角色/场景映射。
-  if (roleProfileId === "preset-presenter") return MEETING_SCRIPT;
+  // 直播讲解员复用会议脚本（讲稿口播场景）；其余按角色/场景映射（按脚本 id 判断，语言无关）。
+  if (roleProfileId === "preset-presenter") return demoScriptById("meeting");
   const mapped = scriptForRole(roleProfileId, getState().roleProfiles.find((role) => role.id === roleProfileId)?.scenario);
-  return mapped === COACH_SCRIPT || mapped === MEETING_SCRIPT || mapped === INTERVIEW_SCRIPT
+  return mapped.id === "coach" || mapped.id === "meeting" || mapped.id === "interview-strict"
     ? mapped
-    : INTERVIEW_SCRIPT;
+    : demoScriptById("interview-strict");
 }
 
 function transportOf(scriptId: string): string {
@@ -66,22 +68,15 @@ function buildReport(): Record<string, unknown> {
   const s = getState();
   const session = activeSession;
   const turns = session ? s.sessionTurns[session.id] ?? [] : [];
+  const text = demoT().live;
   const roleName =
-    s.roleProfiles.find((role) => role.id === session?.roleProfileId)?.name ?? "演示角色";
+    s.roleProfiles.find((role) => role.id === session?.roleProfileId)?.name ?? text.reportFallbackRole;
   return {
     report: {
-      summary: `本场景共进行 ${turns.length} 轮对话（角色：${roleName}）。在线演示评分为固定脚本演示，不代表模型真实评价；桌面版会基于真实对话生成评分报告。`,
-      strengths: [
-        "核心概念边界清楚，能落到组件级方案",
-        "面对追问能给出取舍理由，而不是只报结论",
-      ],
-      followUps: [
-        "建议为高频追问准备量化数据（容量、延迟、成本）",
-        "建议把一次线上问题的复盘整理成自己的方法论",
-      ],
-      limitations: [
-        "演示环境未连接真实模型，评语为脚本内容，仅供参考",
-      ],
+      summary: text.reportSummary(turns.length, roleName),
+      strengths: text.reportStrengths,
+      followUps: text.reportFollowUps,
+      limitations: text.reportLimitations,
     },
   };
 }
@@ -123,7 +118,7 @@ export function handleLiveSessionCommand(cmd: string, payload: Record<string, un
     }
     case "session_stop": {
       if (!active || !activeSession) {
-        return err("SESSION_STATE_INVALID", "当前没有进行中的会话。");
+        return err("SESSION_STATE_INVALID", demoT().live.noActiveSession);
       }
       active.stop();
       const summary = finishLiveSession(activeSession.id);
@@ -158,8 +153,8 @@ export function handleLiveSessionCommand(cmd: string, payload: Record<string, un
     }
     case "session_trigger_assistant": {
       const live = requireActive();
-      if (!live) return err("SESSION_STATE_INVALID", "当前没有进行中的会话。");
-      live.submitUserText("@会议助手 请继续");
+      if (!live) return err("SESSION_STATE_INVALID", demoT().live.noActiveSession);
+      live.submitUserText(demoT().live.triggerAssistant);
       return latency(30, 90).then(() => ok(lastTurnView()));
     }
     case "session_agent_command": {
@@ -171,7 +166,7 @@ export function handleLiveSessionCommand(cmd: string, payload: Record<string, un
           action: input.action,
           ok: false,
           result: {},
-          error: "SESSION_STATE_INVALID：当前没有进行中的会话",
+          error: `SESSION_STATE_INVALID：${demoT().live.noActiveSession}`,
         });
       }
       switch (input.action) {

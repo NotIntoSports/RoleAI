@@ -1,6 +1,7 @@
 // 角色命令：role_profile_save / copy / activate / delete。
 import type { RoleProfileConfig, RoleProfileSaveInput } from "../../generated/bindings";
 
+import { demoT } from "./demo-text";
 import { getState, updateState } from "./state";
 import { demoId, err, latency, ok } from "./util";
 
@@ -22,7 +23,7 @@ export function handleRoleCommand(cmd: string, payload: Record<string, unknown> 
     case "role_profile_save": {
       const input = payload.input as RoleProfileSaveInput;
       if (!input.name.trim()) {
-        return err("ROLE_PROFILE_INVALID", "角色名称不能为空。");
+        return err("ROLE_PROFILE_INVALID", demoT().roles.nameRequired);
       }
       return latency(80, 200).then(() => {
         const existing = input.id
@@ -41,12 +42,12 @@ export function handleRoleCommand(cmd: string, payload: Record<string, unknown> 
       const input = payload.input as { sourceId: string; id: string | null };
       const s = getState();
       const source = s.roleProfiles.find((role) => role.id === input.sourceId);
-      if (!source) return err("ROLE_PROFILE_NOT_FOUND", "找不到要复制的角色。");
+      if (!source) return err("ROLE_PROFILE_NOT_FOUND", demoT().roles.copySourceMissing);
       return latency(80, 200).then(() => {
         const copy: RoleProfileConfig = {
           ...source,
           id: input.id ?? demoId("role"),
-          name: `${source.name} 副本`,
+          name: `${source.name}${demoT().roles.copySuffix}`,
           scenario: undefined,
           active: false,
           configVersion: 1,
@@ -61,7 +62,7 @@ export function handleRoleCommand(cmd: string, payload: Record<string, unknown> 
       const roleId = payload.roleId as string;
       const s = getState();
       const role = s.roleProfiles.find((item) => item.id === roleId);
-      if (!role) return err("ROLE_PROFILE_NOT_FOUND", "找不到该角色。");
+      if (!role) return err("ROLE_PROFILE_NOT_FOUND", demoT().roles.notFound);
       return latency(60, 160).then(() =>
         ok(
           updateState((draft) => {
@@ -80,7 +81,7 @@ export function handleRoleCommand(cmd: string, payload: Record<string, unknown> 
       return latency(60, 160).then(() => {
         const s = getState();
         if (!s.roleProfiles.some((item) => item.id === roleId)) {
-          return err("ROLE_PROFILE_NOT_FOUND", "找不到该角色。");
+          return err("ROLE_PROFILE_NOT_FOUND", demoT().roles.notFound);
         }
         updateState((draft) => {
           draft.roleProfiles = draft.roleProfiles.filter((item) => item.id !== roleId);

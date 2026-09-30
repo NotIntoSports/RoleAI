@@ -15,86 +15,168 @@ import type {
   SessionTurnView,
 } from "../../generated/bindings";
 
+import type { Language } from "../../i18n";
+
 import { handleLiveSessionCommand } from "./live-commands";
+import { demoLang, demoT } from "./demo-text";
 import { getState } from "./state";
 import { demoId, err, latency, ok } from "./util";
 
-const FILLER_WORDS = ["嗯", "啊", "那个", "就是", "然后", "其实"];
+const FILLER_WORDS: Record<Language, string[]> = {
+  "zh-CN": ["嗯", "啊", "那个", "就是", "然后", "其实"],
+  en: ["um", "uh", "you know", "I mean", "like", "basically"],
+};
 
-const QUESTION_TEMPLATES: Array<(position: string) => PracticeQuestion> = [
-  (position) => ({
-    prompt: `请介绍一个你最有代表性的${position}项目，并说明你的具体职责。`,
-    focus: "项目深度",
-    expectedPoints: ["背景与目标", "关键决策", "量化结果"],
-    followups: ["最大的技术困难是什么？", "如果重来一次会怎么改？"],
-  }),
-  () => ({
-    prompt: "讲一次你排查线上问题的完整过程：从发现到复盘。",
-    focus: "问题定位",
-    expectedPoints: ["监控与假设", "验证过程", "后续预防"],
-    followups: ["当时为什么不先回滚？"],
-  }),
-  () => ({
-    prompt: "你如何判断一个技术方案半年后是否仍然成立？",
-    focus: "系统设计",
-    expectedPoints: ["容量与成本", "演进路径"],
-    followups: ["举一个推翻重来的例子。"],
-  }),
-  () => ({
-    prompt: "说说一次你与同事意见冲突的经历，最后怎么收场？",
-    focus: "协作沟通",
-    expectedPoints: ["事实与立场", "达成的共识"],
-    followups: ["如果对方仍然不服呢？"],
-  }),
-  () => ({
-    prompt: "挑一段你写过的最复杂的逻辑，讲清楚为什么必须这么复杂。",
-    focus: "工程权衡",
-    expectedPoints: ["约束条件", "简化尝试"],
-    followups: ["有考虑过删掉这层吗？"],
-  }),
-  () => ({
-    prompt: "你如何给一个刚上线的新服务确定告警阈值？",
-    focus: "运维意识",
-    expectedPoints: ["基线数据", "分级策略"],
-    followups: ["误报太多怎么办？"],
-  }),
-  () => ({
-    prompt: "讲讲你最近一次学习新技术并把它们落到项目里的经历。",
-    focus: "成长性",
-    expectedPoints: ["选型理由", "落地效果"],
-    followups: ["踩过哪些坑？"],
-  }),
-  () => ({
-    prompt: "如果让你重做当前项目里的一个模块，你会选哪个，为什么？",
-    focus: "反思与判断",
-    expectedPoints: ["现状问题", "收益估计"],
-    followups: ["为什么之前没有做？"],
-  }),
-  () => ({
-    prompt: "在工期和代码质量冲突时，你的取舍标准是什么？",
-    focus: "工程权衡",
-    expectedPoints: ["风险边界", "沟通方式"],
-    followups: ["举一个真实的取舍案例。"],
-  }),
-  () => ({
-    prompt: "你如何向完全不懂技术的同事解释一次故障的原因？",
-    focus: "表达与抽象",
-    expectedPoints: ["类比准确", "结论先行"],
-    followups: ["如果对方还是不满意呢？"],
-  }),
-  () => ({
-    prompt: "说说你做过的最有争议的技术决定，以及事后验证的结果。",
-    focus: "决策与担当",
-    expectedPoints: ["决策依据", "事后复盘"],
-    followups: ["当时有更好的选项吗？"],
-  }),
-  () => ({
-    prompt: "如果团队要求你把回答时间压缩到一半，你会先砍什么？",
-    focus: "优先级",
-    expectedPoints: ["核心诉求", "可砍项排序"],
-    followups: ["被砍掉的部分怎么补？"],
-  }),
-];
+const QUESTION_TEMPLATES: Record<Language, Array<(position: string) => PracticeQuestion>> = {
+  "zh-CN": [
+    (position) => ({
+      prompt: `请介绍一个你最有代表性的${position}项目，并说明你的具体职责。`,
+      focus: "项目深度",
+      expectedPoints: ["背景与目标", "关键决策", "量化结果"],
+      followups: ["最大的技术困难是什么？", "如果重来一次会怎么改？"],
+    }),
+    () => ({
+      prompt: "讲一次你排查线上问题的完整过程：从发现到复盘。",
+      focus: "问题定位",
+      expectedPoints: ["监控与假设", "验证过程", "后续预防"],
+      followups: ["当时为什么不先回滚？"],
+    }),
+    () => ({
+      prompt: "你如何判断一个技术方案半年后是否仍然成立？",
+      focus: "系统设计",
+      expectedPoints: ["容量与成本", "演进路径"],
+      followups: ["举一个推翻重来的例子。"],
+    }),
+    () => ({
+      prompt: "说说一次你与同事意见冲突的经历，最后怎么收场？",
+      focus: "协作沟通",
+      expectedPoints: ["事实与立场", "达成的共识"],
+      followups: ["如果对方仍然不服呢？"],
+    }),
+    () => ({
+      prompt: "挑一段你写过的最复杂的逻辑，讲清楚为什么必须这么复杂。",
+      focus: "工程权衡",
+      expectedPoints: ["约束条件", "简化尝试"],
+      followups: ["有考虑过删掉这层吗？"],
+    }),
+    () => ({
+      prompt: "你如何给一个刚上线的新服务确定告警阈值？",
+      focus: "运维意识",
+      expectedPoints: ["基线数据", "分级策略"],
+      followups: ["误报太多怎么办？"],
+    }),
+    () => ({
+      prompt: "讲讲你最近一次学习新技术并把它们落到项目里的经历。",
+      focus: "成长性",
+      expectedPoints: ["选型理由", "落地效果"],
+      followups: ["踩过哪些坑？"],
+    }),
+    () => ({
+      prompt: "如果让你重做当前项目里的一个模块，你会选哪个，为什么？",
+      focus: "反思与判断",
+      expectedPoints: ["现状问题", "收益估计"],
+      followups: ["为什么之前没有做？"],
+    }),
+    () => ({
+      prompt: "在工期和代码质量冲突时，你的取舍标准是什么？",
+      focus: "工程权衡",
+      expectedPoints: ["风险边界", "沟通方式"],
+      followups: ["举一个真实的取舍案例。"],
+    }),
+    () => ({
+      prompt: "你如何向完全不懂技术的同事解释一次故障的原因？",
+      focus: "表达与抽象",
+      expectedPoints: ["类比准确", "结论先行"],
+      followups: ["如果对方还是不满意呢？"],
+    }),
+    () => ({
+      prompt: "说说你做过的最有争议的技术决定，以及事后验证的结果。",
+      focus: "决策与担当",
+      expectedPoints: ["决策依据", "事后复盘"],
+      followups: ["当时有更好的选项吗？"],
+    }),
+    () => ({
+      prompt: "如果团队要求你把回答时间压缩到一半，你会先砍什么？",
+      focus: "优先级",
+      expectedPoints: ["核心诉求", "可砍项排序"],
+      followups: ["被砍掉的部分怎么补？"],
+    }),
+  ],
+  en: [
+    (position) => ({
+      prompt: `Describe your most representative ${position} project and your specific responsibilities in it.`,
+      focus: "Project depth",
+      expectedPoints: ["Background and goals", "Key decisions", "Quantified results"],
+      followups: ["What was the hardest technical challenge?", "What would you change if you started over?"],
+    }),
+    () => ({
+      prompt: "Walk through a complete production incident you debugged: from detection to retrospective.",
+      focus: "Problem diagnosis",
+      expectedPoints: ["Monitoring and hypotheses", "Verification process", "Prevention afterwards"],
+      followups: ["Why didn't you roll back first?"],
+    }),
+    () => ({
+      prompt: "How do you judge whether a technical design will still hold six months from now?",
+      focus: "System design",
+      expectedPoints: ["Capacity and cost", "Evolution path"],
+      followups: ["Give an example of tearing one down and starting over."],
+    }),
+    () => ({
+      prompt: "Tell me about a disagreement with a colleague and how it was resolved.",
+      focus: "Collaboration",
+      expectedPoints: ["Facts and positions", "The consensus reached"],
+      followups: ["What if they still weren't convinced?"],
+    }),
+    () => ({
+      prompt: "Pick the most complex logic you have written and explain why it had to be that complex.",
+      focus: "Engineering trade-offs",
+      expectedPoints: ["Constraints", "Simplification attempts"],
+      followups: ["Did you consider deleting that layer?"],
+    }),
+    () => ({
+      prompt: "How do you set alert thresholds for a newly launched service?",
+      focus: "Operations awareness",
+      expectedPoints: ["Baseline data", "Severity tiers"],
+      followups: ["What if there are too many false alarms?"],
+    }),
+    () => ({
+      prompt: "Describe a recent time you learned a new technology and applied it in a project.",
+      focus: "Growth",
+      expectedPoints: ["Why that choice", "Measured impact"],
+      followups: ["What pitfalls did you hit?"],
+    }),
+    () => ({
+      prompt: "If you could redo one module in your current project, which would it be and why?",
+      focus: "Reflection and judgment",
+      expectedPoints: ["Current problems", "Estimated payoff"],
+      followups: ["Why wasn't it done earlier?"],
+    }),
+    () => ({
+      prompt: "When deadlines and code quality conflict, what are your criteria for deciding?",
+      focus: "Engineering trade-offs",
+      expectedPoints: ["Risk boundaries", "How you communicate it"],
+      followups: ["Give a real trade-off example."],
+    }),
+    () => ({
+      prompt: "How would you explain an outage to a colleague with no technical background?",
+      focus: "Communication and abstraction",
+      expectedPoints: ["Accurate analogies", "Conclusion first"],
+      followups: ["What if they are still not satisfied?"],
+    }),
+    () => ({
+      prompt: "Tell me about your most controversial technical decision and how it held up afterwards.",
+      focus: "Decisions and ownership",
+      expectedPoints: ["Decision rationale", "Retrospective"],
+      followups: ["Was there a better option at the time?"],
+    }),
+    () => ({
+      prompt: "If the team asked you to cut response time in half, what would you cut first?",
+      focus: "Prioritization",
+      expectedPoints: ["Core needs", "What to cut, in order"],
+      followups: ["How would you make up for what is cut?"],
+    }),
+  ],
+};
 
 interface ActivePractice {
   sessionId: string;
@@ -122,14 +204,16 @@ export function resetPracticeState(): void {
 }
 
 function seedPlan(): PracticePlan {
-  const templates = QUESTION_TEMPLATES.slice(0, 5);
+  const text = demoT().practice;
+  const templates = QUESTION_TEMPLATES[demoLang()].slice(0, 5);
+  const positionNoun = demoLang() === "en" ? "backend" : "后端";
   return {
     id: "demo-practice-plan-1",
-    title: "后端开发工程师·严苛面试官",
-    position: "后端开发工程师",
-    interviewerStyle: "严苛面试官",
-    difficulty: "标准",
-    questions: templates.map((template) => template("后端")),
+    title: `${text.defaultPosition}·${text.strictStyle}`,
+    position: text.defaultPosition,
+    interviewerStyle: text.strictStyle,
+    difficulty: text.defaultDifficulty,
+    questions: templates.map((template) => template(positionNoun)),
     createdAt: "2026-10-01T08:00:00Z",
     updatedAt: "2026-10-01T08:00:00Z",
   };
@@ -180,6 +264,8 @@ function metricsOf(
 
 /** 2 份历史报告（虚构）：维度与总分逐次提升，用于展示成长曲线。 */
 function seedReport(sessionId: string, generation: 0 | 1): PracticeReport {
+  const text = demoT().practice;
+  const fillers = FILLER_WORDS[demoLang()];
   const base = generation === 0
     ? {
         createdAt: "2026-09-20T10:00:00Z",
@@ -195,8 +281,8 @@ function seedReport(sessionId: string, generation: 0 | 1): PracticeReport {
       };
   const plan = seedPlan();
   const fillersByRound = generation === 0
-    ? [[{ word: "那个", count: 4 }, { word: "嗯", count: 3 }], [{ word: "就是", count: 2 }], []]
-    : [[{ word: "那个", count: 2 }], [], [{ word: "嗯", count: 1 }]];
+    ? [[{ word: fillers[2], count: 4 }, { word: fillers[0], count: 3 }], [{ word: fillers[3], count: 2 }], []]
+    : [[{ word: fillers[2], count: 2 }], [], [{ word: fillers[0], count: 1 }]];
   const answers = plan.questions.slice(0, 3).map((question, index) => ({
     // 时长按自然语速（约 200 字/分钟）与字数自洽，避免指标卡数字互相矛盾。
     chars: Math.round((base.duration / 3 / 60) * 200) + index * 10,
@@ -206,15 +292,9 @@ function seedReport(sessionId: string, generation: 0 | 1): PracticeReport {
     prompt: question.prompt,
   }));
   const scores = generation === 0 ? [3, 3, 2.5] : [4, 4, 3];
-  const answersText = generation === 0
-    ? "（演示转写）当时的情况比较复杂，主要是我负责的部分，具体细节就是……那个……做了一些优化。"
-    : "（演示转写）项目背景是接口性能不达标，我先用压测定位瓶颈，再把缓存粒度细化，最终 p99 下降 30%。";
-  const strengthsByRound = generation === 0
-    ? [["态度认真"], ["思路清楚"], ["态度认真"]]
-    : [["先讲结论再展开"], ["有量化结果"], ["结构完整"]];
-  const issuesByRound = generation === 0
-    ? [["口头禅较多"], ["缺少量化结果"], ["展开没有重点"]]
-    : [[], ["时间分配可以更均衡"], []];
+  const answersText = generation === 0 ? text.seedAnswerWeak : text.seedAnswerStrong;
+  const strengthsByRound = generation === 0 ? text.seedStrengthsWeak : text.seedStrengthsStrong;
+  const issuesByRound = generation === 0 ? text.seedIssuesWeak : text.seedIssuesStrong;
   return {
     sessionId,
     planId: plan.id,
@@ -230,12 +310,9 @@ function seedReport(sessionId: string, generation: 0 | 1): PracticeReport {
       score: scores[index],
       strengths: strengthsByRound[index],
       issues: issuesByRound[index],
-      modelAnswer: "（演示示范）建议按“结论 → 依据 → 数字”三段式回答，并把口头禅替换成停顿。",
+      modelAnswer: text.seedModelAnswer,
     })),
-    topSuggestions:
-      generation === 0
-        ? ["回答先给结论再展开细节", "控制口头禅，用停顿代替", "每个项目准备一个量化结果"]
-        : ["继续补充跨团队协作的例子", "对追问保持追问式的反问练习", "把语速稳定在 220 字/分钟以内"],
+    topSuggestions: generation === 0 ? text.seedSuggestionsWeak : text.seedSuggestionsStrong,
     objective: metricsOf(
       answers.map((answer) => ({
         chars: answer.chars,
@@ -288,7 +365,7 @@ function lastAnswerMetrics(sessionId: string): AnswerMetrics | null {
   if (!last) return null;
   const chars = (last.userText.match(/[\u4e00-\u9fff]/g) ?? []).length;
   const words = (last.userText.match(/[A-Za-z]+/g) ?? []).length;
-  const fillers = FILLER_WORDS.map((word) => ({
+  const fillers = FILLER_WORDS[demoLang()].map((word) => ({
     word,
     count: last.userText.split(word).length - 1,
   })).filter((hit) => hit.count > 0);
@@ -309,22 +386,23 @@ function lastAnswerMetrics(sessionId: string): AnswerMetrics | null {
 }
 
 function renderReportMarkdown(report: PracticeReport): string {
+  const md = demoT().practice.markdown;
   const lines = [
-    `# 模拟面试训练报告（${report.position}）`,
+    md.title(report.position),
     "",
-    `- 总分：${report.totalScore} / 5`,
-    `- 维度：内容深度 ${report.dimensions.contentDepth} · 结构清晰 ${report.dimensions.structureClarity} · 表达流畅 ${report.dimensions.fluency} · 岗位匹配 ${report.dimensions.jobFit}`,
+    md.totalScore(report.totalScore),
+    md.dimensions(report.dimensions),
     "",
-    "> 在线演示数据，全部内容均为虚构。",
+    `> ${md.disclaimer}`,
     "",
   ];
   for (const review of report.perQuestion) {
-    lines.push(`## 第 ${review.index} 题：${review.question}`, "", `**我的回答**：${review.answer}`, "");
+    lines.push(md.questionHeading(review.index, review.question), "", md.myAnswer(review.answer), "");
     if (review.score > 0) {
-      lines.push(`**评分**：${review.score} / 5`, "", `**改进示范**：${review.modelAnswer}`, "");
+      lines.push(md.score(review.score), "", md.modelAnswer(review.modelAnswer), "");
     }
   }
-  lines.push("---", "", "评分由 AI 生成，仅供练习参考", "");
+  lines.push("---", "", md.aiNote, "");
   return lines.join("\n");
 }
 
@@ -351,18 +429,20 @@ export function handlePracticeCommand(cmd: string, payload: Record<string, unkno
   switch (cmd) {
     case "practice_plan_generate": {
       const input = payload.input as PracticePlanGenerateInput;
-      const position = String(input?.position ?? "后端开发工程师").trim() || "后端开发工程师";
+      const text = demoT().practice;
+      const position = String(input?.position ?? "").trim() || text.defaultPosition;
       const count = Math.min(12, Math.max(1, Number(input?.questionCount ?? 5)));
-      const style = String(input?.interviewerStyle ?? "面试官");
+      const style = String(input?.interviewerStyle ?? "").trim() || text.defaultStyle;
       const now = new Date().toISOString();
+      const templates = QUESTION_TEMPLATES[demoLang()];
       const plan: PracticePlan = {
         id: demoId("demo-plan"),
         title: `${position}·${style}`,
         position,
         interviewerStyle: style,
-        difficulty: String(input?.difficulty ?? "标准"),
+        difficulty: String(input?.difficulty ?? "").trim() || text.defaultDifficulty,
         questions: Array.from({ length: count }, (_, index) => ({
-          ...QUESTION_TEMPLATES[index % QUESTION_TEMPLATES.length](position),
+          ...templates[index % templates.length](position),
         })),
         createdAt: now,
         updatedAt: now,
@@ -372,7 +452,7 @@ export function handlePracticeCommand(cmd: string, payload: Record<string, unkno
     case "practice_plan_save": {
       const plan = payload.input as PracticePlan;
       if (!plan?.id || plan.questions.length === 0) {
-        return err("PRACTICE_PLAN_INVALID", "题单参数无效");
+        return err("PRACTICE_PLAN_INVALID", demoT().practice.planInvalid);
       }
       plan.updatedAt = new Date().toISOString();
       plans = [plan, ...plans.filter((item) => item.id !== plan.id)];
@@ -388,7 +468,7 @@ export function handlePracticeCommand(cmd: string, payload: Record<string, unkno
     case "practice_session_start": {
       const input = payload.input as PracticeSessionStartInput;
       const plan = planById(String(input?.planId ?? ""));
-      if (!plan) return err("PRACTICE_PLAN_NOT_FOUND", "题单不存在");
+      if (!plan) return err("PRACTICE_PLAN_NOT_FOUND", demoT().practice.planNotFound);
       const live = handleLiveSessionCommand("session_start", {}) as Promise<
         CommandResult<SessionStartResult>
       >;
@@ -407,7 +487,7 @@ export function handlePracticeCommand(cmd: string, payload: Record<string, unkno
     case "practice_session_progress": {
       const sessionId = String(payload.sessionId ?? "");
       if (!active || active.sessionId !== sessionId) {
-        return err("PRACTICE_SESSION_STATE_INVALID", "该会话不是模拟面试训练");
+        return err("PRACTICE_SESSION_STATE_INVALID", demoT().practice.sessionStateInvalid);
       }
       return latency(20, 60).then(() => ok(progressOf(active as ActivePractice)));
     }
@@ -415,7 +495,7 @@ export function handlePracticeCommand(cmd: string, payload: Record<string, unkno
       const sessionId = String(payload.sessionId ?? "");
       const current = active;
       if (!current || current.sessionId !== sessionId) {
-        return err("PRACTICE_SESSION_STATE_INVALID", "该会话不是模拟面试训练");
+        return err("PRACTICE_SESSION_STATE_INVALID", demoT().practice.sessionStateInvalid);
       }
       current.skipOffset += 1;
       return latency(60, 160).then(() => ok(progressOf(current)));
@@ -423,15 +503,16 @@ export function handlePracticeCommand(cmd: string, payload: Record<string, unkno
     case "practice_session_turn_metrics": {
       const sessionId = String(payload.sessionId ?? "");
       if (!active || active.sessionId !== sessionId) {
-        return err("PRACTICE_SESSION_STATE_INVALID", "该会话不是模拟面试训练");
+        return err("PRACTICE_SESSION_STATE_INVALID", demoT().practice.sessionStateInvalid);
       }
       return latency(20, 60).then(() => ok(lastAnswerMetrics(sessionId)));
     }
     case "practice_report_generate": {
       const sessionId = String(payload.sessionId ?? "");
       const answers = turnAnswers(sessionId);
+      const text = demoT().practice;
       if (answers.length === 0) {
-        return err("PRACTICE_SESSION_STATE_INVALID", "会话还没有可评价的转写");
+        return err("PRACTICE_SESSION_STATE_INVALID", text.noTranscripts);
       }
       const plan = active && active.sessionId === sessionId ? planById(active.planId) : undefined;
       const count = Math.min(3, answers.length);
@@ -439,28 +520,28 @@ export function handlePracticeCommand(cmd: string, payload: Record<string, unkno
       const report: PracticeReport = {
         sessionId,
         planId: plan?.id ?? plans[0]?.id ?? "",
-        position: plan?.position ?? "后端开发工程师",
-        interviewerStyle: plan?.interviewerStyle ?? "严苛面试官",
+        position: plan?.position ?? text.defaultPosition,
+        interviewerStyle: plan?.interviewerStyle ?? text.strictStyle,
         llmAvailable: true,
         totalScore: 3.8,
         dimensions: dimensionsOf(4, 3.5, 4, 3.5),
         perQuestion: Array.from({ length: count }, (_, index) => ({
           index: index + 1,
           question:
-            plan?.questions[index]?.prompt ?? plans[0]?.questions[index]?.prompt ?? `第 ${index + 1} 题`,
+            plan?.questions[index]?.prompt ?? plans[0]?.questions[index]?.prompt ?? text.questionFallback(index + 1),
           answer: answers[index].userText,
           score: [4, 4, 3.5][index],
-          strengths: index === 0 ? ["结构清晰", "有具体例子"] : ["先讲结论再展开"],
-          issues: index === 0 ? ["结尾缺少量化结果"] : [],
-          modelAnswer: "（演示示范）按“结论 → 依据 → 数字”三段式重组回答。",
+          strengths: index === 0 ? text.generateStrengthsFirst : text.generateStrengthsRest,
+          issues: index === 0 ? text.generateIssuesFirst : text.generateIssuesRest,
+          modelAnswer: text.generateModelAnswer,
         })),
-        topSuggestions: ["回答先给结论再展开细节", "每个项目准备一个量化结果", "用停顿代替口头禅"],
+        topSuggestions: text.generateSuggestions,
         objective: metricsOf(
           answers.slice(0, 3).map((turn, index) => ({
             chars: (turn.userText.match(/[\u4e00-\u9fff]/g) ?? []).length,
             words: (turn.userText.match(/[A-Za-z]+/g) ?? []).length,
             duration: 90 + index * 15,
-            fillers: FILLER_WORDS.map((word) => ({ word, count: turn.userText.split(word).length - 1 }))
+            fillers: FILLER_WORDS[demoLang()].map((word) => ({ word, count: turn.userText.split(word).length - 1 }))
               .filter((hit) => hit.count > 0),
           })),
         ),
@@ -489,7 +570,7 @@ export function handlePracticeCommand(cmd: string, payload: Record<string, unkno
     case "practice_report_get": {
       const sessionId = String(payload.sessionId ?? "");
       const report = reports.find((item) => item.sessionId === sessionId);
-      if (!report) return err("PRACTICE_REPORT_NOT_FOUND", "训练报告不存在");
+      if (!report) return err("PRACTICE_REPORT_NOT_FOUND", demoT().practice.reportNotFound);
       return latency(40, 120).then(() => ok(report));
     }
     case "practice_report_export": {
@@ -499,11 +580,11 @@ export function handlePracticeCommand(cmd: string, payload: Record<string, unkno
         return err("SESSION_EXPORT_FORMAT_INVALID", "Unsupported export format");
       }
       const report = reports.find((item) => item.sessionId === sessionId);
-      if (!report) return err("PRACTICE_REPORT_NOT_FOUND", "训练报告不存在");
+      if (!report) return err("PRACTICE_REPORT_NOT_FOUND", demoT().practice.reportNotFound);
       const fileName = `roleai-practice-${sessionId}.md`;
       downloadMarkdown(fileName, renderReportMarkdown(report));
       return latency(120, 400).then(() =>
-        ok({ path: `已通过浏览器下载：${fileName}（在线演示不写入本地磁盘）` }),
+        ok({ path: demoT().practice.downloaded(fileName) }),
       );
     }
     default:

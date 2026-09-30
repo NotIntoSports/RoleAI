@@ -3,6 +3,7 @@
 import type { MaterialSearchHit, MaterialSummary } from "../../generated/bindings";
 
 import type { DemoMaterialDoc } from "./materials-data";
+import { demoT } from "./demo-text";
 import { getState, updateState } from "./state";
 import { demoId, err, latency, ok } from "./util";
 
@@ -99,7 +100,7 @@ export function handleMaterialCommand(cmd: string, payload: Record<string, unkno
       return latency(20, 80).then(() => ok(getState().materials));
     case "material_import": {
       const rawPath = String(payload.path ?? "").trim();
-      if (!rawPath) return err("MATERIAL_PATH_REQUIRED", "请填写资料文件路径。");
+      if (!rawPath) return err("MATERIAL_PATH_REQUIRED", demoT().materials.pathRequired);
       const fileName = rawPath.replaceAll("\\", "/").split("/").pop() || rawPath;
       return latency(200, 600).then(() => {
         const doc: DemoMaterialDoc = {
@@ -112,8 +113,8 @@ export function handleMaterialCommand(cmd: string, payload: Record<string, unkno
           contentSha256: `demo-${demoId("sha").slice(4)}`,
           sections: [
             {
-              title: "导入内容",
-              text: `演示资料「${fileName}」。在线演示不会读取本地文件内容，这里只生成占位正文用于界面展示；桌面版会真实切片、嵌入并支持全文检索。`,
+              title: demoT().materials.importSectionTitle,
+              text: demoT().materials.importSectionText(fileName),
             },
           ],
         };

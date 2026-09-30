@@ -1,5 +1,6 @@
 export { I18nProvider } from "./I18nProvider";
 export {
+  currentLanguage,
   initializeLanguage,
   LANGUAGE_STORAGE_KEY,
   parseLanguagePreference,

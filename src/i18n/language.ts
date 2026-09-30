@@ -161,6 +161,11 @@ export function useLanguage(): Language {
   return useSyncExternalStore(subscribe, getResolvedLanguage, getServerLanguage);
 }
 
+/** 非组件调用方（如演示后端）读取当前生效语言；不订阅变更。 */
+export function currentLanguage(): Language {
+  return resolved;
+}
+
 export function useLanguagePreference(): LanguagePreference {
   return useSyncExternalStore(subscribe, () => preference, () => "system" as const);
 }
