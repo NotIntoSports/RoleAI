@@ -140,7 +140,10 @@ pub fn configure_default_capture_mic(bridge: &Path) -> Result<AudioRoutingChange
 }
 
 /// 解析 AudioBridge `--set-default-capture-mic` 的 JSON 输出。
-fn parse_capture_mic_change(bridge: &Path, bytes: &[u8]) -> Result<AudioRoutingChange, &'static str> {
+fn parse_capture_mic_change(
+    bridge: &Path,
+    bytes: &[u8],
+) -> Result<AudioRoutingChange, &'static str> {
     let value: serde_json::Value =
         serde_json::from_slice(bytes).map_err(|_| "AUDIO_ROUTING_RESULT_INVALID")?;
     let cable_id = value["cableId"]
@@ -834,7 +837,10 @@ mod tests {
         assert_eq!(change.cable_id, "{cable}");
         assert_eq!(change.previous_id, "{communications}");
         assert_eq!(change.previous_console_id.as_deref(), Some("{console}"));
-        assert_eq!(change.previous_multimedia_id.as_deref(), Some("{multimedia}"));
+        assert_eq!(
+            change.previous_multimedia_id.as_deref(),
+            Some("{multimedia}")
+        );
     }
 
     #[test]
@@ -861,7 +867,8 @@ mod tests {
         let script = directory.path().join("安装 diagnostic.ps1");
         std::fs::write(&script, "Write-Output '{\"installed\":false,\"errorCode\":\"PREREQUISITE_UAC_CANCELLED\"}'; exit 1").unwrap();
         assert_eq!(
-            super::run_script_bounded(&script, &[], std::time::Duration::from_secs(30)).unwrap_err(),
+            super::run_script_bounded(&script, &[], std::time::Duration::from_secs(30))
+                .unwrap_err(),
             "PREREQUISITE_UAC_CANCELLED"
         );
     }
