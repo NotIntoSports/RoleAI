@@ -8,6 +8,7 @@ pub(super) fn session_setup(
     state: &SharedState,
     config: &RealtimeSessionConfig,
     socket: &mut TungsteniteSocket,
+    reconnect: bool,
 ) -> Result<(), RealtimeError> {
     // 每次重连都是新连接：转写装配状态不复用。
     *state.assembler.lock().unwrap_or_else(|p| p.into_inner()) = InputTranscriptAssembler::new();
@@ -71,7 +72,8 @@ pub(super) fn session_setup(
     // 重连重置了服务端会话：积压的提交/应答命令属于旧连接的上下文，重放会
     // 对同一句话二次 commit+response.create（重复播报）。只保留音频追加——
     // 那是断连期间用户正在说的话，落进缓冲随下一次 commit 提交。
-    while let Some(command) = state.try_command() {
+    // 首次连接没有旧上下文：握手期间排队的命令照常处理。
+    while reconnect && let Some(command) = state.try_command() {
         if matches!(
             command,
             ActorCommand::CommitTurn

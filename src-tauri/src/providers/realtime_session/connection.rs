@@ -51,7 +51,7 @@ pub(super) fn supervise(state: Arc<SharedState>) {
         let config = state.config_snapshot();
         connections += 1;
         eprintln!("[realtime] connection #{connections} opening");
-        match run_connection(&state, &config) {
+        match run_connection(&state, &config, connections > 1) {
             ConnectionOutcome::Shutdown => {
                 eprintln!("[realtime] shutdown after {connections} connection(s)");
                 return;
@@ -86,12 +86,16 @@ pub(super) fn supervise(state: Arc<SharedState>) {
 }
 
 /// 连接主体：握手 → session.update → 上下文回放 → 事件/命令轮询循环。
-fn run_connection(state: &SharedState, config: &RealtimeSessionConfig) -> ConnectionOutcome {
+fn run_connection(
+    state: &SharedState,
+    config: &RealtimeSessionConfig,
+    reconnect: bool,
+) -> ConnectionOutcome {
     let url = match realtime_url(&config.endpoint.base_url, &config.model_id) {
         Ok(url) => url,
         Err(error) => return ConnectionOutcome::Terminal(error.code().to_owned()),
     };
-    let mut socket = match connect_socket(&url, config, state) {
+    let mut socket = match connect_socket(&url, config, state, reconnect) {
         Ok(socket) => socket,
         Err(error) => return classify_connect_error(error),
     };
@@ -284,6 +288,7 @@ fn connect_socket(
     url: &reqwest::Url,
     config: &RealtimeSessionConfig,
     state: &SharedState,
+    reconnect: bool,
 ) -> Result<TungsteniteSocket, RealtimeError> {
     let stream = connect_tcp(url, &state.shutdown)?;
     let _ = stream.set_nodelay(true);
@@ -315,6 +320,6 @@ fn connect_socket(
         None,
     ))?;
     let mut socket = TungsteniteSocket { socket };
-    session_setup(state, config, &mut socket)?;
+    session_setup(state, config, &mut socket, reconnect)?;
     Ok(socket)
 }

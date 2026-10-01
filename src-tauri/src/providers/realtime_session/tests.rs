@@ -530,6 +530,32 @@ fn manual_profile_without_auto_respond_commits_without_create() {
 }
 
 #[test]
+fn first_connection_keeps_commands_queued_during_handshake() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let actor = spawn_manual_actor(port, false);
+    actor.send(ActorCommand::CommitTurn);
+    let (_, mut ws) = accept_session(&listener);
+    assert_eq!(read_frame(&mut ws)["type"], "input_audio_buffer.commit");
+}
+
+#[test]
+fn reconnect_drops_commands_queued_for_the_previous_session() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let actor = spawn_manual_actor(port, false);
+    let (_, mut ws1) = accept_session(&listener);
+    wait_connected(&actor, &mut ws1);
+    ws1.send(Message::Close(None)).unwrap();
+    ws1.get_mut().shutdown(std::net::Shutdown::Both).ok();
+    actor.send(ActorCommand::CommitTurn);
+
+    let (_, mut ws2) = accept_session(&listener);
+    wait_connected(&actor, &mut ws2);
+    assert_no_frame(&mut ws2, Duration::from_millis(300));
+}
+
+#[test]
 fn reconnects_after_server_close_and_replays_context_again() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
