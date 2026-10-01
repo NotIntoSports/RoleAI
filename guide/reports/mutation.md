@@ -3,7 +3,8 @@
 > ⚠️ **状态（2026-10-01）：部分完成。** 长跑因用户决定提前收尾而中断（lane-I I07）。
 > **仅 `audio/barge_in.rs` 完成了完整的变异测试与补测闭环**；`audio/segmenter.rs` 补测已写入
 > （模块测试全绿）但其定向复验未运行；`materials/chunk.rs` 仅写入补测、变异轮未完成；
-> `practice/metrics.rs` 与 `services/echo_guard.rs` **完全未运行**。下文保留的数据均来自
+> `practice/metrics.rs` 与 `services/echo_guard.rs` **完全未运行**（practice 模块后已随模拟面试
+> 训练模块整体移除，2026-10-01 用户决定，其变异测试不再需要）。下文保留的数据均来自
 > 中断前已完成的真实运行，其余为空。
 
 ## 环境
@@ -29,7 +30,7 @@ powershell -ExecutionPolicy Bypass -File scripts\run-mutants.ps1
 计划对手册指定的 5 个纯逻辑模块跑（无 IO/设备/真实时间依赖，变异结果可解释）：
 
 `services/echo_guard.rs`、`audio/segmenter.rs`、`audio/barge_in.rs`、`materials/chunk.rs`、
-`practice/metrics.rs`。
+`practice/metrics.rs`（最后一个已随模拟面试训练模块移除，见下）。
 
 每轮先跑未变异基线（必须全绿），然后对每个变异体执行：注入 → 编译 → 跑全量 lib 测试；
 测试失败/编译失败/超时记为「杀死」，测试全过记为「存活」。存活变异体逐个人工归因：
@@ -42,7 +43,7 @@ powershell -ExecutionPolicy Bypass -File scripts\run-mutants.ps1
 | audio/barge_in.rs | **已完成**（69 变异体全测） | 已补 4 个测试，模块测试全绿 | 分数 95.7%（66 杀 / 2 存活记账 / 3 unviable） |
 | audio/segmenter.rs | 部分完成：57 变异体测完一轮（36 严格杀 + 8 超时杀 + 4 unviable + 9 存活），**补测后的定向复验未运行** | 已补 2 个测试，模块测试全绿 | 复验前分数 77.2%；补测效果未复验，**不可引用为最终分数** |
 | materials/chunk.rs | **未完成**（仅早期分片数据，未形成完整一轮） | 已补 2 个测试，模块测试全绿（74 passed） | 无变异分数 |
-| practice/metrics.rs | **未运行** | 无 | — |
+| practice/metrics.rs | 模块已整体移除（2026-10-01 用户决定），变异测试不再需要 | 模块已删除 | — |
 | services/echo_guard.rs | **未运行** | 无 | — |
 
 ## audio/barge_in.rs（唯一完成闭环的模块）
@@ -87,10 +88,10 @@ powershell -ExecutionPolicy Bypass -File scripts\run-mutants.ps1
 
 **后续如恢复此线：先 `-OnlyRegex` 定向复验上表 8 个变异体，再补测其余模块。**
 
-## materials/chunk.rs / practice/metrics.rs / services/echo_guard.rs
+## materials/chunk.rs / services/echo_guard.rs
 
 chunk.rs：变异轮被中断，仅有早期分片数据，不构成可引用的分数；已写入 2 个补测
-（模块测试全绿）。metrics.rs 与 echo_guard.rs：未运行，无任何数据。
+（模块测试全绿）。echo_guard.rs：未运行，无任何数据。
 
 ## 已知限制
 

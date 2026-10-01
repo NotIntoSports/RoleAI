@@ -582,7 +582,7 @@ mod tests {
     #[test]
     fn clean_text_drops_single_char_lines_but_keeps_two_char_lines() {
         let text = "首段内容\n甲\n乙乙\n\n次段内容";
-        let chunks = chunk_text("钱八", &text);
+        let chunks = chunk_text("钱八", text);
         assert_eq!(chunks.len(), 2, "空行必须保住两个段落");
         assert!(
             chunks[0].content.contains("乙乙") && !chunks[0].content.contains('甲'),
@@ -614,7 +614,7 @@ mod tests {
     #[test]
     fn education_section_is_not_split_by_date_lines() {
         let text = "教育背景\n2018.09-2022.06 某大学 本科\n主修计算机科学与技术";
-        let chunks = chunk_text("吴十", &text);
+        let chunks = chunk_text("吴十", text);
         assert_eq!(chunks.len(), 1, "教育背景不得按日期行拆成多块");
         assert!(chunks[0].content.contains("主修计算机科学与技术"));
     }

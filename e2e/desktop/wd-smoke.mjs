@@ -18,7 +18,7 @@
  *   3. msedgedriver：.tools/msedgedriver/msedgedriver.exe（可用 TAURI_E2E_MSEDGEDRIVER 覆盖），
  *      版本与本机 WebView2 Runtime 一致（查询见 docs/dependency-decisions.md I02 条目）。
  *
- * 断言：主窗口渲染出工作台页头 → 导航到全部 7 个页面（E 线新增“模拟面试”后共 7 个）
+ * 断言：主窗口渲染出工作台页头 → 导航到全部 6 个页面且各自页头 h1 渲染
  * 且各自页头 h1 渲染。麦克风相关流程不在 e2e 范围内（CI 无音频设备）。
  */
 import { spawn } from "node:child_process";
@@ -37,7 +37,6 @@ const ELEMENT_TIMEOUT_MS = 20_000;
 const ROUTES = [
   ["workspace", "工作台"],
   ["livestream", "虚拟直播"],
-  ["practice", "模拟面试"],
   ["materials", "资料"],
   ["records", "记录"],
   ["services", "服务"],

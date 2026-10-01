@@ -1,4 +1,4 @@
-// 演示会话记录种子：4 条完全虚构的历史会话（2 场模拟面试、1 场会议纪要、1 场直播排练）。
+// 演示会话记录种子：4 条完全虚构的历史会话（2 场面试官对练、1 场会议纪要、1 场直播排练）。
 import type { TurnLatencyView, TurnTimeline } from "../../generated/bindings";
 
 export interface DemoSeedTurn {

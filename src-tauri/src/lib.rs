@@ -13,7 +13,6 @@ pub mod livestream;
 pub mod materials;
 pub mod migrate;
 pub mod obs;
-pub mod practice;
 pub mod prerequisites;
 pub mod processes;
 pub mod providers;
@@ -166,18 +165,6 @@ pub fn run() {
             commands::livestream_get,
             commands::livestream_control,
             commands::livestream_insert_question,
-            commands::practice_plan_generate,
-            commands::practice_plan_save,
-            commands::practice_plan_list,
-            commands::practice_plan_delete,
-            commands::practice_session_start,
-            commands::practice_session_progress,
-            commands::practice_session_skip,
-            commands::practice_session_turn_metrics,
-            commands::practice_report_generate,
-            commands::practice_report_get,
-            commands::practice_report_list,
-            commands::practice_report_export,
             commands::obs_runtime_status,
             commands::obs_virtual_camera_start,
             commands::obs_virtual_camera_stop,

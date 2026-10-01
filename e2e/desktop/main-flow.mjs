@@ -12,8 +12,6 @@
  *      并断言隔离目录的单次性契约（同根重启被 startup.rs 拒绝，exit 2）；
  *   3. 导入一份 txt 资料 → FTS 搜索命中；
  *   4. 文本输入完成一轮对话 → 记录页出现该会话 → 导出 Markdown（校验文件内容）；
- *   5. 模拟面试：生成题单（mock 固定 JSON）→ 开始训练 → 作答/跳过 → 结束
- *      → 生成报告 → 模拟面试页出现报告（总分 + 雷达图 + 免责声明）。
  *
  * 已知限制（记账本）：
  *   - --isolated-root 按设计只接受空目录（startup.rs），同一隔离目录无法二次启动；
@@ -50,9 +48,7 @@ const ROUTE_NAME = "E2E 级联线路";
 const ROLE_NAME = "E2E 角色甲";
 const MATERIAL_FILE_NAME = "e2e-interview-jd.txt";
 const MATERIAL_KEYWORD = "量子缓存一致性";
-const CHAT_USER_TEXT = "你好，请用一句话介绍模拟面试训练。";
-const PRACTICE_ANSWER_TEXT = "E2E 练习回答：我会先说结论，再分三点展开。";
-const PRACTICE_POSITION = "后端开发工程师";
+const CHAT_USER_TEXT = "你好，请用一句话做自我介绍。";
 
 let stepCounter = 0;
 let lastScreenshotDriver = null;
@@ -278,7 +274,7 @@ async function dumpIpcDiagnostics(driver) {
         ),
         new Promise((resolve) => setTimeout(() => resolve(name + ': TIMEOUT(2.5s)'), 2500)),
       ]);
-      Promise.all([probe('practice_plan_list'), probe('runtime_get_status')]).then(done);
+      Promise.all([probe('runtime_get_status'), probe('materials_list')]).then(done);
     `);
     console.error(`[I03] IPC 诊断：${report}`);
   } catch (error) {
@@ -290,13 +286,12 @@ async function dumpIpcDiagnostics(driver) {
         href: window.location.href,
         title: document.title,
         visibility: document.visibilityState,
-        hasWizard: !!document.querySelector(".practice-wizard"),
         hasWorkspace: !!document.querySelector(".workspace-session"),
         activeNav: document.querySelector(".app-nav-item[data-active='true']")?.getAttribute("aria-label") ?? "(none)",
       };
     `);
     console.error(
-      `[I03] 文档状态：href=${state.href} wizard=${state.hasWizard} workspace=${state.hasWorkspace} 当前导航=${state.activeNav}`,
+      `[I03] 文档状态：href=${state.href} workspace=${state.hasWorkspace} 当前导航=${state.activeNav}`,
     );
   } catch (error) {
     console.error(`[I03] 文档状态读取失败：${error.message}`);
@@ -324,7 +319,7 @@ async function runMainFlow() {
   const fixturesRoot = await mkdtemp(join(tmpdir(), "roleai-e2e-fixtures-"));
   const materialPath = join(fixturesRoot, MATERIAL_FILE_NAME);
   await writeFile(materialPath, [
-    "岗位 JD：后端开发工程师（E2E 模拟面试示例资料）",
+    "岗位 JD：后端开发工程师（E2E 示例资料）",
     "",
     "职责：",
     `- 负责${MATERIAL_KEYWORD}服务的设计与实现。`,
@@ -529,88 +524,8 @@ async function runMainFlow() {
       console.log(`[I03] 已校验导出文件：${exportedPath}`);
     });
 
-    // ── 用例 5：模拟面试闭环（mock 固定 JSON 驱动）──
-    await step("模拟面试：向导生成题单", async () => {
-      await navigateTo(driver, "practice", "模拟面试");
-      await fillByXpath(driver, "//label[contains(., '岗位方向')]/input", PRACTICE_POSITION);
-      await clickByXpath(driver, "//div[contains(@class,'practice-nav')]//button[normalize-space()='下一步']");
-      await clickByXpath(driver, "//div[contains(@class,'practice-nav')]//button[normalize-space()='下一步']");
-      const countInput = await driver.wait(
-        until.elementLocated(By.xpath("//label[contains(., '题量')]/input")),
-        ELEMENT_TIMEOUT_MS,
-      );
-      await fillInput(driver, countInput, "1");
-      await clickByXpath(driver, "//div[contains(@class,'practice-nav')]//button[normalize-space()='下一步']");
-      await clickByXpath(driver, "//button[normalize-space()='生成题单']");
-      await driver.wait(until.elementLocated(By.css(".practice-plan-editor")), ELEMENT_TIMEOUT_MS, "题单编辑器未出现");
-      await waitTextContains(driver, ".practice-plan-editor", "1 道题");
-      await assertMockCalled(mockServer, "plan", PRACTICE_POSITION);
-    });
 
-    await step("模拟面试：开始训练并接管到工作台", async () => {
-      await clickByXpath(driver, "//button[normalize-space()='开始训练']");
-      const deadline = Date.now() + STEP_TIMEOUT_MS;
-      let navigated = false;
-      let lastHref = "";
-      while (Date.now() < deadline) {
-        const headings = await driver.findElements(By.css("#page-heading-workspace"));
-        if (headings.length > 0) { navigated = true; break; }
-        // 向导出现错误消息说明 startPracticeSession 已返回（blocked/失败），直接带着消息报错
-        const messages = await driver.findElements(By.css(".practice-wizard p.services-message"));
-        let messageText = "";
-        for (const message of messages) {
-          const text = await message.getText().catch(() => "");
-          if (text.trim()) messageText = text.trim();
-        }
-        if (messageText) {
-          throw new Error(`开始训练返回错误：${messageText}`);
-        }
-        // 记录 URL 变化时间线：定位 hash 何时被剥离（挂起根因证据）。
-        const href = await driver.executeScript("return window.location.href").catch(() => "?");
-        if (href !== lastHref) {
-          console.log(`[I03] URL 变化：${lastHref || "(初始)"} → ${href}`);
-          lastHref = href;
-        }
-        await new Promise((resolveWait) => setTimeout(resolveWait, 500));
-      }
-      if (!navigated) {
-        await dumpIpcDiagnostics(driver);
-        throw new Error("开始训练后未跳回工作台（IPC 疑似挂起）");
-      }
-      await waitTextContains(driver, ".practice-hud-progress", "第 1 / 1 题", STEP_TIMEOUT_MS);
-    });
-
-    await step("模拟面试：作答一轮后跳过并结束", async () => {
-      await submitChatText(driver, PRACTICE_ANSWER_TEXT);
-      await clickByCss(driver, ".practice-hud-skip");
-      await waitTextContains(driver, ".practice-hud-progress", "全部 1 题已完成", STEP_TIMEOUT_MS);
-      await stopSessionAndWait(driver);
-    });
-
-    await step("模拟面试：生成训练报告", async () => {
-      await clickByCss(driver, ".practice-hud-report");
-      await waitTextContains(
-        driver,
-        "p.services-message.session-message",
-        "训练报告已生成",
-        STEP_TIMEOUT_MS,
-      );
-      await assertMockCalled(mockServer, "review");
-    });
-
-    await step("模拟面试：报告页出现总分与雷达图", async () => {
-      await navigateTo(driver, "practice", "模拟面试");
-      await driver.wait(
-        until.elementLocated(By.css("article.practice-report[aria-label='训练报告详情']")),
-        ELEMENT_TIMEOUT_MS,
-        "训练报告详情未出现",
-      );
-      await waitTextContains(driver, "article.practice-report", "总分");
-      await waitTextContains(driver, "article.practice-report", "评分由 AI 生成，仅供练习参考");
-      await driver.wait(until.elementLocated(By.css("article.practice-report svg.practice-radar")), ELEMENT_TIMEOUT_MS, "雷达图未渲染");
-    });
-
-    console.log("\nPASS: 桌面应用主流程端到端全部通过（配置/持久化/资料/对话导出/模拟面试闭环）。");
+    console.log("\nPASS: 桌面应用主流程端到端全部通过（配置/持久化/资料/对话导出）。");
   } finally {
     if (driver) {
       await driver.quit().catch(() => {});

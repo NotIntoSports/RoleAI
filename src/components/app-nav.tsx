@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { routeIds, routeLabel, type RouteId } from "../app/routes";
 import { t, useT } from "../i18n";
-import { FolderOpen, GraduationCap, History, Menu, MessageSquare, Radio, Settings2, SlidersHorizontal, Sparkles, X } from "lucide-react";
+import { FolderOpen, History, Menu, MessageSquare, Radio, Settings2, SlidersHorizontal, Sparkles, X } from "lucide-react";
 
-const icons: Record<RouteId, typeof MessageSquare> = { workspace: MessageSquare, livestream: Radio, practice: GraduationCap, materials: FolderOpen, records: History, services: SlidersHorizontal, settings: Settings2 };
+const icons: Record<RouteId, typeof MessageSquare> = { workspace: MessageSquare, livestream: Radio, materials: FolderOpen, records: History, services: SlidersHorizontal, settings: Settings2 };
 
 export interface AppNavProps {
   current: RouteId;

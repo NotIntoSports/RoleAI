@@ -74,13 +74,8 @@ function stripComments(code) {
 }
 
 // 后端契约值白名单：这些中文字面量是对外接口的取值而非界面文案。
-// - practice-wizard：面试官风格与难度的 value 是后端契约（lane-H 手册 H05 卡决策，value 保持中文原值）；
 // - livestream-studio：「中文」是讲稿生成语言参数的默认值，随请求发往后端（H08 卡记录）。
 const ALLOWED_CONTRACT_LITERALS = new Map([
-  [
-    "src/features/practice/practice-wizard.tsx",
-    [/"(?:面试官|严苛面试官|基础|标准|进阶)"/g, /(?:基础|标准|进阶)(?=\s*:)/g],
-  ],
   ["src/features/livestream/livestream-studio.tsx", [/"中文"/g]],
 ]);
 

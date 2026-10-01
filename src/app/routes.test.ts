@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { routeIds, parseHash, formatHash, routeLabel, routeDesignRef, routeCapabilities, isRouteId, type RouteId } from "./routes";
 
 describe("routes", () => {
-  it("routeIds is a fixed ordered tuple of 5 pages", () => {
-    expect(routeIds).toEqual(["workspace", "livestream", "practice", "materials", "records", "services", "settings"]);
+  it("routeIds is a fixed ordered tuple of 6 pages", () => {
+    expect(routeIds).toEqual(["workspace", "livestream", "materials", "records", "services", "settings"]);
   });
 
   describe("parseHash", () => {
@@ -16,7 +16,6 @@ describe("routes", () => {
     it("parses each valid route", () => {
       expect(parseHash("#/workspace")).toBe("workspace");
       expect(parseHash("#/materials")).toBe("materials");
-      expect(parseHash("#/practice")).toBe("practice");
       expect(parseHash("#/records")).toBe("records");
       expect(parseHash("#/services")).toBe("services");
       expect(parseHash("#/settings")).toBe("settings");
@@ -47,7 +46,6 @@ describe("routes", () => {
   describe("routeLabel", () => {
     it("returns Chinese labels", () => {
       expect(routeLabel("workspace")).toBe("工作台");
-      expect(routeLabel("practice")).toBe("模拟面试");
       expect(routeLabel("materials")).toBe("资料");
       expect(routeLabel("records")).toBe("记录");
       expect(routeLabel("services")).toBe("服务");
@@ -87,12 +85,6 @@ describe("routes", () => {
       expect(caps.length).toBeGreaterThan(0);
       expect(caps.some(c => c.includes("模型"))).toBe(true);
     });
-    it("practice includes plan wizard capabilities", () => {
-      const caps = routeCapabilities("practice");
-      expect(caps.length).toBeGreaterThan(0);
-      expect(caps.some(c => c.includes("题单"))).toBe(true);
-      expect(caps.some(c => c.includes("面试官"))).toBe(true);
-    });
     it("settings includes diagnostics and config capabilities", () => {
       const caps = routeCapabilities("settings");
       expect(caps.length).toBeGreaterThan(0);
@@ -109,7 +101,6 @@ describe("routes", () => {
     it("returns true for valid route ids", () => {
       expect(isRouteId("workspace")).toBe(true);
       expect(isRouteId("materials")).toBe(true);
-      expect(isRouteId("practice")).toBe(true);
       expect(isRouteId("records")).toBe(true);
       expect(isRouteId("services")).toBe(true);
       expect(isRouteId("settings")).toBe(true);

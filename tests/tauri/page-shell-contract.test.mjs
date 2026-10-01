@@ -143,7 +143,6 @@ test("route ids match the design spec", async () => {
   assert.deepEqual(ids, [
     "workspace",
     "livestream",
-    "practice",
     "materials",
     "records",
     "services",
