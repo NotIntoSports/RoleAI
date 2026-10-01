@@ -38,6 +38,7 @@ const ERROR_CODES = [
   "PLAYBACK_TIMEOUT",
   "PLAYBACK_CANCELLED",
   "PLAYBACK_NOT_CONFIRMED",
+  "PLATFORM_UNSUPPORTED",
 ] as const;
 
 type KnownErrorCode = (typeof ERROR_CODES)[number];

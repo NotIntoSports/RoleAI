@@ -72,6 +72,9 @@ interface SessionToolbarProps {
   setOutputDeviceId: (id: string) => void;
   audioOutputs: AudioOutputDevice[];
   refreshAudioOutputs: () => Promise<void> | void;
+  /** 后端返回 PLATFORM_UNSUPPORTED 后置位：会议采集与原生输出设备在当前平台不可用。 */
+  meetingUnsupported?: boolean;
+  outputsUnsupported?: boolean;
   canSearch: boolean;
   allowWebSearch: boolean;
   allowBargeIn: boolean;
@@ -112,6 +115,8 @@ export function SessionToolbar({
   setOutputDeviceId,
   audioOutputs,
   refreshAudioOutputs,
+  meetingUnsupported = false,
+  outputsUnsupported = false,
   canSearch,
   allowWebSearch,
   allowBargeIn,
@@ -149,7 +154,7 @@ export function SessionToolbar({
         {config && <fieldset disabled={busy || active} className="session-selection">
           <legend>{t("session.toolbar.fieldsetLegend")}</legend>
           <label>{t("session.toolbar.inputSource")}<select value={inputSource} onChange={(event) => { setInputSource(event.target.value); if (event.target.value === "meeting") { void refreshMeetings(); void refreshVirtualAudio(); } }}>
-            <option value="mic">{t("session.toolbar.localMic")}</option><option value="meeting">{t("session.toolbar.meetingAudio")}</option>
+            <option value="mic">{t("session.toolbar.localMic")}</option><option value="meeting" disabled={meetingUnsupported}>{meetingUnsupported ? t("session.toolbar.meetingAudioUnsupported") : t("session.toolbar.meetingAudio")}</option>
           </select></label>
           {inputSource === "mic" && <small>{t("session.toolbar.micHint")}{micActive ? t("session.toolbar.micActiveNote") : ""}</small>}
           {inputSource === "meeting" && <>
@@ -171,7 +176,7 @@ export function SessionToolbar({
             {virtualAudio?.rebootRequired && <div className="preflight-card" role="alert">{t("session.toolbar.rebootRequired")}</div>}
             {virtualAudio?.installed && <small>{t("session.toolbar.virtualAudioReady")}</small>}
           </>}
-          {inputSource !== "meeting" && <><label>{t("session.toolbar.voiceOutput")}<select value={outputDeviceId} onChange={(event) => setOutputDeviceId(event.target.value)}>
+          {inputSource !== "meeting" && !outputsUnsupported && <><label>{t("session.toolbar.voiceOutput")}<select value={outputDeviceId} onChange={(event) => setOutputDeviceId(event.target.value)}>
             <option value="">{t("session.toolbar.systemDefault")}</option>
             {audioOutputs.map((device) => <option key={device.id} value={device.id}>{device.name}</option>)}
           </select></label>

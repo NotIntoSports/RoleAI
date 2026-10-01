@@ -150,6 +150,7 @@ export const zhCN = {
       PLAYBACK_TIMEOUT: "语音播放超时，已停止输出。",
       PLAYBACK_CANCELLED: "语音播放已取消。",
       PLAYBACK_NOT_CONFIRMED: "音频组件未确认播放完成，不能标记为已播报。文字回答已保留。",
+      PLATFORM_UNSUPPORTED: "当前平台不支持该音频功能，请改用本机麦克风。",
     },
     remoteHints: {
       downstream_reconnect_exceeded: "语音模型不可用：当前供应商账号可能未开通实时语音模型权限。请在服务页更换语音线路，或到供应商控制台开通后重试。",
@@ -190,6 +191,7 @@ export const zhCN = {
       triggerAssistant: "让助手回答",
       gatingHint: "会议助手模式：普通讨论只转写，说出“会议助手”或点「让助手回答」才会回答。",
       meetingAudio: "会议音频",
+      meetingAudioUnsupported: "会议音频（当前平台不支持）",
       localMic: "本机麦克风",
       noRouteSelected: "尚未选择语音线路",
       noConfigLoaded: "尚未读取到会话配置，请到“服务”和“设置”检查线路与角色。",

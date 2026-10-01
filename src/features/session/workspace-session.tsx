@@ -106,6 +106,8 @@ export function WorkspaceSession({
   const [meetingPid, setMeetingPid] = useState("");
   const [audioOutputs, setAudioOutputs] = useState<AudioOutputDevice[]>([]);
   const [outputDeviceId, setOutputDeviceId] = useState("");
+  const [meetingUnsupported, setMeetingUnsupported] = useState(false);
+  const [outputsUnsupported, setOutputsUnsupported] = useState(false);
   // 设置页「性能」面板可关的轮次延迟瀑布条（localStorage 偏好，默认开）。
   const latencyWaterfallEnabled = useLatencyWaterfallPreference();
   const [virtualAudio, setVirtualAudio] = useState<VirtualAudioPreparation | null>(null);
@@ -151,6 +153,7 @@ export function WorkspaceSession({
     try {
       const result = await api.listAudioOutputs();
       if (result.ok) setAudioOutputs(result.data);
+      else if (result.error.code === "PLATFORM_UNSUPPORTED") { setAudioOutputs([]); setOutputsUnsupported(true); }
       else { setAudioOutputs([]); setMessage(errorText(result.error)); }
     } catch { setAudioOutputs([]); setMessage(t("session.controls.audioOutputsReadFailed")); }
   }
@@ -158,6 +161,9 @@ export function WorkspaceSession({
     setMeetingPid("");
     try {
       const result = await api.listMeetingProcesses();
+      if (!result.ok && result.error.code === "PLATFORM_UNSUPPORTED") {
+        setMeetingProcesses([]); setMeetingUnsupported(true); setInputSource("mic"); setMessage(errorText(result.error)); return;
+      }
       if (!result.ok) { setMeetingProcesses([]); setMessage(result.error.message); return; }
       setMeetingProcesses(result.data);
       setMeetingPid(result.data.length === 1 ? String(result.data[0].pid) : "");
@@ -530,6 +536,8 @@ export function WorkspaceSession({
         setOutputDeviceId={setOutputDeviceId}
         audioOutputs={audioOutputs}
         refreshAudioOutputs={refreshAudioOutputs}
+        meetingUnsupported={meetingUnsupported}
+        outputsUnsupported={outputsUnsupported}
         canSearch={canSearch}
         allowWebSearch={allowWebSearch}
         allowBargeIn={allowBargeIn}

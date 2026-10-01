@@ -149,6 +149,7 @@ export const en: Dictionary = {
       PLAYBACK_TIMEOUT: "Speech playback timed out. Output was stopped.",
       PLAYBACK_CANCELLED: "Speech playback was cancelled.",
       PLAYBACK_NOT_CONFIRMED: "The audio component did not confirm playback, so it cannot be marked as played. The written reply was kept.",
+      PLATFORM_UNSUPPORTED: "This audio feature is not supported on this platform. Use the local microphone instead.",
     },
     remoteHints: {
       downstream_reconnect_exceeded: "Voice model unavailable: the provider account may not have realtime voice model access enabled. Switch voice routes on the Services page, or enable access in the provider console and retry.",
@@ -189,6 +190,7 @@ export const en: Dictionary = {
       triggerAssistant: "Answer now",
       gatingHint: "Meeting assistant mode: casual talk is only transcribed. Say “meeting assistant” or press Answer now to get a reply.",
       meetingAudio: "Meeting audio",
+      meetingAudioUnsupported: "Meeting audio (not supported on this platform)",
       localMic: "Local microphone",
       noRouteSelected: "No voice route selected",
       noConfigLoaded: "Session configuration not loaded yet. Check routes and roles under Services and Settings.",

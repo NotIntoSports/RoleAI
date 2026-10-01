@@ -194,6 +194,44 @@ describe("WorkspaceSession", () => {
     await waitFor(() => expect(commands.startSession).toHaveBeenCalledWith(expect.objectContaining({ meetingPid: 202 })));
   });
 
+  it("disables meeting audio and falls back to the microphone when the platform is unsupported", async () => {
+    const config: PublicConfig = {
+      configVersion: 1, application: { locale: null }, models: { providers: [], activeProviderId: null },
+      speech: { activeVoiceRouteId: "route-1", voiceRoutes: [{ id: "route-1", name: "测试线路", mode: "cascaded", asrProviderId: null, asrModelId: null, llmProviderId: null, llmModelId: null, ttsProviderId: null, ttsModelId: null, voiceId: null, e2eProviderId: null, e2eModelId: null, active: true, ready: true, status: null, configVersion: 1 }] },
+      knowledge: { embeddingConfigs: [], activeEmbeddingConfigId: null }, storage: { exportDirectory: null },
+      roleProfiles: [{ id: "role-1", name: "会议助手", systemPrompt: "listen", openingMessage: "", styleInstructions: "", active: true, configVersion: 1 }],
+      activeRoleProfileId: "role-1", diagnostics: { logRetentionDays: 14 },
+    };
+    vi.mocked(commands.getConfigPublic).mockResolvedValue({ ok: true, data: config });
+    vi.mocked(commands.listMeetingProcesses).mockResolvedValue({
+      ok: false,
+      error: { code: "PLATFORM_UNSUPPORTED", message: "raw backend text", retryable: false, requestId: "test" },
+    });
+    render(<WorkspaceSession />);
+    await screen.findByLabelText("输入来源");
+    if (screen.getByRole("button", { name: "会话配置" }).getAttribute("aria-expanded") === "false") fireEvent.click(screen.getByRole("button", { name: "会话配置" }));
+    fireEvent.change(screen.getByLabelText("输入来源"), { target: { value: "meeting" } });
+    await screen.findByText("当前平台不支持该音频功能，请改用本机麦克风。");
+    expect(screen.getByLabelText("输入来源")).toHaveValue("mic");
+    const meetingOption = screen.getByRole("option", { name: "会议音频（当前平台不支持）" }) as HTMLOptionElement;
+    expect(meetingOption.disabled).toBe(true);
+    expect(document.body.textContent).not.toContain("raw backend text");
+  });
+
+  it("hides the native output picker without an error when outputs are unsupported", async () => {
+    vi.mocked(commands.getConfigPublic).mockResolvedValue({ ok: true, data: configuredSession() });
+    vi.mocked(commands.listAudioOutputs).mockResolvedValue({
+      ok: false,
+      error: { code: "PLATFORM_UNSUPPORTED", message: "raw backend text", retryable: false, requestId: "test" },
+    });
+    render(<WorkspaceSession />);
+    await screen.findByLabelText("输入来源");
+    await waitFor(() => expect(commands.listAudioOutputs).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByLabelText("语音输出")).toBeNull());
+    expect(document.body.textContent).not.toContain("PLATFORM_UNSUPPORTED");
+    expect(document.body.textContent).not.toContain("raw backend text");
+  });
+
   it("answers once when the Rust global-hotkey event reaches an active meeting assistant", async () => {
     const config: PublicConfig = {
       configVersion: 1, application: { locale: null }, models: { providers: [], activeProviderId: null },
