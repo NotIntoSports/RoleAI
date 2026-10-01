@@ -597,7 +597,11 @@ mod tests {
     fn bullet_fallback_requires_single_block_and_multiple_items() {
         let multi_paragraph = "甲段说明\n\n• 乙项\n• 丙项\n• 丁项";
         let chunks = chunk_text("孙九", multi_paragraph);
-        assert_eq!(chunks.len(), 2, "多段落正文必须按段落切，不得退化为逐子弹项");
+        assert_eq!(
+            chunks.len(),
+            2,
+            "多段落正文必须按段落切，不得退化为逐子弹项"
+        );
         assert!(chunks[0].content.contains("甲段") && !chunks[0].content.contains('•'));
 
         let single_bullet = "甲段说明\n\n• 乙项";
@@ -653,7 +657,11 @@ mod tests {
     /// 叠标点（！！）只认收尾的那个；切点必须落在标点之后而不是标点前。
     #[test]
     fn hard_split_falls_back_to_sentence_break_and_skips_doubled_punctuation() {
-        let text = format!("[会议纪要]\n{}完。成！！{}", "甲".repeat(1900), "乙".repeat(100));
+        let text = format!(
+            "[会议纪要]\n{}完。成！！{}",
+            "甲".repeat(1900),
+            "乙".repeat(100)
+        );
         let chunks = chunk_text("周七", &text);
         assert_eq!(chunks.len(), 2, "长文必须切两块");
         assert!(

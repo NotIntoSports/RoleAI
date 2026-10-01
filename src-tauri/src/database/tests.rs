@@ -458,7 +458,6 @@ fn voice_reference_schema_includes_target_model_column() {
     );
 }
 
-
 #[test]
 fn practice_tables_are_dropped_by_migration_0010() {
     let (_directory, database) = database();
@@ -476,7 +475,9 @@ fn practice_tables_are_dropped_by_migration_0010() {
     }
     // 0009 重建过的 session_events 必须仍在。
     let events = database
-        .query_strings("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_events'")
+        .query_strings(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_events'",
+        )
         .unwrap();
     assert_eq!(events, vec!["session_events".to_owned()]);
     assert_eq!(database.integrity_check().unwrap(), "ok");
@@ -537,17 +538,26 @@ fn migration_0010_drops_practice_tables_from_a_version_9_database_and_keeps_othe
     database.migrate().unwrap();
     assert_eq!(database.schema_version().unwrap(), LATEST_SCHEMA_VERSION);
     let plans = database
-        .query_strings("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'practice_plans'")
+        .query_strings(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'practice_plans'",
+        )
         .unwrap();
     let reports = database
-        .query_strings("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'practice_reports'")
+        .query_strings(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'practice_reports'",
+        )
         .unwrap();
     assert!(plans.is_empty() && reports.is_empty());
     let kept_sessions = database
         .query_strings("SELECT id FROM sessions ORDER BY id")
         .unwrap();
-    assert_eq!(kept_sessions, vec!["sess-keep".to_owned(), "sess-p".to_owned()]);
-    let events = database.query_strings("SELECT kind FROM session_events").unwrap();
+    assert_eq!(
+        kept_sessions,
+        vec!["sess-keep".to_owned(), "sess-p".to_owned()]
+    );
+    let events = database
+        .query_strings("SELECT kind FROM session_events")
+        .unwrap();
     assert_eq!(events, vec!["transcript".to_owned()]);
     assert_eq!(database.integrity_check().unwrap(), "ok");
 }
