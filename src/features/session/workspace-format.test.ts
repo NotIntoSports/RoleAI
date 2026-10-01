@@ -154,6 +154,7 @@ describe("clockOf", () => {
   });
 
   it("formats a valid timestamp as hour:minute", () => {
-    expect(clockOf("2026-09-05T10:00:30Z")).toMatch(/^\d{1,2}:\d{2}$/);
+    // Runtime locale decides 12h/24h and any AM/PM marker; only hour:minute is fixed.
+    expect(clockOf("2026-09-05T10:00:30Z")).toMatch(/\d{1,2}:\d{2}/);
   });
 });

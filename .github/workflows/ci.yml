@@ -3,6 +3,7 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -143,10 +144,15 @@ jobs:
         with:
           toolchain: "1.96"
       - run: rustup component add llvm-tools-preview
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked --version 0.9.1
       - run: npm ci
       # 输出重定向不影响退出码：覆盖率测试失败时步骤保持红色。
+      # 重定向不会创建父目录，coverage/ 需先建好。
       - name: Frontend coverage (vitest + @vitest/coverage-v8)
-        run: npm run test:coverage:ui > coverage/ui-summary.txt 2>&1
+        run: |
+          New-Item -ItemType Directory -Force coverage | Out-Null
+          npm run test:coverage:ui > coverage/ui-summary.txt 2>&1
       - name: Rust coverage (cargo-llvm-cov)
         run: cargo llvm-cov --manifest-path src-tauri/Cargo.toml --summary-only > coverage/rust-summary.txt 2>&1
       - name: Write coverage summary

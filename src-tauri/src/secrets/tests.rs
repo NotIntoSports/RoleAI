@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use super::{MemorySecretStore, SecretService, SecretStore, WindowsSecretStore};
+#[cfg(windows)]
+use super::WindowsSecretStore;
+use super::{MemorySecretStore, SecretService, SecretStore};
 
 fn service(namespace: &str) -> SecretService {
     SecretService::new(namespace, Arc::new(MemorySecretStore::default())).unwrap()
