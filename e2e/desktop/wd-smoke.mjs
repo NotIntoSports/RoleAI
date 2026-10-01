@@ -169,6 +169,11 @@ async function runSmoke() {
         SESSION_TIMEOUT_MS,
       )),
     ]);
+    // 断言按中文文案写；界面默认跟随系统语言（CI runner 为英文），先钉住（同 src/i18n/test-setup.ts）。
+    // 应用文档加载前 localStorage 不可访问。
+    await driver.wait(until.elementLocated(By.css("#page-heading-workspace")), ELEMENT_TIMEOUT_MS);
+    await driver.executeScript(`window.localStorage.setItem("ai-assistant.language", "zh-CN");`);
+    await driver.navigate().refresh();
 
     // 主窗口出现：工作台页头渲染（page-shell.tsx 的 h1#page-heading-workspace）。
     const workspaceHeading = await driver.wait(

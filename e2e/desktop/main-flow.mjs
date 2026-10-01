@@ -358,6 +358,11 @@ async function runMainFlow() {
       )),
     ]);
     lastScreenshotDriver = driver;
+    // 断言按中文文案写；界面默认跟随系统语言（CI runner 为英文），先钉住（同 src/i18n/test-setup.ts）。
+    // 应用文档加载前 localStorage 不可访问。
+    await driver.wait(until.elementLocated(By.css("#page-heading-workspace")), ELEMENT_TIMEOUT_MS);
+    await driver.executeScript(`window.localStorage.setItem("ai-assistant.language", "zh-CN");`);
+    await driver.navigate().refresh();
 
     await step("应用启动：主窗口渲染工作台", async () => {
       await waitTextContains(driver, "#page-heading-workspace", "工作台");
