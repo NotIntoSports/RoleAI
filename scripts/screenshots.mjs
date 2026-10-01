@@ -165,7 +165,7 @@ async function captureAll(outDir, deviceScaleFactor) {
   try {
     // —— 会话进行中的截图（深色 / 浅色）——
     for (const theme of ["dark", "light"]) {
-      const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor });
+      const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor, locale: "zh-CN" });
       await context.addInitScript((t) => {
         window.localStorage.setItem("ai-assistant.theme", t);
       }, theme);
@@ -193,7 +193,7 @@ async function captureAll(outDir, deviceScaleFactor) {
 
     // —— 延迟瀑布条（lane-F F07 追加，只加不改）——
     {
-      const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor });
+      const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor, locale: "zh-CN" });
       await context.addInitScript(() => {
         window.localStorage.setItem("ai-assistant.theme", "dark");
       });
@@ -216,7 +216,7 @@ async function captureAll(outDir, deviceScaleFactor) {
     }
 
     // —— 静态页面截图（深色）——
-    const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor });
+    const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor, locale: "zh-CN" });
     await context.addInitScript(() => {
       window.localStorage.setItem("ai-assistant.theme", "dark");
     });
