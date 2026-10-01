@@ -1592,7 +1592,8 @@ mod voice_clone_dashscope {
     }
 
     fn client() -> Client {
-        Client::new()
+        // Mock servers bind 127.0.0.1; a Windows system proxy would otherwise intercept them.
+        Client::builder().no_proxy().build().unwrap()
     }
 
     fn policy_body(upload_host: &str) -> String {
