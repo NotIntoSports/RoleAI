@@ -53,7 +53,7 @@ export const COACH_SCRIPT_EN: DemoScript = {
     {
       userText: "Got it. How should a three-minute self-introduction be structured?",
       replyText:
-        "For three minutes, use four parts: one line of positioning (who you are, years of experience), one representative result (with a number), one proof of ability (a concrete case), one line of role fit (why this job). About forty seconds each. Practice: record yourself three times, cut at least one \"and then\" each pass, listen back, revise.",
+        "For three minutes, use four parts: one line of positioning (who you are, years of experience), one representative result (with a number), one proof of ability (a concrete case), one line of role fit (why this job). About forty seconds each. Then record yourself three times, cut at least one \"and then\" each pass, listen back, revise.",
     },
   ],
 };

@@ -14,7 +14,7 @@
  *   POST {base}/audio/speech          → TTS：原始 PCM 字节（response_format=pcm，
  *                                        parse_tts_pcm 要求偶数字节）
  *
- * chat/completions 一律按普通会话轮返回固定文本（原题单/点评分支随模拟面试模块移除）。
+ * chat/completions 一律按普通会话轮返回固定文本（原出题/点评专用分支已随对应训练模块移除）。
  * 会话轮使用 stream:true 时返回的仍是普通 JSON——cascade.rs 的
  * stream_sse_text 对"全程无 SSE 帧"的响应有兼容回退（按普通补全解析）。
  *
@@ -60,7 +60,7 @@ function lastUserContent(payload) {
   return users.at(-1)?.content ?? "";
 }
 
-/** chat/completions 只服务普通会话轮（题单/点评分支随模拟面试模块移除）。 */
+/** chat/completions 只服务普通会话轮（题单/点评专用分支已随对应训练模块移除）。 */
 function classifyChatRequest() {
   return "turn";
 }

@@ -90,7 +90,7 @@ function handleMeetingAndAudio(cmd: string): unknown {
   }
 }
 
-/** 领域分发：config / roles / providers / voice / 资料 / 记录 / 会议与音频 / 模拟面试训练 / 其余兜底。 */
+/** 领域分发：config / roles / providers / voice / 资料 / 记录 / 会议与音频 / 其余兜底。 */
 function dispatch(cmd: string, payload: Record<string, unknown>): unknown {
   return (
     handleConfigCommand(cmd, payload) ??

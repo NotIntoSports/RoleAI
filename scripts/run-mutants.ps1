@@ -31,7 +31,6 @@ $KnownModules = @(
     "src/audio/segmenter.rs",
     "src/audio/barge_in.rs",
     "src/materials/chunk.rs",
-    "src/practice/metrics.rs"
 )
 
 if ($Modules.Count -eq 0) {

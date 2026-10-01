@@ -51,7 +51,6 @@
 | sessions | 93.93% | 96.15% | 2289 / 139 |
 | runtime | 94.09% | 95.90% | 2115 / 125 |
 | config | 94.31% | 94.99% | 1213 / 69 |
-| practice | 97.11% | 98.01% | 2285 / 66 |
 
 说明：`commands` 是 Tauri IPC 命令薄层，多数逻辑在 service 层被直接单测覆盖；
 其低数字主要反映“命令包装函数本身”未被逐个经 IPC 通道调用（部分文件如
@@ -70,11 +69,10 @@
 | src/features/session | 80.87% | 77.82% | 85.57% |
 | src/features/migrate | 94.44% | 100% | 94.44% |
 | src/features/roles | 93.1% | 96.87% | 92.59% |
-| src/features/practice | 91.24% | 89.32% | 92.21% |
 | src/demo | 92.85% | 90% | 92.59% |
 | src/app | 94.11% | 86.36% | 97.61% |
 | src/components | 100% | 100% | 100% |
-| src/screens（materials/practice/records/workspace） | 100% | 100% | 100% |
+| src/screens（materials/records/workspace） | 100% | 100% | 100% |
 
 说明：`src/api`（commands.ts 薄层）是 @tauri-apps IPC 包装，多数函数只有
 类型转发，vitest 侧以 mockIPC 覆盖了 demo 主链路；`src/generated/**`（生成代码）
@@ -82,6 +80,7 @@
 
 ## 已知局限
 
+- 本报告为 2026-09-30 快照。原表中的 practice 相关行（模拟面试训练模块）已随该模块整体移除（2026-10-01 用户决定），历史数字不再对应现存代码。
 - Rust 分支列显示 `-`：llvm-cov 的区域口径已含分支语义，未单开 branch 维度。
 - 覆盖率不作为门禁阈值（本仓库明确不“为数字写测试”），只作为补洞指引：
   I06 按“最弱且最关键”原则补测。

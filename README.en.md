@@ -17,7 +17,7 @@
   <img src="src-tauri/icons/128x128@2x.png" width="96" alt="RoleAI icon" />
 </p>
 
-<p align="center"><strong>A local-first, real-time voice AI role assistant for Windows. A Rust + Tauri full-duplex voice pipeline built for mock interview practice, meeting assistance, and live-stream presenting.</strong></p>
+<p align="center"><strong>A local-first, real-time voice AI role assistant for Windows. A Rust + Tauri full-duplex voice pipeline built for interviewer role-play practice, meeting assistance, and live-stream presenting.</strong></p>
 
 <p align="center">
   <a href="https://github.com/NotIntoSports/RoleAI/actions/workflows/ci.yml"><img src="https://github.com/NotIntoSports/RoleAI/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
@@ -36,26 +36,13 @@
 
 Real-time voice is the most natural way to practice speaking: whether you finish your thought, go off topic, or ramble — you only find out by actually talking. RoleAI wires speech recognition, an LLM, and speech synthesis into one full-duplex pipeline, so an AI in the role you define (interviewer, HR, speaking coach, meeting assistant, product presenter) talks with you live and responds the moment you finish. Roles, documents, and session records all stay on your machine; model services are configured and paid for by you. No accounts, no data sent to our servers.
 
-Typical uses: mock interview training, live meeting assistance, live-stream product presenting — or simply a local voice workstation with a role you can fully customize.
+Typical uses: interviewer role-play practice, live meeting assistance, live-stream product presenting — or simply a local voice workstation with a role you can fully customize.
 
 ## Features
 
-### Mock interview practice
+### Voice role-play with interviewer personas
 
-A complete training loop: import the job description and your résumé → the AI builds a question plan → full-duplex rehearsal → a scored report → a growth curve over time.
-
-- **Question plans**: generated from a target position, interviewer style (Interviewer / HR / Strict Interviewer), question count, and difficulty. Every question carries its focus, expected points, and follow-ups; you can edit the plan before starting. The JD and résumé are referenced from your local knowledge base — nothing is uploaded.
-- **Rehearsal**: the AI interviewer asks and follows up plan question by plan question. It can be interrupted mid-sentence, and so can you — much closer to the rhythm of a real interview. While you practice, the app tracks objective local metrics: speech rate, pauses, filler words, and STAR coverage (Situation / Task / Action / Result) — computed by rules on-device, no LLM required.
-- **Scored report**: after each session you get a structured report — overall score, a radar chart across four dimensions (content depth, structure, fluency, job fit), per-question reviews with strengths, issues, and model answers, plus top suggestions.
-- **Growth curve**: past reports are plotted over time so you can see progress and weak spots across the four dimensions.
-
-| Plan wizard | Scored report |
-| --- | --- |
-| ![Plan wizard](.github/assets/screenshots/practice-wizard.png) | ![Scored report](.github/assets/screenshots/practice-report.png) |
-
-| Live rehearsal | Growth curve |
-| --- | --- |
-| ![Live rehearsal](.github/assets/screenshots/interview-live.png) | ![Growth curve](.github/assets/screenshots/practice-history.png) |
+Rehearse with the Interviewer / Strict Interviewer / Speaking Coach roles over full-duplex voice, with follow-up questions grounded in the JD and résumé from your knowledge base: the AI can be interrupted mid-sentence, and so can you — much closer to the rhythm of a real interview.
 
 Five interview-related role presets ship in addition — Interviewer, HR, Strict Interviewer, Candidate Partner, Speaking Coach. The preset prompts require the AI to ask questions and give feedback based only on the experience and materials you provide: no fabricated résumés, no hiring decisions.
 
@@ -122,7 +109,7 @@ See the [latency observability guide](guide/latency.md) for details.
 ```mermaid
 flowchart LR
     subgraph UI["React UI (WebView)"]
-        P["Workspace / Mock interview / Live-stream / Materials / Records / Services / Settings"]
+        P["Workspace / Live-stream / Materials / Records / Services / Settings"]
     end
     P <-->|"Tauri IPC (ts-rs type contracts)"| C
     subgraph Core["Rust core (Tauri main process)"]
@@ -174,15 +161,15 @@ npm run tauri:build    # produce the installer
 
 1. **Configure a provider**: open the Services page, pick a preset provider or enter a custom URL, save your API key (it goes into Credential Manager), and hit "Test".
 2. **Pick a role**: choose a built-in role on the Workspace (Interviewer / Meeting assistant / Product presenter…) or write your own prompt and opening line.
-3. **Start a session**: launch a session on the Workspace and allow microphone access. For mock interview practice, import your résumé and the job description into the Materials page first.
+3. **Start a session**: launch a session on the Workspace and allow microphone access. To rehearse with an interviewer role, import your résumé and the job description into the Materials page first.
 
 ## Project layout
 
 ```
 ├── src/                    # React frontend (pages, feature modules, Tauri IPC wrapper)
 │   ├── app/                # Routing and page shell
-│   ├── screens/            # The seven pages (workspace, mock interview, live-stream…)
-│   ├── features/           # Session, practice, materials, live-stream, latency modules
+│   ├── screens/            # The six pages (workspace, live-stream…)
+│   ├── features/           # Session, materials, live-stream, latency modules
 │   ├── api/                # The single Tauri IPC entry point (commands.ts)
 │   └── generated/          # ts-rs generated types (do not edit by hand)
 ├── src-tauri/              # Rust core
@@ -219,7 +206,6 @@ Contract tests pin several classes of regressions: only `src/api/commands.ts` ma
 - [x] Local knowledge base (PDF / DOCX / text, hybrid retrieval)
 - [x] Session summaries with export, voice cloning, live-stream scripts
 - [x] Windows Credential Manager key storage, security surface baseline tests
-- [x] Mock interview training loop: question plan → rehearsal → scored report → growth curve
 - [x] Per-turn latency waterfall, performance panel, and latency exports (CSV / Chrome Trace)
 - [x] Benchmark and offline evaluation reports (Criterion, turn detection / interruption, RAG)
 - [x] In-browser demo (real UI + mocked backend)

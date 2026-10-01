@@ -1,7 +1,7 @@
 {
     "$schema": "https://raw.githubusercontent.com/ScoopInstaller/Scoop/master/schema.json",
     "version": "0.1.0",
-    "description": "本地优先的 Windows 实时语音 AI 角色助手：级联与端到端实时语音、模拟面试训练、本地知识库。",
+    "description": "本地优先的 Windows 实时语音 AI 角色助手：级联与端到端实时语音、面试官角色语音对练、本地知识库。",
     "homepage": "https://github.com/NotIntoSports/RoleAI",
     "license": "MIT",
     "notes": "安装包为 NSIS 安装程序，Scoop 以可移植方式解包使用；应用数据保存在 %APPDATA%\\AI Virtual Assistant。",
