@@ -1,7 +1,7 @@
 use std::{collections::HashMap, ffi::OsString, path::PathBuf};
 
 use super::{
-    AppConfigV1, ConfigDirs, ConfigError, ConfigPatch, ConfigSource, ConfigStore, DiagnosticsPatch,
+    AppConfigV1, ConfigDirs, ConfigError, ConfigPatch, ConfigStore, DiagnosticsPatch,
     EmbeddingDistance, VoiceRouteMode, locate_config, public_view,
 };
 
@@ -12,8 +12,11 @@ fn dirs() -> ConfigDirs {
     }
 }
 
+#[cfg(windows)]
 #[test]
 fn config_path_precedence_is_deterministic() {
+    use super::ConfigSource;
+
     let mut env = HashMap::new();
     env.insert(
         "AI_VIRTUAL_ASSISTANT_CONFIG".to_owned(),

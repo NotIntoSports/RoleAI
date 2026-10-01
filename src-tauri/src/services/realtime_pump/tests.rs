@@ -2346,6 +2346,7 @@ mod pump_tests {
             .into(),
         ))
         .unwrap();
+        wait_for(|| !fixture.sink.written().is_empty(), "first delta played");
         std::thread::sleep(Duration::from_millis(170));
         ws.send(Message::Text(
             format!(

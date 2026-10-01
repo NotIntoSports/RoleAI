@@ -31,7 +31,13 @@ fn request(command: &str, body: serde_json::Value) -> tauri::webview::InvokeRequ
         cmd: command.into(),
         callback: tauri::ipc::CallbackFn(0),
         error: tauri::ipc::CallbackFn(1),
-        url: "http://tauri.localhost".parse().unwrap(),
+        url: if cfg!(any(windows, target_os = "android")) {
+            "http://tauri.localhost"
+        } else {
+            "tauri://localhost"
+        }
+        .parse()
+        .unwrap(),
         body: tauri::ipc::InvokeBody::Json(body),
         headers: Default::default(),
         invoke_key: tauri::test::INVOKE_KEY.into(),

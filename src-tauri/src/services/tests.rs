@@ -422,6 +422,9 @@ fn provider_delete_sees_references_added_after_dependency_check() {
     assert_eq!(service.dependencies("p1").unwrap().len(), 1);
 }
 
+// The read-only attribute blocks the atomic replace only on Windows; a Unix rename
+// replaces a read-only file because permissions live on the directory.
+#[cfg(windows)]
 #[test]
 fn provider_delete_keeps_provider_when_config_write_fails() {
     let directory = tempfile::tempdir().unwrap();
