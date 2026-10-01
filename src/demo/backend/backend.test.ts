@@ -32,13 +32,17 @@ describe("demo backend: config/roles/providers/voice", () => {
     resetDemoState();
   });
 
-  it("seeds 4 preset-style roles and a ready active route, never leaking key material", async () => {
+  it("seeds 8 preset-style roles and a ready active route, never leaking key material", async () => {
     const config = expectOk(await invoke<PublicConfig>("config_get_public"));
     expect(config.roleProfiles.map((role) => role.id)).toEqual([
       "preset-strict-interviewer",
       "preset-expression-coach",
       "preset-meeting",
       "preset-presenter",
+      "preset-debate-partner",
+      "preset-english-partner",
+      "preset-cs-drill",
+      "preset-mock-candidate",
     ]);
     expect(config.activeRoleProfileId).toBe("preset-strict-interviewer");
     const route = config.speech.voiceRoutes[0];
@@ -117,6 +121,6 @@ describe("demo backend: config/roles/providers/voice", () => {
     expectOk(await invoke("config_restore_defaults"));
     const reloaded = await freshState();
     expect(reloaded.roleProfiles.some((role) => role.name === "临时角色")).toBe(false);
-    expect(reloaded.roleProfiles).toHaveLength(4);
+    expect(reloaded.roleProfiles).toHaveLength(8);
   });
 });

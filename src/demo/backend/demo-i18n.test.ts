@@ -16,7 +16,8 @@ describe("demo backend english datasets", () => {
     resetDemoState();
     const state = getState();
     expect(state.roleProfiles.map((role) => role.name)).toContain("Strict interviewer");
-    expect(state.roleProfiles).toHaveLength(4);
+    expect(state.roleProfiles.map((role) => role.name)).toContain("Debate partner");
+    expect(state.roleProfiles).toHaveLength(8);
     expect(state.materials[0].fileName).toBe("Yunfan Collaboration Suite Product Handbook v2.3.pdf");
     expect(state.sessions).toHaveLength(4);
     expect(state.providers[0].name).toBe("Demo Cloud (fictional)");

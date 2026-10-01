@@ -13,12 +13,12 @@ const ONBOARDING_KEY = "roleai.demo.onboarded";
 
 const GUIDE_STEPS = {
   "zh-CN": [
-    { title: "选一个角色", detail: "工作台左下角可切换角色：严苛面试官、表达教练、会议助手、直播讲解员。" },
+    { title: "选一个角色", detail: "工作台左下角可切换角色：严苛面试官、表达教练、会议助手、直播讲解员、辩论陪练、英语口语陪练等 8 个角色。" },
     { title: "开始会话", detail: "点击“开始会话”，演示会自动播放一段脚本对话：字幕逐字出现、AI 流式回答，第 3 轮会演示打断。" },
     { title: "回看记录", detail: "结束会话后到“记录”页回看对话、导出 Markdown；资料与服务页都可以随便点，数据均为虚构。" },
   ],
   en: [
-    { title: "Pick a role", detail: "Switch roles from the bottom-left of the workspace: strict interviewer, expression coach, meeting assistant, live presenter." },
+    { title: "Pick a role", detail: "Switch roles from the bottom-left of the workspace: strict interviewer, expression coach, meeting assistant, live presenter, debate partner, and more — 8 in total." },
     { title: "Start a session", detail: "Click \"Start session\" and the demo plays a scripted conversation: captions appear word by word, the AI streams its reply, and turn 3 demos an interruption." },
     { title: "Review records", detail: "End the session, then review the conversation and export Markdown on the Records page. Materials and Services are safe to explore — all data is fictional." },
   ],

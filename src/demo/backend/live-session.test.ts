@@ -11,7 +11,16 @@ import {
   finishLiveSession,
   updateLiveTurnAssistant,
 } from "./records";
-import { COACH_SCRIPT, INTERVIEW_SCRIPT, MEETING_SCRIPT, scriptForRole } from "./scripts";
+import {
+  COACH_SCRIPT,
+  CS_DRILL_SCRIPT,
+  DEBATE_SCRIPT,
+  ENGLISH_SCRIPT,
+  INTERVIEW_SCRIPT,
+  MEETING_SCRIPT,
+  MOCK_CANDIDATE_SCRIPT,
+  scriptForRole,
+} from "./scripts";
 import { getState, resetDemoState } from "./state";
 
 const NO_PERSISTENCE: LivePersistence = {
@@ -212,11 +221,21 @@ describe("ScriptedLiveSession", () => {
 });
 
 describe("script selection", () => {
-  it("maps roles to the three scripts", () => {
+  it("maps roles to their scripts", () => {
     expect(scriptForRole("preset-strict-interviewer", undefined)).toBe(INTERVIEW_SCRIPT);
     expect(scriptForRole("preset-expression-coach", undefined)).toBe(COACH_SCRIPT);
     expect(scriptForRole("preset-meeting", "meetingAssistant")).toBe(MEETING_SCRIPT);
+    expect(scriptForRole("preset-presenter", "livestreamPresenter")).toBe(MEETING_SCRIPT);
+    expect(scriptForRole("preset-debate-partner", undefined)).toBe(DEBATE_SCRIPT);
+    expect(scriptForRole("preset-english-partner", undefined)).toBe(ENGLISH_SCRIPT);
+    expect(scriptForRole("preset-cs-drill", undefined)).toBe(CS_DRILL_SCRIPT);
+    expect(scriptForRole("preset-mock-candidate", undefined)).toBe(MOCK_CANDIDATE_SCRIPT);
     expect(scriptForRole(null, undefined)).toBe(INTERVIEW_SCRIPT);
+  });
+
+  it("maps scenario-only roles too (custom roles copied from presets)", () => {
+    expect(scriptForRole("role-custom-1", "meetingAssistant")).toBe(MEETING_SCRIPT);
+    expect(scriptForRole("role-custom-2", "livestreamPresenter")).toBe(MEETING_SCRIPT);
   });
 });
 

@@ -14,7 +14,7 @@ import type {
 import type { LivePersistence } from "./live-session";
 import { ScriptedLiveSession } from "./live-session";
 import { appendLiveTurn, createLiveSession, finishLiveSession, updateLiveTurnAssistant } from "./records";
-import { demoScriptById, scriptForRole } from "./scripts";
+import { DEMO_SCRIPT_IDS, demoScriptById, scriptForRole } from "./scripts";
 import { getState } from "./state";
 import { latency, ok, err } from "./util";
 
@@ -31,12 +31,10 @@ const EMPTY_TURN: SessionTurnView = {
 };
 
 function scriptFor(roleProfileId: string | null) {
-  // 直播讲解员复用会议脚本（讲稿口播场景）；其余按角色/场景映射（按脚本 id 判断，语言无关）。
-  if (roleProfileId === "preset-presenter") return demoScriptById("meeting");
+  // 映射集中在 scriptForRole（按角色 id / 场景，语言无关）；
+  // 白名单校验返回的脚本 id 确实是已注册的演示脚本，否则回退面试官脚本。
   const mapped = scriptForRole(roleProfileId, getState().roleProfiles.find((role) => role.id === roleProfileId)?.scenario);
-  return mapped.id === "coach" || mapped.id === "meeting" || mapped.id === "interview-strict"
-    ? mapped
-    : demoScriptById("interview-strict");
+  return DEMO_SCRIPT_IDS.has(mapped.id) ? mapped : demoScriptById("interview-strict");
 }
 
 function transportOf(scriptId: string): string {
@@ -149,12 +147,6 @@ export function handleLiveSessionCommand(cmd: string, payload: Record<string, un
       if (!text || !live) return latency(20, 60).then(() => ok(lastTurnView()));
       // 文字输入与语音同一管线：插话进入串行队列，后台驱动回答流式上屏。
       live.submitUserText(text);
-      return latency(30, 90).then(() => ok(lastTurnView()));
-    }
-    case "session_trigger_assistant": {
-      const live = requireActive();
-      if (!live) return err("SESSION_STATE_INVALID", demoT().live.noActiveSession);
-      live.submitUserText(demoT().live.triggerAssistant);
       return latency(30, 90).then(() => ok(lastTurnView()));
     }
     case "session_agent_command": {
