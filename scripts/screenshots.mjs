@@ -32,7 +32,7 @@ const COPY = {
     micStart: "开始语音会话",
     endCall: "结束通话",
     turn2Reply: "接下来看缓存",
-    turn4Reply: "主动打断并给出自己的论据",
+    turn4ReplyEnd: "我按你的案例继续追问",
     latencyBar: /轮延迟/,
     latencyDetails: "分阶段耗时",
     strictInterviewer: "严苛面试官",
@@ -65,7 +65,7 @@ const COPY = {
     micStart: "Start voice session",
     endCall: "End call",
     turn2Reply: "Now caching",
-    turn4Reply: "bringing your own evidence",
+    turn4ReplyEnd: "keep pressing on your case",
     latencyBar: /latency/i,
     latencyDetails: "stage durations",
     strictInterviewer: "Strict interviewer",
@@ -121,11 +121,13 @@ async function ensureServer() {
   } catch {
     // 未运行，自动拉起。
   }
-  serverProcess = spawn(
-    process.platform === "win32" ? "npm.cmd" : "npm",
-    ["run", "dev:demo"],
-    { stdio: "ignore", detached: true, cwd: repoRoot },
-  );
+  // Node ≥ 20.12 refuses to spawn npm.cmd without a shell on Windows (EINVAL); run vite directly.
+  const viteCli = path.join(repoRoot, "node_modules", "vite", "bin", "vite.js");
+  serverProcess = spawn(process.execPath, [viteCli, "--config", "vite.demo.config.ts"], {
+    stdio: "ignore",
+    detached: true,
+    cwd: repoRoot,
+  });
   serverProcess.unref();
   await waitForServer();
 }
@@ -182,8 +184,14 @@ async function captureAll(outDir, deviceScaleFactor) {
         reportSize("interview-live.png");
       }
       // 第 4 轮回答（脚本收尾）——头图。
-      await page.getByText(copy.turn4Reply, { exact: false }).first().waitFor({ timeout: 60_000 });
-      await page.waitForTimeout(1200);
+      await page.getByText(copy.turn4ReplyEnd, { exact: false }).first().waitFor({ timeout: 60_000 });
+      await page.waitForTimeout(800);
+      // The panel stops auto-scrolling mid-stream; align the finished reply to the bottom edge.
+      await page.evaluate(() => {
+        const replies = document.querySelectorAll(".session-conversation .session-bubble-assistant");
+        replies[replies.length - 1]?.scrollIntoView({ block: "end" });
+      });
+      await page.waitForTimeout(300);
       const workspaceShot = theme === "dark" ? "workspace-dark.png" : "workspace-light.png";
       await page.screenshot({ path: shotPath(workspaceShot) });
       reportSize(workspaceShot);

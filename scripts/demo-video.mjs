@@ -34,7 +34,9 @@ async function ensureServer() {
   } catch {
     // 未运行，自动拉起。
   }
-  serverProcess = spawn(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "dev:demo"], {
+  // Node ≥ 20.12 refuses to spawn npm.cmd without a shell on Windows (EINVAL); run vite directly.
+  const viteCli = path.join(repoRoot, "node_modules", "vite", "bin", "vite.js");
+  serverProcess = spawn(process.execPath, [viteCli, "--config", "vite.demo.config.ts"], {
     stdio: "ignore",
     detached: true,
     cwd: repoRoot,
