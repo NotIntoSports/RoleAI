@@ -68,6 +68,11 @@ describe("chunkText", () => {
     expect(chunkText("用 Java 加 Redis 实现")).toEqual(["用 ", "Java ", "加 ", "Redis ", "实现"]);
     expect(chunkText("")).toEqual([]);
   });
+
+  it("keeps ASCII punctuation so the streamed text matches the source", () => {
+    const text = "Noted. Let me drill in: how do you store read receipts? Why, exactly!";
+    expect(chunkText(text).join("")).toBe(text);
+  });
 });
 
 describe("ScriptedLiveSession", () => {

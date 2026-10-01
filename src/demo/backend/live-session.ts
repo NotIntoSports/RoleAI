@@ -40,7 +40,7 @@ const TURN_GAP_MS = 500;
 
 const CJK_CHAR = /[\u4e00-\u9fff\u3001-\u303f\uff01-\uff5e“”‘’…—]/;
 const CJK_OR_WORD = new RegExp(
-  `${CJK_CHAR.source}|[A-Za-z0-9][A-Za-z0-9'%.\\-]*\\s*|\\s+`,
+  `${CJK_CHAR.source}|[A-Za-z0-9][A-Za-z0-9'%.\\-]*\\s*|\\s+|\\S`,
   "g",
 );
 
