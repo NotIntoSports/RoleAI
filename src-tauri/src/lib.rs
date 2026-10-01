@@ -67,6 +67,9 @@ pub fn run() {
         eprintln!("isolated startup rejected: {error}");
         std::process::exit(2);
     }
+    let webview_automation = isolated.as_ref().and_then(|_| {
+        startup::webview_automation_overrides(&std::env::vars_os().collect::<Vec<_>>())
+    });
 
     // 诊断日志走 stdout（tauri:dev 终端可见）；默认 info，RUST_LOG=debug 打开
     // 实时会话打断/回声链路的逐事件定位日志（realtime_pump / audio_barge）。
@@ -209,7 +212,11 @@ pub fn run() {
             let mut window =
                 WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()));
             if let Some(isolated) = isolated.as_ref() {
-                window = window.data_directory(isolated.webview_data_directory.clone());
+                let directory = webview_automation
+                    .as_ref()
+                    .and_then(|automation| automation.user_data_folder.clone())
+                    .unwrap_or_else(|| isolated.webview_data_directory.clone());
+                window = window.data_directory(directory);
             }
             window
                 .title("RoleAI")
@@ -217,7 +224,11 @@ pub fn run() {
                 .min_inner_size(900.0, 620.0)
                 // 设置后 wry 不再追加默认参数，需自行补全；--use-fake-ui-for-media-stream
                 // 让 WebView2 自动授予麦克风/摄像头权限（wry 默认不处理该权限请求，页面静默被拒）。
-                .additional_browser_args(&webview_browser_args())
+                .additional_browser_args(&webview_browser_args(
+                    webview_automation
+                        .as_ref()
+                        .and_then(|automation| automation.browser_args.as_deref()),
+                ))
                 .on_navigation(navigation_is_allowed)
                 .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
                 .build()?;
@@ -231,13 +242,16 @@ pub fn run() {
         .expect("failed to run RoleAI");
 }
 
-fn webview_browser_args() -> String {
+fn webview_browser_args(automation_args: Option<&str>) -> String {
     let mut args = String::from(
         "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --use-fake-ui-for-media-stream",
     );
     if cfg!(debug_assertions) {
         // 开发版开放本机 CDP 端口（仅 127.0.0.1）读取播放诊断；正式包不带。
-        args.push_str(" --remote-debugging-port=9223");
+        // WebDriver 自动化时端口由驱动指定，不能再占用。
+        if automation_args.is_none() {
+            args.push_str(" --remote-debugging-port=9223");
+        }
         // 开发版可用 WAV 充当麦克风做端到端复现，不需要真人对着麦克风说话。
         if let Ok(wav) = std::env::var("ROLEAI_FAKE_MIC_WAV")
             && !wav.trim().is_empty()
@@ -247,6 +261,10 @@ fn webview_browser_args() -> String {
                 " --use-fake-device-for-media-stream --use-file-for-fake-audio-capture=\"{wav}\""
             ));
         }
+    }
+    if let Some(extra) = automation_args {
+        args.push(' ');
+        args.push_str(extra);
     }
     args
 }

@@ -125,6 +125,34 @@ fn declares_webview_automation(environment: &[(OsString, OsString)]) -> bool {
     })
 }
 
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct WebviewAutomationOverrides {
+    pub browser_args: Option<String>,
+    pub user_data_folder: Option<PathBuf>,
+}
+
+/// 自动化声明下 msedgedriver 注入的两项 WebView2 覆盖。WebView2 Runtime 在
+/// 环境变量与 API 参数同时存在时的取舍随版本而变（CI 上 153 取 API、本机 154
+/// 取环境变量），应用又显式设置了这两项，只有并入 API 才能让驱动稳定挂接。
+pub fn webview_automation_overrides(
+    environment: &[(OsString, OsString)],
+) -> Option<WebviewAutomationOverrides> {
+    if !declares_webview_automation(environment) {
+        return None;
+    }
+    let value = |name: &str| {
+        environment
+            .iter()
+            .find(|(key, value)| key.eq_ignore_ascii_case(name) && !value.is_empty())
+            .map(|(_, value)| value.clone())
+    };
+    Some(WebviewAutomationOverrides {
+        browser_args: value("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS")
+            .map(|value| value.to_string_lossy().into_owned()),
+        user_data_folder: value("WEBVIEW2_USER_DATA_FOLDER").map(PathBuf::from),
+    })
+}
+
 pub fn validate_isolated_webview_environment(
     isolated: &IsolatedStartup,
     environment: &[(OsString, OsString)],
@@ -191,7 +219,10 @@ mod tests {
 
     use crate::{app_state::AppState, secrets::MemorySecretStore};
 
-    use super::{parse_isolated_startup, validate_isolated_webview_environment};
+    use super::{
+        WebviewAutomationOverrides, parse_isolated_startup, validate_isolated_webview_environment,
+        webview_automation_overrides,
+    };
 
     fn isolated_args(root: PathBuf) -> Vec<OsString> {
         vec![
@@ -401,6 +432,49 @@ mod tests {
                 &injected.iter().skip(1).cloned().collect::<Vec<_>>()
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn webview_automation_overrides_are_taken_only_under_the_automation_declaration() {
+        let injected = vec![
+            (
+                OsString::from("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"),
+                OsString::from("--enable-automation --remote-debugging-port=0"),
+            ),
+            (
+                OsString::from("WEBVIEW2_USER_DATA_FOLDER"),
+                OsString::from("C:\\Windows\\Temp\\scoped_dir_msedgedriver"),
+            ),
+        ];
+        assert_eq!(webview_automation_overrides(&injected), None);
+
+        let mut declared = injected.clone();
+        declared.push((
+            OsString::from("TAURI_WEBVIEW_AUTOMATION"),
+            OsString::from("true"),
+        ));
+        assert_eq!(
+            webview_automation_overrides(&declared),
+            Some(WebviewAutomationOverrides {
+                browser_args: Some("--enable-automation --remote-debugging-port=0".into()),
+                user_data_folder: Some(PathBuf::from("C:\\Windows\\Temp\\scoped_dir_msedgedriver")),
+            })
+        );
+
+        let empty = vec![
+            (
+                OsString::from("TAURI_WEBVIEW_AUTOMATION"),
+                OsString::from("true"),
+            ),
+            (
+                OsString::from("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"),
+                OsString::new(),
+            ),
+        ];
+        assert_eq!(
+            webview_automation_overrides(&empty),
+            Some(WebviewAutomationOverrides::default())
         );
     }
 

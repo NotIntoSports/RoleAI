@@ -4,7 +4,7 @@
   "normalization": "crlf-to-lf",
   "files": {
     "src-tauri/capabilities/main.json": "6ca1ce291d51366c9daa44e12eb7b9527b0e9b53e3773ac5ca85f398ab39a961",
-    "src-tauri/src/lib.rs": "67e7462cfd134f4e49e76755ff613f5c7834e5f6bcd0f8f2ff91876cda52c384",
+    "src-tauri/src/lib.rs": "71472ed3bb23a22fdf40c6b1a5d87dd292b9c7df02b531fb513bce44f8b7fb7f",
     "src-tauri/src/contracts.rs": "7bcf24fa11b7ddbe8056df5fa3ae3a4187cc05fd1634a0cfd27c09046c433d9d",
     "src-tauri/src/commands/mod.rs": "4c5990949684161feeda331fff36e69929a192612c353c36132c45e81164e1d6",
     "src-tauri/tauri.conf.json": "9dcf44d661d230973479529095023f8519a82c71a6be2ea3949229f1ecd61939",
