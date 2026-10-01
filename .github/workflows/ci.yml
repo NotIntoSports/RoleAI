@@ -153,9 +153,11 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force coverage | Out-Null
           npm run test:coverage:ui > coverage/ui-summary.txt 2>&1
+      # 同时写入日志：失败的测试名必须在 CI 日志里可见。
       - name: Rust coverage (cargo-llvm-cov)
-        run: cargo llvm-cov --manifest-path src-tauri/Cargo.toml --summary-only > coverage/rust-summary.txt 2>&1
+        run: cargo llvm-cov --manifest-path src-tauri/Cargo.toml --summary-only 2>&1 | Tee-Object -FilePath coverage/rust-summary.txt
       - name: Write coverage summary
+        if: always()
         shell: pwsh
         run: |
           "## 覆盖率报告（总覆盖率 + 各模块）" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
@@ -168,6 +170,7 @@ jobs:
           Get-Content coverage/rust-summary.txt | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           '```' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
       - name: Upload coverage reports
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-reports
