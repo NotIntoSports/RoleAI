@@ -26,7 +26,7 @@
  * 运行：npm run test:e2e:desktop:main
  */
 import { spawn } from "node:child_process";
-import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
@@ -37,6 +37,8 @@ import { MOCK_REPLY_TEXT, startMockOpenAiServer } from "./mock-openai-server.mjs
 
 const REPOSITORY_ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const SESSION_TIMEOUT_MS = 90_000;
+/** 会话建立整体尝试次数：同 wd-smoke.mjs，runner 负载下偶发挂起时整栈重启再试。 */
+const SESSION_ATTEMPTS = 2;
 const ELEMENT_TIMEOUT_MS = 30_000;
 const STEP_TIMEOUT_MS = 60_000;
 /** 失败现场截图目录（best-effort，供 I04 CI artifact 与本地排查）。 */
@@ -117,6 +119,92 @@ async function withRetries(action, attempts, delayMs) {
       await new Promise((resolveRetry) => setTimeout(resolveRetry, delayMs));
     }
   }
+  throw lastError;
+}
+
+/** 会话挂起时导出相关进程快照：区分「应用没被拉起」与「WebView 起了但 CDP 未就绪」（同 wd-smoke.mjs）。 */
+async function captureSessionDiagnostics(context) {
+  try {
+    await mkdir(ARTIFACT_DIR, { recursive: true });
+    const snapshot = await Promise.race([
+      new Promise((resolveSnapshot) => {
+        const child = spawn("tasklist.exe", ["/FO", "CSV"], {
+          stdio: ["ignore", "pipe", "ignore"],
+          windowsHide: true,
+        });
+        let output = "";
+        child.stdout.on("data", (chunk) => { output += String(chunk); });
+        child.once("error", () => resolveSnapshot(output));
+        child.once("exit", () => resolveSnapshot(output));
+      }),
+      new Promise((resolveSnapshot) => setTimeout(() => resolveSnapshot("(tasklist 10s 未返回)"), 10_000)),
+    ]);
+    const relevant = String(snapshot)
+      .split(/\r?\n/)
+      .filter((line) => /tauri-driver|msedgedriver|role-ai-desktop|msedgewebview2/i.test(line));
+    const path = join(ARTIFACT_DIR, `session-hang-${context}.txt`);
+    await writeFile(path, `${new Date().toISOString()}\n${relevant.join("\n")}\n`, "utf8");
+    console.error(`[I03] 挂起进程诊断已保存：${path}`);
+  } catch {
+    // 诊断是 best-effort，不掩盖原始失败
+  }
+}
+
+/**
+ * 拉起 tauri-driver + msedgedriver 并建立 WebDriver 会话；失败整栈重启再试（同 wd-smoke.mjs）。
+ * 每次尝试用全新的隔离目录与端口；成功时返回的 tauriDriver / isolatedRoot 由调用方清理。
+ */
+async function establishSession({ executable, tauriDriverBinary, msedgedriverBinary }) {
+  let lastError;
+  for (let attempt = 1; attempt <= SESSION_ATTEMPTS; attempt += 1) {
+    const isolatedRoot = await mkdtemp(join(tmpdir(), "roleai-e2e-flow-"));
+    const driverPort = await findFreePort();
+    const nativePort = await findFreePort();
+    const tauriDriver = spawn(
+      tauriDriverBinary,
+      ["--port", String(driverPort), "--native-port", String(nativePort), "--native-driver", msedgedriverBinary],
+      { stdio: ["ignore", "inherit", "inherit"], windowsHide: true },
+    );
+    try {
+      await waitForHttpStatus(`http://127.0.0.1:${driverPort}/status`, SESSION_TIMEOUT_MS);
+      let settleTimeout;
+      const driver = await Promise.race([
+        new Builder()
+          .usingServer(`http://127.0.0.1:${driverPort}`)
+          .withCapabilities({
+            browserName: "wry",
+            "tauri:options": {
+              application: executable,
+              args: [`--isolated-root=${isolatedRoot}`],
+            },
+          })
+          .build(),
+        new Promise((_, reject) => {
+          settleTimeout = setTimeout(
+            () => reject(new Error(`会话在 ${SESSION_TIMEOUT_MS / 1000}s 内未建立`)),
+            SESSION_TIMEOUT_MS,
+          );
+        }),
+      ]);
+      clearTimeout(settleTimeout);
+      return { driver, tauriDriver, isolatedRoot };
+    } catch (error) {
+      lastError = error;
+      if (tauriDriver.exitCode === null) {
+        await killProcessTree(tauriDriver.pid);
+      }
+      await withRetries(
+        () => rm(isolatedRoot, { recursive: true, force: true, maxRetries: 1 }),
+        20,
+        100,
+      ).catch((cleanupError) => console.error(`[I03] 失败尝试的隔离目录清理失败：${cleanupError.message}`));
+      if (attempt < SESSION_ATTEMPTS) {
+        console.error(`[I03] 会话建立第 ${attempt}/${SESSION_ATTEMPTS} 次失败，2s 后整栈重启重试：${error.message}`);
+        await new Promise((resolveWait) => setTimeout(resolveWait, 2_000));
+      }
+    }
+  }
+  await captureSessionDiagnostics("main-flow");
   throw lastError;
 }
 
@@ -330,33 +418,15 @@ async function runMainFlow() {
     "- 有 Rust 或 Go 生产经验。",
   ].join("\n"), "utf8");
 
-  const isolatedRoot = await mkdtemp(join(tmpdir(), "roleai-e2e-flow-"));
-  const driverPort = await findFreePort();
-  const nativePort = await findFreePort();
-  const tauriDriver = spawn(
-    tauriDriverBinary,
-    ["--port", String(driverPort), "--native-port", String(nativePort), "--native-driver", msedgedriverBinary],
-    { stdio: ["ignore", "inherit", "inherit"], windowsHide: true },
-  );
-  let driver;
+  let driver = null;
+  let tauriDriver = null;
+  let isolatedRoot = null;
   try {
-    await waitForHttpStatus(`http://127.0.0.1:${driverPort}/status`, SESSION_TIMEOUT_MS);
-    driver = await Promise.race([
-      new Builder()
-        .usingServer(`http://127.0.0.1:${driverPort}`)
-        .withCapabilities({
-          browserName: "wry",
-          "tauri:options": {
-            application: executable,
-            args: [`--isolated-root=${isolatedRoot}`],
-          },
-        })
-        .build(),
-      new Promise((_, reject) => setTimeout(
-        () => reject(new Error(`会话在 ${SESSION_TIMEOUT_MS / 1000}s 内未建立`)),
-        SESSION_TIMEOUT_MS,
-      )),
-    ]);
+    ({ driver, tauriDriver, isolatedRoot } = await establishSession({
+      executable,
+      tauriDriverBinary,
+      msedgedriverBinary,
+    }));
     lastScreenshotDriver = driver;
     // 断言按中文文案写；界面默认跟随系统语言（CI runner 为英文），先钉住（同 src/i18n/test-setup.ts）。
     // 应用文档加载前 localStorage 不可访问。
@@ -535,19 +605,21 @@ async function runMainFlow() {
     if (driver) {
       await driver.quit().catch(() => {});
     }
-    if (tauriDriver.exitCode === null) {
+    if (tauriDriver && tauriDriver.exitCode === null) {
       await killProcessTree(tauriDriver.pid);
     }
     // 失败时可用 TAURI_E2E_KEEP_ROOT=1 保留隔离目录（日志/数据库）供排查。
     const keepRoot = process.env.TAURI_E2E_KEEP_ROOT === "1";
     if (keepRoot) {
-      console.error(`[I03] TAURI_E2E_KEEP_ROOT=1：保留隔离目录 ${isolatedRoot} 与资料目录 ${fixturesRoot}`);
+      console.error(`[I03] TAURI_E2E_KEEP_ROOT=1：保留隔离目录 ${isolatedRoot ?? "(未建立)"} 与资料目录 ${fixturesRoot}`);
     } else {
-      await withRetries(
-        () => rm(isolatedRoot, { recursive: true, force: true, maxRetries: 1 }),
-        20,
-        100,
-      ).catch((error) => fail(`隔离目录 ${isolatedRoot} 清理失败：${error.message}`));
+      if (isolatedRoot) {
+        await withRetries(
+          () => rm(isolatedRoot, { recursive: true, force: true, maxRetries: 1 }),
+          20,
+          100,
+        ).catch((error) => fail(`隔离目录 ${isolatedRoot} 清理失败：${error.message}`));
+      }
       await withRetries(
         () => rm(fixturesRoot, { recursive: true, force: true, maxRetries: 1 }),
         20,

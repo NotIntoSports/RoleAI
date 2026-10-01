@@ -32,7 +32,12 @@ import { Builder, By, until } from "selenium-webdriver";
 
 const REPOSITORY_ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const SESSION_TIMEOUT_MS = 60_000;
+/** 会话建立整体尝试次数：runner 负载下 msedgedriver 拉起应用偶发挂起（CI 观测），失败后整栈重启再试。 */
+const SESSION_ATTEMPTS = 2;
 const ELEMENT_TIMEOUT_MS = 20_000;
+/** 失败现场诊断目录（best-effort，供 CI artifact 与本地排查，同 main-flow.mjs）。 */
+const ARTIFACT_DIR = process.env.TAURI_E2E_ARTIFACT_DIR
+  ?? join(REPOSITORY_ROOT, ".codex-tmp", "e2e-desktop");
 /** 与 routes.ts 的 routeIds / routeLabel 对齐；页面 h1 由 page-shell.tsx 渲染。 */
 const ROUTES = [
   ["workspace", "工作台"],
@@ -123,6 +128,96 @@ async function withRetries(action, attempts, delayMs) {
   throw lastError;
 }
 
+/** 会话挂起时导出相关进程快照：区分「应用没被拉起」与「WebView 起了但 CDP 未就绪」。 */
+async function captureSessionDiagnostics(context) {
+  try {
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    await mkdir(ARTIFACT_DIR, { recursive: true });
+    const snapshot = await Promise.race([
+      new Promise((resolveSnapshot) => {
+        const child = spawn("tasklist.exe", ["/FO", "CSV"], {
+          stdio: ["ignore", "pipe", "ignore"],
+          windowsHide: true,
+        });
+        let output = "";
+        child.stdout.on("data", (chunk) => { output += String(chunk); });
+        child.once("error", () => resolveSnapshot(output));
+        child.once("exit", () => resolveSnapshot(output));
+      }),
+      new Promise((resolveSnapshot) => setTimeout(() => resolveSnapshot("(tasklist 10s 未返回)"), 10_000)),
+    ]);
+    const relevant = String(snapshot)
+      .split(/\r?\n/)
+      .filter((line) => /tauri-driver|msedgedriver|role-ai-desktop|msedgewebview2/i.test(line));
+    const path = join(ARTIFACT_DIR, `session-hang-${context}.txt`);
+    await writeFile(path, `${new Date().toISOString()}\n${relevant.join("\n")}\n`, "utf8");
+    console.error(`[e2e] 挂起进程诊断已保存：${path}`);
+  } catch {
+    // 诊断是 best-effort，不掩盖原始失败
+  }
+}
+
+/**
+ * 拉起 tauri-driver + msedgedriver 并建立 WebDriver 会话；失败整栈重启再试。
+ * 每次尝试用全新的隔离目录与端口，避免上一次残留进程或半初始化目录干扰。
+ * 成功时返回的 tauriDriver / isolatedRoot 由调用方负责清理。
+ */
+async function establishSession({ executable, tauriDriverBinary, msedgedriverBinary }) {
+  let lastError;
+  for (let attempt = 1; attempt <= SESSION_ATTEMPTS; attempt += 1) {
+    const isolatedRoot = await mkdtemp(join(tmpdir(), "roleai-e2e-"));
+    const driverPort = await findFreePort();
+    const nativePort = await findFreePort();
+    const tauriDriver = spawn(
+      tauriDriverBinary,
+      ["--port", String(driverPort), "--native-port", String(nativePort), "--native-driver", msedgedriverBinary],
+      { stdio: ["ignore", "inherit", "inherit"], windowsHide: true },
+    );
+    try {
+      await waitForHttpStatus(`http://127.0.0.1:${driverPort}/status`, SESSION_TIMEOUT_MS);
+      let settleTimeout;
+      const driver = await Promise.race([
+        new Builder()
+          .usingServer(`http://127.0.0.1:${driverPort}`)
+          .withCapabilities({
+            browserName: "wry",
+            "tauri:options": {
+              application: executable,
+              // 等号单段形式：msedgedriver 只原样保留 `--flag=value`；
+              // 两段式的松散路径会被 Chromium 命令行解析改写（见 startup.rs 测试）。
+              args: [`--isolated-root=${isolatedRoot}`],
+            },
+          })
+          .build(),
+        new Promise((_, reject) => {
+          settleTimeout = setTimeout(
+            () => reject(new Error(`会话在 ${SESSION_TIMEOUT_MS / 1000}s 内未建立（msedgedriver 版本与 WebView2 Runtime 不匹配时官方文档描述为“挂起”）`)),
+            SESSION_TIMEOUT_MS,
+          );
+        }),
+      ]);
+      clearTimeout(settleTimeout);
+      return { driver, tauriDriver, isolatedRoot };
+    } catch (error) {
+      lastError = error;
+      if (tauriDriver.exitCode === null) {
+        await killProcessTree(tauriDriver.pid);
+      }
+      await withRetries(
+        () => rm(isolatedRoot, { recursive: true, force: true, maxRetries: 1 }),
+        20,
+        100,
+      ).catch((cleanupError) => console.error(`[e2e] 失败尝试的隔离目录清理失败：${cleanupError.message}`));
+      if (attempt < SESSION_ATTEMPTS) {
+        console.error(`[e2e] 会话建立第 ${attempt}/${SESSION_ATTEMPTS} 次失败，2s 后整栈重启重试：${error.message}`);
+        await new Promise((resolveWait) => setTimeout(resolveWait, 2_000));
+      }
+    }
+  }
+  await captureSessionDiagnostics("wd-smoke");
+  throw lastError;
+}
+
 async function runSmoke() {
   if (process.platform !== "win32") throw new Error("桌面端 WebDriver e2e 目前只支持 Windows（WebView2 + msedgedriver）");
 
@@ -139,36 +234,15 @@ async function runSmoke() {
     "下载与本机 WebView2 Runtime 版本一致的 edgedriver_win64.zip 并解压到 .tools/msedgedriver/",
   );
 
-  const isolatedRoot = await mkdtemp(join(tmpdir(), "roleai-e2e-"));
-  const driverPort = await findFreePort();
-  const nativePort = await findFreePort();
-  const tauriDriver = spawn(
-    tauriDriverBinary,
-    ["--port", String(driverPort), "--native-port", String(nativePort), "--native-driver", msedgedriverBinary],
-    { stdio: ["ignore", "inherit", "inherit"], windowsHide: true },
-  );
-  let driver;
+  let driver = null;
+  let tauriDriver = null;
+  let isolatedRoot = null;
   try {
-    await waitForHttpStatus(`http://127.0.0.1:${driverPort}/status`, SESSION_TIMEOUT_MS);
-
-    driver = await Promise.race([
-      new Builder()
-        .usingServer(`http://127.0.0.1:${driverPort}`)
-        .withCapabilities({
-          browserName: "wry",
-          "tauri:options": {
-            application: executable,
-            // 等号单段形式：msedgedriver 只原样保留 `--flag=value`；
-            // 两段式的松散路径会被 Chromium 命令行解析改写（见 startup.rs 测试）。
-            args: [`--isolated-root=${isolatedRoot}`],
-          },
-        })
-        .build(),
-      new Promise((_, reject) => setTimeout(
-        () => reject(new Error(`会话在 ${SESSION_TIMEOUT_MS / 1000}s 内未建立（msedgedriver 版本与 WebView2 Runtime 不匹配时官方文档描述为“挂起”）`)),
-        SESSION_TIMEOUT_MS,
-      )),
-    ]);
+    ({ driver, tauriDriver, isolatedRoot } = await establishSession({
+      executable,
+      tauriDriverBinary,
+      msedgedriverBinary,
+    }));
     // 断言按中文文案写；界面默认跟随系统语言（CI runner 为英文），先钉住（同 src/i18n/test-setup.ts）。
     // 应用文档加载前 localStorage 不可访问。
     await driver.wait(until.elementLocated(By.css("#page-heading-workspace")), ELEMENT_TIMEOUT_MS);
@@ -202,17 +276,19 @@ async function runSmoke() {
     if (driver) {
       await driver.quit().catch(() => {});
     }
-    if (tauriDriver.exitCode === null) {
+    if (tauriDriver && tauriDriver.exitCode === null) {
       // driver.quit() 正常时会话内的应用已被 msedgedriver 关闭；这里兜底清树
       //（tauri-driver 在 Windows 不处理信号，msedgedriver 与应用可能残留）。
       await killProcessTree(tauriDriver.pid);
     }
-    // WebView2 可能在宿主退出后才释放缓存句柄，带重试删除（同 test-tauri-package.mjs）。
-    await withRetries(
-      () => rm(isolatedRoot, { recursive: true, force: true, maxRetries: 1 }),
-      20,
-      100,
-    ).catch((error) => fail(`隔离目录 ${isolatedRoot} 清理失败：${error.message}`));
+    if (isolatedRoot) {
+      // WebView2 可能在宿主退出后才释放缓存句柄，带重试删除（同 test-tauri-package.mjs）。
+      await withRetries(
+        () => rm(isolatedRoot, { recursive: true, force: true, maxRetries: 1 }),
+        20,
+        100,
+      ).catch((error) => fail(`隔离目录 ${isolatedRoot} 清理失败：${error.message}`));
+    }
   }
 }
 
