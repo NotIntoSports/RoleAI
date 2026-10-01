@@ -46,7 +46,6 @@ const COPY = {
     providerName: "演示智能云（虚构）",
     testProvider: /^测试 演示智能云/,
     testPassed: "连接测试通过",
-    practicePrep: "训练准备",
     positionLabel: "岗位方向",
     reportDetails: "训练报告详情",
     historyHeading: "训练历史与成长曲线",
@@ -82,7 +81,6 @@ const COPY = {
     providerName: "Demo Cloud (fictional)",
     testProvider: /^Test Demo Cloud/,
     testPassed: "Connection test passed",
-    practicePrep: "Session prep",
     positionLabel: "Target role",
     reportDetails: "Report details",
     historyHeading: "History and growth",
@@ -262,25 +260,6 @@ async function captureAll(outDir, deviceScaleFactor) {
     await page.getByText(copy.testPassed).first().waitFor({ timeout: 10_000 });
     await page.screenshot({ path: shotPath("services.png") });
     reportSize("services.png");
-
-    // 模拟面试训练：准备向导 + 报告 + 历史与成长曲线（E10 条目，数据由演示后端虚构）。
-    await gotoApp(page, "#/practice");
-    await page.getByRole("heading", { name: copy.practicePrep }).waitFor();
-    await page.getByLabel(copy.positionLabel).fill(LANG === "en" ? "Platform engineer" : "后端开发工程师");
-    await page.waitForTimeout(400);
-    await page.screenshot({ path: shotPath("practice-wizard.png") });
-    reportSize("practice-wizard.png");
-
-    await page.getByRole("article", { name: copy.reportDetails }).waitFor({ timeout: 15_000 });
-    await page.getByRole("article", { name: copy.reportDetails }).scrollIntoViewIfNeeded();
-    await page.waitForTimeout(400);
-    await page.screenshot({ path: shotPath("practice-report.png") });
-    reportSize("practice-report.png");
-
-    await page.getByRole("heading", { name: copy.historyHeading }).scrollIntoViewIfNeeded();
-    await page.waitForTimeout(400);
-    await page.screenshot({ path: shotPath("practice-history.png") });
-    reportSize("practice-history.png");
 
     // 虚拟直播讲稿（生成 → 确认 → 播报中）。
     await gotoApp(page, "#/livestream");

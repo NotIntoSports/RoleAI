@@ -18,7 +18,6 @@ import { handleConfigCommand } from "./config";
 import { handleLiveSessionCommand, liveRuntimeStatus } from "./live-commands";
 import { handleLivestreamCommand } from "./livestream";
 import { handleMaterialCommand } from "./materials";
-import { handlePracticeCommand, resetPracticeState } from "./practice";
 import { handleProviderCommand } from "./providers";
 import { handleRecordCommand } from "./records";
 import { handleRoleCommand } from "./roles";
@@ -101,7 +100,6 @@ function dispatch(cmd: string, payload: Record<string, unknown>): unknown {
     handleMaterialCommand(cmd, payload) ??
     handleRecordCommand(cmd, payload) ??
     handleLivestreamCommand(cmd, payload) ??
-    handlePracticeCommand(cmd, payload) ??
     handleMeetingAndAudio(cmd) ??
     err("DEMO_NOT_IMPLEMENTED", demoT().misc.notImplemented(cmd))
   );
@@ -134,7 +132,6 @@ export function handleDemoInvoke(cmd: string, payload?: DemoPayload): unknown {
 export function installDemoResetHook(): void {
   (window as { __roleaiDemoReset?: () => void }).__roleaiDemoReset = () => {
     resetDemoState();
-    resetPracticeState();
     window.location.reload();
   };
   // 读取一次状态，保证首次渲染前种子已就绪。

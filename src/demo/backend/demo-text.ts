@@ -64,46 +64,6 @@ export interface DemoText {
     reportFollowUps: string[];
     reportLimitations: string[];
   };
-  practice: {
-    planInvalid: string;
-    planNotFound: string;
-    sessionStateInvalid: string;
-    noTranscripts: string;
-    reportNotFound: string;
-    defaultPosition: string;
-    defaultStyle: string;
-    strictStyle: string;
-    defaultDifficulty: string;
-    questionFallback: (n: number) => string;
-    modelAnswerDemo: string;
-    generateModelAnswer: string;
-    generateStrengthsFirst: string[];
-    generateStrengthsRest: string[];
-    generateIssuesFirst: string[];
-    generateIssuesRest: string[];
-    generateSuggestions: string[];
-    seedSuggestionsWeak: string[];
-    seedSuggestionsStrong: string[];
-    seedModelAnswer: string;
-    seedAnswerWeak: string;
-    seedAnswerStrong: string;
-    seedStrengthsWeak: string[][];
-    seedStrengthsStrong: string[][];
-    seedIssuesWeak: string[][];
-    seedIssuesStrong: string[][];
-    markdown: {
-      title: (position: string) => string;
-      totalScore: (score: number) => string;
-      dimensions: (d: { contentDepth: number; structureClarity: number; fluency: number; jobFit: number }) => string;
-      disclaimer: string;
-      questionHeading: (n: number, prompt: string) => string;
-      myAnswer: (answer: string) => string;
-      score: (score: number) => string;
-      modelAnswer: (answer: string) => string;
-      aiNote: string;
-    };
-    downloaded: (fileName: string) => string;
-  };
   misc: {
     demoScriptTitle: string;
     meetingTitle: string;
@@ -188,46 +148,6 @@ const ZH: DemoText = {
       "建议把一次线上问题的复盘整理成自己的方法论",
     ],
     reportLimitations: ["演示环境未连接真实模型，评语为脚本内容，仅供参考"],
-  },
-  practice: {
-    planInvalid: "题单参数无效",
-    planNotFound: "题单不存在",
-    sessionStateInvalid: "该会话不是模拟面试训练",
-    noTranscripts: "会话还没有可评价的转写",
-    reportNotFound: "训练报告不存在",
-    defaultPosition: "后端开发工程师",
-    defaultStyle: "面试官",
-    strictStyle: "严苛面试官",
-    defaultDifficulty: "标准",
-    questionFallback: (n) => `第 ${n} 题`,
-    modelAnswerDemo: "（演示示范）建议按“结论 → 依据 → 数字”三段式回答，并把口头禅替换成停顿。",
-    generateModelAnswer: "（演示示范）按“结论 → 依据 → 数字”三段式重组回答。",
-    generateStrengthsFirst: ["结构清晰", "有具体例子"],
-    generateStrengthsRest: ["先讲结论再展开"],
-    generateIssuesFirst: ["结尾缺少量化结果"],
-    generateIssuesRest: [],
-    generateSuggestions: ["回答先给结论再展开细节", "每个项目准备一个量化结果", "用停顿代替口头禅"],
-    seedSuggestionsWeak: ["回答先给结论再展开细节", "控制口头禅，用停顿代替", "每个项目准备一个量化结果"],
-    seedSuggestionsStrong: ["继续补充跨团队协作的例子", "对追问保持追问式的反问练习", "把语速稳定在 220 字/分钟以内"],    seedModelAnswer: "（演示示范）建议按“结论 → 依据 → 数字”三段式回答，并把口头禅替换成停顿。",
-    seedAnswerWeak: "（演示转写）当时的情况比较复杂，主要是我负责的部分，具体细节就是……那个……做了一些优化。",
-    seedAnswerStrong: "（演示转写）项目背景是接口性能不达标，我先用压测定位瓶颈，再把缓存粒度细化，最终 p99 下降 30%。",
-    seedStrengthsWeak: [["态度认真"], ["思路清楚"], ["态度认真"]],
-    seedStrengthsStrong: [["先讲结论再展开"], ["有量化结果"], ["结构完整"]],
-    seedIssuesWeak: [["口头禅较多"], ["缺少量化结果"], ["展开没有重点"]],
-    seedIssuesStrong: [[], ["时间分配可以更均衡"], []],
-    markdown: {
-      title: (position) => `模拟面试训练报告（${position}）`,
-      totalScore: (score) => `总分：${score} / 5`,
-      dimensions: (d) =>
-        `维度：内容深度 ${d.contentDepth} · 结构清晰 ${d.structureClarity} · 表达流畅 ${d.fluency} · 岗位匹配 ${d.jobFit}`,
-      disclaimer: "在线演示数据，全部内容均为虚构。",
-      questionHeading: (n, prompt) => `第 ${n} 题：${prompt}`,
-      myAnswer: (answer) => `**我的回答**：${answer}`,
-      score: (score) => `**评分**：${score} / 5`,
-      modelAnswer: (answer) => `**改进示范**：${answer}`,
-      aiNote: "评分由 AI 生成，仅供练习参考",
-    },
-    downloaded: (fileName) => `已通过浏览器下载：${fileName}（在线演示不写入本地磁盘）`,
   },
   misc: {
     demoScriptTitle: "演示讲稿",
@@ -314,47 +234,6 @@ const EN: DemoText = {
       "Turn one incident retrospective into your own repeatable method",
     ],
     reportLimitations: ["The demo environment has no real model attached; notes are scripted and for reference only"],
-  },
-  practice: {
-    planInvalid: "Invalid question plan parameters",
-    planNotFound: "Question plan not found",
-    sessionStateInvalid: "This session is not a mock interview",
-    noTranscripts: "The session has no answer transcripts to review yet",
-    reportNotFound: "Training report not found",
-    defaultPosition: "Backend engineer",
-    defaultStyle: "Interviewer",
-    strictStyle: "Strict interviewer",
-    defaultDifficulty: "Standard",
-    questionFallback: (n) => `Question ${n}`,
-    modelAnswerDemo: "(Demo) Structure the answer as \"conclusion → reasoning → numbers\", and replace filler words with pauses.",
-    generateModelAnswer: "(Demo) Rebuild the answer as \"conclusion → reasoning → numbers\".",
-    generateStrengthsFirst: ["Clear structure", "Concrete examples"],
-    generateStrengthsRest: ["Conclusion first, then details"],
-    generateIssuesFirst: ["Ending lacks a quantified result"],
-    generateIssuesRest: [],
-    generateSuggestions: ["Lead with the conclusion before details", "Prepare one quantified result per project", "Use pauses instead of filler words"],
-    seedSuggestionsWeak: ["Lead with the conclusion before details", "Control filler words; pause instead", "Prepare one quantified result per project"],
-    seedSuggestionsStrong: ["Add more cross-team collaboration examples", "Practice reverse questions under follow-ups", "Keep speech rate under 220 characters/minute"],
-    seedModelAnswer: "(Demo) Structure the answer as \"conclusion → reasoning → numbers\", and replace filler words with pauses.",
-    seedAnswerWeak: "(Demo transcript) The situation was complicated — mostly my part, and the details were, you know... we did some optimizations.",
-    seedAnswerStrong: "(Demo transcript) The API missed its performance target. I located the bottleneck with load testing, refined cache granularity, and cut p99 by 30%.",
-    seedStrengthsWeak: [["Earnest attitude"], ["Clear thinking"], ["Earnest attitude"]],
-    seedStrengthsStrong: [["Conclusion first"], ["Quantified results"], ["Complete structure"]],
-    seedIssuesWeak: [["Too many filler words"], ["No quantified results"], ["Unfocused detail"]],
-    seedIssuesStrong: [[], ["Time allocation could be more balanced"], []],
-    markdown: {
-      title: (position) => `Mock interview report (${position})`,
-      totalScore: (score) => `Total score: ${score} / 5`,
-      dimensions: (d) =>
-        `Dimensions: content depth ${d.contentDepth} · structure clarity ${d.structureClarity} · fluency ${d.fluency} · job fit ${d.jobFit}`,
-      disclaimer: "Online demo data. All content is fictional.",
-      questionHeading: (n, prompt) => `Question ${n}: ${prompt}`,
-      myAnswer: (answer) => `**My answer**: ${answer}`,
-      score: (score) => `**Score**: ${score} / 5`,
-      modelAnswer: (answer) => `**Improved example**: ${answer}`,
-      aiNote: "Scores are AI generated and for practice reference only",
-    },
-    downloaded: (fileName) => `Downloaded via the browser: ${fileName} (the online demo never writes to local disk)`,
   },
   misc: {
     demoScriptTitle: "Demo script",
