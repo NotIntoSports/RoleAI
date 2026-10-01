@@ -768,6 +768,7 @@ fn meeting_start_never_falls_back_when_capture_is_missing_or_pid_is_invalid() {
                 enumerator: &enumerator,
             }),
             None,
+            None,
         ))
         .unwrap();
         assert_eq!(result["error"]["code"], code);
@@ -1733,6 +1734,8 @@ fn session_start_rollback_keeps_routing_when_restore_fails() {
         previous_id: "mic-original".into(),
         cable_id: "cable-output".into(),
         changed: true,
+        previous_console_id: Some("mic-original".into()),
+        previous_multimedia_id: Some("mic-original".into()),
     };
     let code = super::rollback_session_routing(&state, change);
     assert!(code.is_some());

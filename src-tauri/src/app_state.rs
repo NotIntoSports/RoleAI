@@ -64,7 +64,7 @@ impl Drop for AppState {
         }
         if let Ok(slot) = self.audio_routing.get_mut()
             && let Some(change) = slot.take()
-            && crate::prerequisites::restore_communications_mic(&change).is_ok()
+            && crate::prerequisites::restore_default_capture_mic(&change).is_ok()
         {
             crate::prerequisites::clear_persisted_audio_routing(&self.paths.data_directory);
         }

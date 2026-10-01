@@ -25,9 +25,12 @@ Tauri 将发布的 EXE 放入 `audio-bridge/AudioBridge.exe`。不得提交约 1
   `overflow`（在途缓冲超 60s 被清）。设备在启动时即打开并持续输出静音，把 WASAPI
   激活成本移出首响延迟；缓冲预热 120ms 后开始出声。stdin EOF 把残余播净后退出 0。
 - `--monitor-input <capture endpoint ID> <render endpoint ID>`：人工接管期间把已保存的物理麦克风送入虚拟声卡渲染端；缓冲上限两秒，停止/异常时由主程序终止并恢复原线路。
+- `--set-default-capture-mic <capture endpoint ID>`：会议会话期间把 CABLE Output 设为系统默认采集端点（默认/多媒体/通信三个角色），stdout 输出各角色会话前设备 JSON；任一角色切换失败时自动还原已切换的角色。
+- `--restore-default-capture-mic <cableId> <consoleTargetId> <multimediaTargetId> <communicationsTargetId>`：按角色恢复会话前设备；护栏——当前值仍是 CABLE 才恢复，空目标（该角色未变更）跳过，不覆盖用户中途手改的选择。
 
-工作台默认仅文字。会议语音应选择虚拟声卡渲染端（如 CABLE Input），并在会议软件中
-选择配对采集端（如 CABLE Output）作为麦克风。不会自动修改全系统默认设备。
-只有扬声器时不能据此声称声音已进入会议。实机播放/会议测试须显式启用；自动化测试不播放候选人数据。
+工作台默认仅文字。会议会话启动时自动接管系统默认麦克风（三个角色）并在结束时还原，
+跟随“系统默认设备”的会议软件（腾讯会议、Zoom、飞书、钉钉等默认行为）无需手动选择；
+在会议软件里显式选择过设备的应用仍需首次手动选一次 CABLE Output。AI 语音始终播放到
+虚拟声卡渲染端（如 CABLE Input）。只有扬声器时不能据此声称声音已进入会议。实机播放/会议测试须显式启用；自动化测试不播放候选人数据。
 
 限制：自动分句、回声抑制与场景触发已有自动化覆盖，但当前主机没有虚拟声卡，仍不能据此声称会议对端已实际听到 AI 或人工麦克风。

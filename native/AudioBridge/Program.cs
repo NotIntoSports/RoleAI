@@ -1,4 +1,5 @@
 using AudioBridge;
+using NAudio.CoreAudioApi;
 using System.Text.Json;
 
 if (args is ["--list-output-devices"])
@@ -66,12 +67,22 @@ if (args is ["--monitor-input", var inputId, var monitorOutputId])
 
 if (args is ["--self-test"])
 {
+    // 恢复护栏一：当前值不是 CABLE 时不得覆盖用户中途手改的选择。
     var restored = false;
-    CommunicationsMicrophone.RestoreIfUnchanged("original", "cable", () => "user-choice", _ => restored = true);
+    DefaultCaptureMicrophone.RestoreIfUnchanged(
+        Role.Communications, "original", "cable", _ => "user-choice", (_, _) => restored = true);
     if (restored) return 4;
-    var current = "cable";
-    CommunicationsMicrophone.RestoreIfUnchanged("original", "cable", () => current, value => current = value);
-    if (current != "original") return 5;
+    // 恢复护栏二：当前值仍是 CABLE 时按角色还原。
+    var current = new Dictionary<Role, string> { [Role.Communications] = "cable" };
+    DefaultCaptureMicrophone.RestoreIfUnchanged(
+        Role.Communications, "original", "cable",
+        role => current[role], (value, role) => current[role] = value);
+    if (current[Role.Communications] != "original") return 5;
+    // 恢复护栏三：空期望值（该角色未变更）必须跳过。
+    var untouched = "cable";
+    DefaultCaptureMicrophone.RestoreIfUnchanged(
+        Role.Multimedia, "original", "", _ => untouched, (_, _) => untouched = "changed");
+    if (untouched != "cable") return 8;
     var sample = new byte[] { 0xff, 0x7f, 0x00, 0x00 };
     if (Protocol.Peak(sample) < 0.99) return 2;
     if (!Protocol.Event("ready", new { captureScope = "process-tree" }).Contains("process-tree")) return 3;
@@ -138,16 +149,22 @@ static bool DrainTrackerSelfTest()
     return true;
 }
 
-if (args is ["--set-default-communications-mic", var captureId])
+if (args is ["--set-default-capture-mic", var captureId])
 {
     try
     {
-        var change = CommunicationsMicrophone.UseCableOutput(captureId);
-        Console.WriteLine(JsonSerializer.Serialize(new {
+        var change = DefaultCaptureMicrophone.UseCableOutput(captureId);
+        Console.WriteLine(JsonSerializer.Serialize(new
+        {
             changed = change.Changed,
-            previousId = change.PreviousId,
             cableId = change.CableId,
-            cableLabel = change.CableLabel
+            cableLabel = change.CableLabel,
+            roles = change.Roles.Select(role => new
+            {
+                role = role.Role,
+                changed = role.Changed,
+                previousId = role.PreviousId
+            })
         }));
         return 0;
     }
@@ -158,10 +175,18 @@ if (args is ["--set-default-communications-mic", var captureId])
     }
 }
 
-if (args is ["--restore-default-communications-mic", var endpointId, var expectedCurrentId])
+if (args is ["--restore-default-capture-mic", var cableId, var expectedConsole, var expectedMultimedia, var expectedCommunications])
 {
-    try { CommunicationsMicrophone.Restore(endpointId, expectedCurrentId); return 0; }
-    catch (Exception error) { Console.Error.WriteLine(error.Message); return 1; }
+    try
+    {
+        DefaultCaptureMicrophone.Restore(cableId, expectedConsole, expectedMultimedia, expectedCommunications);
+        return 0;
+    }
+    catch (Exception error)
+    {
+        Console.Error.WriteLine(error.Message);
+        return 1;
+    }
 }
 
 if (args.Length != 2 || args[0] != "--pid" || !uint.TryParse(args[1], out var processId) || processId == 0)

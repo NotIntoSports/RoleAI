@@ -215,6 +215,7 @@ export const zhCN = {
       recheckAudio: "重新检测虚拟声卡",
       rebootRequired: "虚拟声卡驱动已安装，需要重启 Windows 后继续。软件不会自动重启电脑。",
       virtualAudioReady: "虚拟声卡端点已就绪，将自动绑定音频线路；尚不代表会议对方已能听到声音。",
+      meetingMicTakeover: "会话期间将自动接管系统默认麦克风，结束时自动还原；会议软件保持“系统默认设备”即可收到 AI 语音，手动选过设备的应用需首次选一次 CABLE Output。",
       voiceOutput: "语音输出",
       systemDefault: "系统默认输出",
       refreshAudioDevices: "刷新音频设备",

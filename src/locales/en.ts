@@ -214,6 +214,7 @@ export const en: Dictionary = {
       recheckAudio: "Re-check virtual audio device",
       rebootRequired: "The virtual audio driver is installed. Restart Windows to continue. The app will not restart the computer.",
       virtualAudioReady: "The virtual audio endpoint is ready and will bind audio routes automatically; this does not yet mean meeting attendees can hear it.",
+      meetingMicTakeover: "The system default microphone is taken over during the session and restored afterwards; meeting apps set to \"System default device\" pick up the AI voice automatically, while apps with an explicitly selected device need a one-time switch to CABLE Output.",
       voiceOutput: "Voice output",
       systemDefault: "System default output",
       refreshAudioDevices: "Refresh audio devices",

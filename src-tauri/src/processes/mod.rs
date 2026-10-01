@@ -144,18 +144,22 @@ pub fn parse_process_snapshot(raw: &str) -> Result<Vec<MeetingProcess>, ProcessE
     Ok(rows.iter().filter_map(process_from_json).collect())
 }
 
-pub fn set_default_communications_mic_args(capture_id: &str) -> Vec<String> {
-    vec!["--set-default-communications-mic".into(), capture_id.into()]
+pub fn set_default_capture_mic_args(capture_id: &str) -> Vec<String> {
+    vec!["--set-default-capture-mic".into(), capture_id.into()]
 }
 
-pub fn restore_default_communications_mic_args(
-    endpoint_id: &str,
-    expected_id: &str,
+pub fn restore_default_capture_mic_args(
+    cable_id: &str,
+    expected_console: &str,
+    expected_multimedia: &str,
+    expected_communications: &str,
 ) -> Vec<String> {
     vec![
-        "--restore-default-communications-mic".into(),
-        endpoint_id.to_string(),
-        expected_id.to_string(),
+        "--restore-default-capture-mic".into(),
+        cable_id.into(),
+        expected_console.into(),
+        expected_multimedia.into(),
+        expected_communications.into(),
     ]
 }
 
@@ -331,17 +335,19 @@ mod tests {
     }
 
     #[test]
-    fn communications_mic_args_match_csharp_cli() {
+    fn capture_mic_args_match_csharp_cli() {
         assert_eq!(
-            set_default_communications_mic_args("cable"),
-            ["--set-default-communications-mic", "cable"]
+            set_default_capture_mic_args("cable"),
+            ["--set-default-capture-mic", "cable"]
         );
         assert_eq!(
-            restore_default_communications_mic_args("endpoint-1", "cable"),
+            restore_default_capture_mic_args("cable", "console-1", "multimedia-1", "comm-1"),
             [
-                "--restore-default-communications-mic",
-                "endpoint-1",
-                "cable"
+                "--restore-default-capture-mic",
+                "cable",
+                "console-1",
+                "multimedia-1",
+                "comm-1"
             ]
         );
     }

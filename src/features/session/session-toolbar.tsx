@@ -175,6 +175,7 @@ export function SessionToolbar({
             <button type="button" disabled={installingAudio} onClick={() => void refreshVirtualAudio()}>{t("session.toolbar.recheckAudio")}</button>
             {virtualAudio?.rebootRequired && <div className="preflight-card" role="alert">{t("session.toolbar.rebootRequired")}</div>}
             {virtualAudio?.installed && <small>{t("session.toolbar.virtualAudioReady")}</small>}
+            {virtualAudio?.installed && <small>{t("session.toolbar.meetingMicTakeover")}</small>}
           </>}
           {inputSource !== "meeting" && !outputsUnsupported && <><label>{t("session.toolbar.voiceOutput")}<select value={outputDeviceId} onChange={(event) => setOutputDeviceId(event.target.value)}>
             <option value="">{t("session.toolbar.systemDefault")}</option>

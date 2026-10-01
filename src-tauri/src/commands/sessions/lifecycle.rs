@@ -24,6 +24,7 @@ pub(in crate::commands) fn session_start_selected_cmd(
         voice_route_id,
         allow_web_search,
         None,
+        None,
         allow_barge_in,
     )
 }
@@ -34,6 +35,7 @@ pub(in crate::commands) fn session_start_capture_cmd(
     voice_route_id: Option<&str>,
     allow_web_search: bool,
     capture: Option<crate::services::MeetingCapture<'_>>,
+    fail_routing: Option<&crate::prerequisites::AudioRoutingChange>,
     allow_barge_in: Option<bool>,
 ) -> CommandResult<SessionStartResult> {
     let mut config = match load_public_config(state) {
@@ -101,6 +103,7 @@ pub(in crate::commands) fn session_start_capture_cmd(
             &config,
             secrets_ready,
             capture,
+            fail_routing.cloned(),
             allow_barge_in.unwrap_or(false),
         )
     } else {
@@ -138,7 +141,7 @@ pub(in crate::commands) fn rollback_session_routing(
     state: &AppState,
     change: crate::prerequisites::AudioRoutingChange,
 ) -> Option<&'static str> {
-    match crate::prerequisites::restore_communications_mic(&change) {
+    match crate::prerequisites::restore_default_capture_mic(&change) {
         Ok(()) => {
             crate::prerequisites::clear_persisted_audio_routing(&state.paths.data_directory);
             None
@@ -163,7 +166,7 @@ pub(in crate::commands) fn session_stop_cmd(state: &AppState) -> CommandResult<S
         .and_then(|mut slot| slot.take());
     let restore_failed = routing
         .as_ref()
-        .is_some_and(|change| crate::prerequisites::restore_communications_mic(change).is_err());
+        .is_some_and(|change| crate::prerequisites::restore_default_capture_mic(change).is_err());
     if restore_failed {
         if let Some(change) = routing
             && let Ok(mut slot) = state.audio_routing.lock()
@@ -503,7 +506,7 @@ pub fn session_start_blocking<R: tauri::Runtime>(
         output_device_id
     };
     let routing = if meeting_pid.is_some() {
-        match crate::prerequisites::configure_communications_mic(&bridge) {
+        match crate::prerequisites::configure_default_capture_mic(&bridge) {
             Ok(change) => Some(change),
             Err(code) => return service_error(code, "无法自动配置会议麦克风"),
         }
@@ -521,6 +524,7 @@ pub fn session_start_blocking<R: tauri::Runtime>(
         voice_route_id.as_deref(),
         allow_web_search.unwrap_or(false),
         capture,
+        routing.as_ref(),
         allow_barge_in,
     );
     if matches!(

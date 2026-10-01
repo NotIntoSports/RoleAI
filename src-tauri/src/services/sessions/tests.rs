@@ -420,6 +420,7 @@ fn start_with_missing_bridge_exe_fails_closed_without_a_session() {
                 pid: 4242,
                 enumerator: &enumerator,
             },
+            None,
             false,
         )
         .expect_err("missing exe must fail");
@@ -2025,7 +2026,7 @@ fn barge_in_source_wired_only_when_allowed() {
     let (_directory, database) = opened();
     let mut service = SessionService::new();
     service
-        .start_inner(&database, &ready_public_config(), true, None, true)
+        .start_inner(&database, &ready_public_config(), true, None, None, true)
         .unwrap();
     service
         .capture()
@@ -2042,7 +2043,7 @@ fn barge_in_source_wired_only_when_allowed() {
     let (_directory, database) = opened();
     let mut service = SessionService::new();
     service
-        .start_inner(&database, &ready_public_config(), true, None, false)
+        .start_inner(&database, &ready_public_config(), true, None, None, false)
         .unwrap();
     service
         .capture()

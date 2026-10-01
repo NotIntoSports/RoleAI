@@ -67,12 +67,19 @@ pub enum PreparationEvent {
     Exit(Option<i32>),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AudioRoutingChange {
     pub bridge: PathBuf,
+    /// 会话前“默认通信”角色的采集端点；人工接管模式用它把物理麦送回虚拟线路。
     pub previous_id: String,
     pub cable_id: String,
     pub changed: bool,
+    /// 会话前“默认设备”(console) 角色；旧版本记录没有这两个字段，恢复时按 None 跳过。
+    #[serde(default)]
+    pub previous_console_id: Option<String>,
+    /// 会话前“多媒体”(multimedia) 角色。
+    #[serde(default)]
+    pub previous_multimedia_id: Option<String>,
 }
 
 fn audio_routing_record_path(data_directory: &Path) -> PathBuf {
@@ -107,7 +114,7 @@ pub fn clear_persisted_audio_routing(data_directory: &Path) {
 
 pub fn recover_persisted_audio_routing(data_directory: &Path) -> Option<AudioRoutingChange> {
     let change = load_persisted_audio_routing(data_directory)?;
-    match restore_communications_mic(&change) {
+    match restore_default_capture_mic(&change) {
         Ok(()) => {
             clear_persisted_audio_routing(data_directory);
             None
@@ -116,7 +123,7 @@ pub fn recover_persisted_audio_routing(data_directory: &Path) -> Option<AudioRou
     }
 }
 
-pub fn configure_communications_mic(bridge: &Path) -> Result<AudioRoutingChange, &'static str> {
+pub fn configure_default_capture_mic(bridge: &Path) -> Result<AudioRoutingChange, &'static str> {
     let status = VirtualAudioPreparation::from_devices(&enumerate_audio_devices(bridge)?);
     let capture_id = status
         .capture_endpoint_id
@@ -124,38 +131,55 @@ pub fn configure_communications_mic(bridge: &Path) -> Result<AudioRoutingChange,
         .ok_or("CABLE_OUTPUT_NOT_FOUND")?;
     let bytes = run_bounded(
         Command::new(bridge)
-            .arg("--set-default-communications-mic")
+            .arg("--set-default-capture-mic")
             .arg(&capture_id),
         Duration::from_secs(15),
         16 * 1024,
     )?;
+    parse_capture_mic_change(bridge, &bytes)
+}
+
+/// 解析 AudioBridge `--set-default-capture-mic` 的 JSON 输出。
+fn parse_capture_mic_change(bridge: &Path, bytes: &[u8]) -> Result<AudioRoutingChange, &'static str> {
     let value: serde_json::Value =
-        serde_json::from_slice(&bytes).map_err(|_| "AUDIO_ROUTING_RESULT_INVALID")?;
-    let previous_id = value["previousId"]
-        .as_str()
-        .ok_or("AUDIO_ROUTING_RESULT_INVALID")?
-        .to_owned();
+        serde_json::from_slice(bytes).map_err(|_| "AUDIO_ROUTING_RESULT_INVALID")?;
     let cable_id = value["cableId"]
         .as_str()
         .ok_or("AUDIO_ROUTING_RESULT_INVALID")?
         .to_owned();
+    let role_previous_id = |role: &str| -> Result<String, &'static str> {
+        value["roles"]
+            .as_array()
+            .and_then(|roles| {
+                roles
+                    .iter()
+                    .find(|entry| entry["role"].as_str() == Some(role))
+                    .and_then(|entry| entry["previousId"].as_str())
+            })
+            .map(str::to_owned)
+            .ok_or("AUDIO_ROUTING_RESULT_INVALID")
+    };
     Ok(AudioRoutingChange {
         bridge: bridge.to_path_buf(),
-        previous_id,
+        previous_id: role_previous_id("Communications")?,
+        previous_console_id: Some(role_previous_id("Console")?),
+        previous_multimedia_id: Some(role_previous_id("Multimedia")?),
         cable_id,
         changed: value["changed"].as_bool().unwrap_or(false),
     })
 }
 
-pub fn restore_communications_mic(change: &AudioRoutingChange) -> Result<(), &'static str> {
+pub fn restore_default_capture_mic(change: &AudioRoutingChange) -> Result<(), &'static str> {
     if !change.changed {
         return Ok(());
     }
     run_bounded(
         Command::new(&change.bridge)
-            .arg("--restore-default-communications-mic")
-            .arg(&change.previous_id)
-            .arg(&change.cable_id),
+            .arg("--restore-default-capture-mic")
+            .arg(&change.cable_id)
+            .arg(change.previous_console_id.as_deref().unwrap_or(""))
+            .arg(change.previous_multimedia_id.as_deref().unwrap_or(""))
+            .arg(&change.previous_id),
         Duration::from_secs(15),
         1024,
     )
@@ -666,15 +690,16 @@ mod tests {
     fn preparation_reports_only_allowed_phases_and_times_out() {
         let directory = tempfile::tempdir().unwrap();
         let script = directory.path().join("phases.ps1");
-        std::fs::write(&script, "Write-Output '{\"phase\":\"verifying\"}'; Write-Output '{\"phase\":\"private-data\"}'; Write-Output '{\"phase\":\"installing\"}'; Start-Sleep -Seconds 10").unwrap();
+        std::fs::write(&script, "Write-Output '{\"phase\":\"verifying\"}'; Write-Output '{\"phase\":\"private-data\"}'; Write-Output '{\"phase\":\"installing\"}'; Start-Sleep -Seconds 120").unwrap();
         let mut phases = Vec::new();
-        // 5s: powershell.exe cold start under full-suite parallel load can
-        // exceed 1s; the script keeps sleeping for 10s so the timeout still
-        // fires after every phase has been emitted.
+        // 30s: powershell.exe cold start under full-suite parallel load has been
+        // observed to exceed 5s on CI runners (Defender scan + .NET JIT); the
+        // script keeps sleeping for 120s so the timeout still fires after every
+        // phase has been emitted.
         let result = super::run_preparation_script(
             &script,
             &[],
-            std::time::Duration::from_secs(5),
+            std::time::Duration::from_secs(30),
             &mut |event| {
                 if let super::PreparationEvent::Phase(phase) = event {
                     phases.push(phase)
@@ -696,7 +721,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            super::run_script_success_bounded(&script, &[], std::time::Duration::from_secs(5))
+            super::run_script_success_bounded(&script, &[], std::time::Duration::from_secs(30))
                 .unwrap_err(),
             "PREREQUISITE_OUTPUT_TOO_LARGE"
         );
@@ -747,7 +772,9 @@ mod tests {
                 &directory.path().to_string_lossy(),
                 "-ProbeOnly",
             ],
-            std::time::Duration::from_secs(15),
+            // 30s：同上，CI 负载下 powershell.exe 冷启动可能超过 15s，
+            // 超时会误报 PREREQUISITE_TIMEOUT 而非预期的 INSTALL_BUSY。
+            std::time::Duration::from_secs(30),
         );
         assert_eq!(probe.unwrap_err(), "PREREQUISITE_INSTALL_BUSY");
         holder.stdin.take();
@@ -762,16 +789,64 @@ mod tests {
             previous_id: "{0.0.1.00000000}.{abcd}".into(),
             cable_id: "{0.0.1.00000000}.{cable}".into(),
             changed: true,
+            previous_console_id: Some("{0.0.1.00000000}.{ef01}".into()),
+            previous_multimedia_id: Some("{0.0.1.00000000}.{ef02}".into()),
         };
         super::persist_audio_routing(directory.path(), &change).unwrap();
         let loaded = super::load_persisted_audio_routing(directory.path()).unwrap();
         assert_eq!(loaded.previous_id, change.previous_id);
         assert_eq!(loaded.cable_id, change.cable_id);
+        assert_eq!(loaded.previous_console_id, change.previous_console_id);
+        assert_eq!(loaded.previous_multimedia_id, change.previous_multimedia_id);
         let encoded = serde_json::to_string(&loaded).unwrap();
         assert!(!encoded.contains("sk-"));
         super::clear_persisted_audio_routing(directory.path());
         assert!(super::load_persisted_audio_routing(directory.path()).is_none());
     }
+
+    #[test]
+    fn legacy_routing_record_without_role_fields_still_loads() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(directory.path().join("prerequisites")).unwrap();
+        std::fs::write(
+            directory.path().join("prerequisites/audio-routing.json"),
+            r#"{"bridge":"AudioBridge.exe","previous_id":"old-mic","cable_id":"cable","changed":true}"#,
+        )
+        .unwrap();
+        let loaded = super::load_persisted_audio_routing(directory.path()).unwrap();
+        assert_eq!(loaded.previous_id, "old-mic");
+        assert_eq!(loaded.previous_console_id, None);
+        assert_eq!(loaded.previous_multimedia_id, None);
+    }
+
+    #[test]
+    fn capture_mic_change_json_parses_all_three_roles() {
+        let bytes = r#"{"changed":true,"cableId":"{cable}","cableLabel":"麦克风 (VB-Audio Virtual Cable)","roles":[
+            {"role":"Console","changed":true,"previousId":"{console}"},
+            {"role":"Multimedia","changed":true,"previousId":"{multimedia}"},
+            {"role":"Communications","changed":true,"previousId":"{communications}"}]}"#;
+        let change = super::parse_capture_mic_change(
+            std::path::Path::new("AudioBridge.exe"),
+            bytes.as_bytes(),
+        )
+        .expect("parse");
+        assert!(change.changed);
+        assert_eq!(change.cable_id, "{cable}");
+        assert_eq!(change.previous_id, "{communications}");
+        assert_eq!(change.previous_console_id.as_deref(), Some("{console}"));
+        assert_eq!(change.previous_multimedia_id.as_deref(), Some("{multimedia}"));
+    }
+
+    #[test]
+    fn capture_mic_change_json_rejects_missing_role_entries() {
+        let bytes = br#"{"changed":false,"cableId":"{cable}","cableLabel":"x","roles":[
+            {"role":"Console","changed":false,"previousId":"{cable}"}]}"#;
+        assert_eq!(
+            super::parse_capture_mic_change(std::path::Path::new("AudioBridge.exe"), bytes),
+            Err("AUDIO_ROUTING_RESULT_INVALID")
+        );
+    }
+
     #[test]
     fn disabled_cable_is_not_reported_missing_or_ready() {
         let devices: Vec<super::LocalAudioDevice> = serde_json::from_str(r#"[{"id":"r","name":"CABLE Input","flow":"render","state":"Disabled"},{"id":"c","name":"CABLE Output","flow":"capture","state":"Active"}]"#).unwrap();
@@ -786,7 +861,7 @@ mod tests {
         let script = directory.path().join("安装 diagnostic.ps1");
         std::fs::write(&script, "Write-Output '{\"installed\":false,\"errorCode\":\"PREREQUISITE_UAC_CANCELLED\"}'; exit 1").unwrap();
         assert_eq!(
-            super::run_script_bounded(&script, &[], std::time::Duration::from_secs(5)).unwrap_err(),
+            super::run_script_bounded(&script, &[], std::time::Duration::from_secs(30)).unwrap_err(),
             "PREREQUISITE_UAC_CANCELLED"
         );
     }
@@ -798,7 +873,7 @@ mod tests {
         let script = directory.path().join("fetch.ps1");
         std::fs::write(&script, "[Console]::Error.WriteLine('PREREQUISITE_HASH_MISMATCH: private path must not escape'); exit 1").unwrap();
         assert_eq!(
-            super::run_script_success_bounded(&script, &[], std::time::Duration::from_secs(5))
+            super::run_script_success_bounded(&script, &[], std::time::Duration::from_secs(30))
                 .unwrap_err(),
             "PREREQUISITE_HASH_MISMATCH"
         );

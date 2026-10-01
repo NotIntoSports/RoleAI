@@ -160,6 +160,8 @@ pub struct SessionService<S: PlaybackSink = NoopSink> {
     // 旧收尾的放弃分支不得误清（D 线审查 T03 §2）；落库失败路径也必须复位，
     // 否则该会话后续收尾全部 Idle→STATE_INVALID。
     finalizing_generation: Option<u64>,
+    // 会议会话失败时的系统默认麦克风恢复凭证（会议期间接管了全部默认采集角色）。
+    pending_fail_routing: Option<crate::prerequisites::AudioRoutingChange>,
 }
 
 impl SessionService<NoopSink> {
@@ -195,6 +197,7 @@ impl<S: PlaybackSink> SessionService<S> {
             realtime_pump: None,
             finalize_generation: 0,
             finalizing_generation: None,
+            pending_fail_routing: None,
         }
     }
 

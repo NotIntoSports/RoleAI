@@ -16,7 +16,7 @@ impl<S: PlaybackSink> SessionService<S> {
         allow_barge_in: bool,
     ) -> Result<SessionStartOutcome, SessionServiceError> {
         // 会议桥强制关闭的判定在 start_inner 内完成；这里只透传会话级开关。
-        self.start_inner(database, config, secrets_ready, None, allow_barge_in)
+        self.start_inner(database, config, secrets_ready, None, None, allow_barge_in)
     }
 
     pub fn start_with_meeting_capture(
@@ -25,6 +25,7 @@ impl<S: PlaybackSink> SessionService<S> {
         config: &PublicConfig,
         secrets_ready: bool,
         capture: MeetingCapture<'_>,
+        fail_routing: Option<crate::prerequisites::AudioRoutingChange>,
         allow_barge_in: bool,
     ) -> Result<SessionStartOutcome, SessionServiceError> {
         self.start_inner(
@@ -32,6 +33,7 @@ impl<S: PlaybackSink> SessionService<S> {
             config,
             secrets_ready,
             Some(capture),
+            fail_routing,
             allow_barge_in,
         )
     }
@@ -42,6 +44,7 @@ impl<S: PlaybackSink> SessionService<S> {
         config: &PublicConfig,
         secrets_ready: bool,
         capture: Option<MeetingCapture<'_>>,
+        fail_routing: Option<crate::prerequisites::AudioRoutingChange>,
         allow_barge_in: bool,
     ) -> Result<SessionStartOutcome, SessionServiceError> {
         let issues = preflight(config, secrets_ready, true);
@@ -60,6 +63,7 @@ impl<S: PlaybackSink> SessionService<S> {
         }
 
         self.reset_runtime();
+        self.pending_fail_routing = fail_routing;
         self.unused_materials = false;
         self.last_error_code = None;
         // Keep the process locally owned until every startup step succeeds. Any
@@ -136,6 +140,7 @@ impl<S: PlaybackSink> SessionService<S> {
         self.playback = None;
         self.text_only = false;
         self.pending_confirmation_epoch = None;
+        self.pending_fail_routing = None;
         self.turn_index = 0;
         self.revision = 0;
         self.unused_materials = false;
@@ -151,6 +156,13 @@ impl<S: PlaybackSink> SessionService<S> {
     }
 
     pub(super) fn fail_session(&mut self, database: &Database) -> Result<(), SessionServiceError> {
+        // 会话失败也要归还会议期间接管的系统默认麦克风；
+        // 恢复失败则保留记录，等停止会话或应用退出时再试。
+        if let Some(change) = self.pending_fail_routing.take()
+            && crate::prerequisites::restore_default_capture_mic(&change).is_err()
+        {
+            self.pending_fail_routing = Some(change);
+        }
         self.detach_realtime_pump();
         self.finalize_generation = self.finalize_generation.wrapping_add(1);
         let Some(session_id) = self.session_id.clone() else {
