@@ -94,9 +94,9 @@ fn material_list_ipc_dispatch_does_not_wait_for_a_busy_database() {
         );
         let _ = dispatched_tx.send(());
     });
-    let dispatched_without_lock = dispatched_rx
-        .recv_timeout(Duration::from_millis(500))
-        .is_ok();
+    // The guard is only dropped after this wait, so a dispatch that blocks on the
+    // database can never signal within any budget; 5s just absorbs scheduler delay.
+    let dispatched_without_lock = dispatched_rx.recv_timeout(Duration::from_secs(5)).is_ok();
     drop(database_guard);
     dispatcher.join().unwrap();
     let result = result_rx.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -842,9 +842,9 @@ fn material_import_ipc_dispatch_does_not_wait_for_a_busy_database() {
         );
         let _ = dispatched_tx.send(());
     });
-    let dispatched_without_lock = dispatched_rx
-        .recv_timeout(Duration::from_millis(500))
-        .is_ok();
+    // The guard is only dropped after this wait, so a dispatch that blocks on the
+    // database can never signal within any budget; 5s just absorbs scheduler delay.
+    let dispatched_without_lock = dispatched_rx.recv_timeout(Duration::from_secs(5)).is_ok();
     drop(database_guard);
     importer.join().unwrap();
     let result = result_rx.recv_timeout(Duration::from_secs(5)).unwrap();
