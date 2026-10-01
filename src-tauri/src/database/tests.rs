@@ -29,8 +29,6 @@ fn empty_database_migrates_once_and_passes_integrity_check() {
             "material_documents",
             "material_file_cleanup",
             "materials",
-            "practice_plans",
-            "practice_reports",
             "runtime_snapshots",
             "schema_migrations",
             "session_citations",
@@ -460,89 +458,96 @@ fn voice_reference_schema_includes_target_model_column() {
     );
 }
 
+
 #[test]
-fn practice_schema_migrates_from_voice_reference_target_model() {
+fn practice_tables_are_dropped_by_migration_0010() {
     let (_directory, database) = database();
     database.migrate().unwrap();
 
     assert_eq!(database.schema_version().unwrap(), LATEST_SCHEMA_VERSION);
-    let plan_columns = database
-        .query_strings("SELECT name FROM pragma_table_info('practice_plans')")
-        .unwrap();
-    for column in [
-        "id",
-        "title",
-        "position",
-        "interviewer_style",
-        "difficulty",
-        "question_count",
-        "questions_json",
-        "created_at",
-        "updated_at",
-    ] {
-        assert!(
-            plan_columns.contains(&column.to_owned()),
-            "missing {column}"
-        );
+    // 新库从 0 一路迁到最新：practice 两表不应存在。
+    for table in ["practice_plans", "practice_reports"] {
+        let names = database
+            .query_strings(&format!(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = '{table}'"
+            ))
+            .unwrap();
+        assert!(names.is_empty(), "{table} should be dropped by 0010");
     }
-    let report_columns = database
-        .query_strings("SELECT name FROM pragma_table_info('practice_reports')")
+    // 0009 重建过的 session_events 必须仍在。
+    let events = database
+        .query_strings("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_events'")
         .unwrap();
-    for column in [
-        "id",
-        "plan_id",
-        "position",
-        "interviewer_style",
-        "total_score",
-        "dimensions_json",
-        "objective_json",
-        "report_json",
-        "created_at",
-    ] {
-        assert!(
-            report_columns.contains(&column.to_owned()),
-            "missing {column}"
-        );
-    }
+    assert_eq!(events, vec!["session_events".to_owned()]);
+    assert_eq!(database.integrity_check().unwrap(), "ok");
+}
 
-    // practice_reports 的主键级联自 sessions：删会话删报告。
+#[test]
+fn migration_0010_drops_practice_tables_from_a_version_9_database_and_keeps_other_data() {
+    let (directory, database) = database();
+    database.migrate().unwrap();
+    // 构造一个停在 v9、已含训练数据与普通会话数据的库：
+    // 先迁到最新（0010 已删表），再按 0009 的定义重建两张训练表并填数据，
+    // 把 user_version 降回 9，等价于"只升级到 v9 的老库"。
     database
-        .execute_batch(
-            "INSERT INTO sessions(id, status, role_profile_id, voice_route_id, transport_mode, updated_at)
-             VALUES ('sess-p', 'completed', 'role-1', 'route-1', 'direct', '2026-10-01T00:00:00Z');
-             INSERT INTO practice_reports(id, plan_id, position, total_score, report_json, created_at)
-             VALUES ('sess-p', 'plan-1', '后端工程师', 4.0, '{}', '2026-10-01T00:00:00Z');",
-        )
-        .unwrap();
-    database
-        .execute_batch("DELETE FROM sessions WHERE id = 'sess-p';")
-        .unwrap();
-    let orphans: i64 = database
         .with_connection(|connection| {
-            connection.query_row(
-                "SELECT COUNT(*) FROM practice_reports WHERE id = 'sess-p'",
-                [],
-                |row| row.get(0),
+            connection.execute_batch(
+                "CREATE TABLE practice_plans(
+                   id TEXT PRIMARY KEY,
+                   title TEXT NOT NULL,
+                   position TEXT NOT NULL DEFAULT '',
+                   interviewer_style TEXT NOT NULL DEFAULT '',
+                   difficulty TEXT NOT NULL DEFAULT 'standard',
+                   question_count INTEGER NOT NULL DEFAULT 0,
+                   questions_json TEXT NOT NULL,
+                   created_at TEXT NOT NULL,
+                   updated_at TEXT NOT NULL,
+                   CHECK (question_count >= 0)
+                 ) STRICT;
+                 CREATE TABLE practice_reports(
+                   id TEXT PRIMARY KEY,
+                   plan_id TEXT NOT NULL DEFAULT '',
+                   position TEXT NOT NULL DEFAULT '',
+                   interviewer_style TEXT NOT NULL DEFAULT '',
+                   total_score REAL NOT NULL DEFAULT 0,
+                   dimensions_json TEXT NOT NULL DEFAULT '{}',
+                   objective_json TEXT NOT NULL DEFAULT '{}',
+                   report_json TEXT NOT NULL DEFAULT '{}',
+                   created_at TEXT NOT NULL,
+                   FOREIGN KEY (id) REFERENCES sessions(id) ON DELETE CASCADE
+                 ) STRICT;
+                 INSERT INTO sessions(id, status, role_profile_id, voice_route_id, transport_mode, updated_at)
+                 VALUES ('sess-keep', 'completed', 'role-1', 'route-1', 'direct', '2026-10-01T00:00:00Z');
+                 INSERT INTO sessions(id, status, role_profile_id, voice_route_id, transport_mode, updated_at)
+                 VALUES ('sess-p', 'completed', 'role-1', 'route-1', 'direct', '2026-10-01T00:00:00Z');
+                 INSERT INTO practice_plans(id, title, questions_json, created_at, updated_at)
+                 VALUES ('plan-1', '后端工程师', '[]', '2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z');
+                 INSERT INTO practice_reports(id, plan_id, total_score, created_at)
+                 VALUES ('sess-p', 'plan-1', 4.0, '2026-10-01T00:00:00Z');
+                 INSERT INTO session_events(session_id, seq, kind, payload, created_at)
+                 VALUES ('sess-keep', 0, 'transcript', '{}', '2026-10-01T00:00:00Z');
+                 DELETE FROM schema_migrations WHERE version = 10;",
             )
         })
         .unwrap();
-    assert_eq!(orphans, 0);
+    drop(database);
 
-    // 事件 kind 白名单纳入 practice_meta。
-    database
-        .execute_batch(
-            "INSERT INTO sessions(id, status, role_profile_id, voice_route_id, transport_mode, updated_at)
-             VALUES ('sess-q', 'completed', 'role-1', 'route-1', 'direct', '2026-10-01T00:00:00Z');
-             INSERT INTO session_events(session_id, seq, kind, payload, created_at)
-             VALUES ('sess-q', 0, 'practice_meta', '{}', '2026-10-01T00:00:00Z');",
-        )
+    // 重新打开并迁移：0010 应删除训练表、保留其它数据。
+    let database = Database::open(directory.path().join("app.sqlite3")).unwrap();
+    database.migrate().unwrap();
+    assert_eq!(database.schema_version().unwrap(), LATEST_SCHEMA_VERSION);
+    let plans = database
+        .query_strings("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'practice_plans'")
         .unwrap();
-    assert!(
-        database
-            .execute_batch(
-                "INSERT INTO session_events(session_id, seq, kind, payload, created_at)
-             VALUES ('sess-q', 1, 'unknown_kind', '{}', '2026-10-01T00:00:00Z');"
-            )
-            .is_err()
-    );
+    let reports = database
+        .query_strings("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'practice_reports'")
+        .unwrap();
+    assert!(plans.is_empty() && reports.is_empty());
+    let kept_sessions = database
+        .query_strings("SELECT id FROM sessions ORDER BY id")
+        .unwrap();
+    assert_eq!(kept_sessions, vec!["sess-keep".to_owned(), "sess-p".to_owned()]);
+    let events = database.query_strings("SELECT kind FROM session_events").unwrap();
+    assert_eq!(events, vec!["transcript".to_owned()]);
+    assert_eq!(database.integrity_check().unwrap(), "ok");
 }

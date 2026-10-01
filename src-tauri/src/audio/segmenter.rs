@@ -287,7 +287,7 @@ mod tests {
     }
 
     /// 话轮长度必须逐帧精确：预卷 10 帧（含激活前 7 静音 + 前 3 有声）
-    /// + 激活后 9 有声 + 35 静音 = 54 帧。这是起点去抖（voiced_run 达到
+    /// 再加激活后 9 有声 + 35 静音 = 54 帧。这是起点去抖（voiced_run 达到
     /// START_FRAMES 才激活）、预卷上限截断与激活时序的唯一长度观测面。
     #[test]
     fn utterance_length_is_exact_preroll_plus_speech() {

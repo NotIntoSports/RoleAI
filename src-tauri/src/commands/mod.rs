@@ -27,11 +27,6 @@ use crate::{
         VideoFrameAcceptance,
     },
     error::PublicError,
-    practice::{
-        PracticeDimensions, PracticePlan, PracticePlanGenerateInput, PracticePlanSummary,
-        PracticeProgress, PracticeQuestionReview, PracticeReport, PracticeReportSummary,
-        PracticeSessionStartInput,
-    },
     providers::{
         ChatMessage, ChatModel, OpenAiCompatibleCascade, OpenAiCompatibleEmbeddingProbe,
         OpenAiCompatibleProbe, OpenAiCompatibleRealtime, ProviderEndpoint, StandardRouteProbe,
@@ -164,8 +159,6 @@ mod sessions;
 pub use self::sessions::*;
 mod livestream;
 pub use self::livestream::*;
-mod practice;
-pub use self::practice::*;
 mod obs;
 pub use self::obs::*;
 mod voice;

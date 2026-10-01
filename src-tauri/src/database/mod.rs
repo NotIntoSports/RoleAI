@@ -36,6 +36,10 @@ const MIGRATIONS: &[(i64, &str)] = &[
         include_str!("../../migrations/0008_voice_reference_target_model.sql"),
     ),
     (9, include_str!("../../migrations/0009_practice.sql")),
+    (
+        10,
+        include_str!("../../migrations/0010_remove_practice.sql"),
+    ),
 ];
 const LATEST_SCHEMA_VERSION: i64 = MIGRATIONS[MIGRATIONS.len() - 1].0;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
