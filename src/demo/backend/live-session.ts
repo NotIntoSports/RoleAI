@@ -8,7 +8,13 @@ import type { RuntimeStatus, TurnLatencyView, TurnTimeline } from "../../generat
 
 import { demoT } from "./demo-text";
 import type { DemoScript, DemoScriptTurn } from "./scripts";
-import { cancelDemoVoice, isDemoVoiceEnabled, speakDemoText } from "./demo-voice";
+import {
+  scriptLineKey,
+  startDemoLine,
+  stopDemoVoice,
+  tailLineKey,
+  type DemoVoiceLine,
+} from "./demo-voice";
 
 const DEMO_ROUTE_ID = "route-demo-realtime";
 
@@ -98,6 +104,8 @@ export interface LivePersistence {
 interface LiveTurn {
   userText: string;
   assistantText: string;
+  /** 本轮 AI 回答对应的演示音频键（重答时重新播放）。 */
+  voiceKey?: string;
   citations?: Array<{ materialId: string; chunkId: string; snippet: string }>;
   materialsUsed?: boolean;
 }
@@ -163,9 +171,9 @@ export class ScriptedLiveSession {
     void (async () => {
       await this.emitStatus("listening");
       await this.sleep(OPENING_DELAY_MS);
-      for (const turn of this.script.turns) {
+      for (const [index, turn] of this.script.turns.entries()) {
         if (this.disposed) return;
-        await this.enqueue(() => this.runScriptedTurn(turn));
+        await this.enqueue(() => this.runScriptedTurn(turn, index + 1));
       }
     })().catch(() => {
       /* 时间线绝不抛未捕获异常 */
@@ -182,7 +190,7 @@ export class ScriptedLiveSession {
   setMode(mode: string): void {
     this.mode = mode;
     if (mode !== "ai_active") {
-      cancelDemoVoice();
+      stopDemoVoice();
       this.paused = true;
     } else {
       this.paused = false;
@@ -193,7 +201,7 @@ export class ScriptedLiveSession {
   stop(): void {
     if (this.disposed) return;
     this.disposed = true;
-    cancelDemoVoice();
+    stopDemoVoice();
     for (const cancel of [...this.timerCancels]) cancel();
     this.timerCancels.clear();
     this.paused = false;
@@ -213,7 +221,7 @@ export class ScriptedLiveSession {
     });
   }
 
-  /** 重答：把上一条用户发言的回答重新流式输出一遍。 */
+  /** 重答：把上一条用户发言的回答重新流式输出一遍（同样配音）。 */
   retryLast(): void {
     if (!this.lastTurn || this.disposed) return;
     void this.enqueue(async () => {
@@ -221,13 +229,16 @@ export class ScriptedLiveSession {
       const retry: LiveTurn = { ...this.lastTurn };
       this.liveTimeline = emptyTimeline();
       this.liveInterrupted = false;
+      const line = retry.voiceKey ? startDemoLine(retry.voiceKey) : null;
+      const paced = line ? await line.ready : null;
       await this.emitStatus("thinking");
       this.liveTimeline.responseCreatedMs = this.elapsedMs();
       await this.pauseBetween(this.randMs(THINKING_MS));
       if (this.disposed) return;
       await this.emitStatus("speaking");
-      await this.streamReplyChunks(retry, retry.assistantText || demoT().live.retryFallback, null);
+      await this.streamReplyChunks(retry, retry.assistantText || demoT().live.retryFallback, null, this.chunkDelay(paced, (retry.assistantText || "").length, REPLY_CHUNK_MS));
       if (this.disposed) return;
+      if (line) await line.done;
       await this.emitStatus("listening");
     });
   }
@@ -291,13 +302,23 @@ export class ScriptedLiveSession {
     await this.gate();
   }
 
-  /** 用户发言：转写逐字上屏 → 落库 → done。 */
-  private async runUserSpeech(userText: string): Promise<void> {
+  /**
+   * 按音频时长缩放字幕节奏，使字幕与语音同步结束；拿不到时长（无声音/元数据缺失）
+   * 时退回原有随机节奏。per-chunk 夹在 15–400ms。
+   */
+  private chunkDelay(paced: number | null, chunkCount: number, fallback: [number, number]): number {
+    if (paced === null || chunkCount <= 0) return this.randMs(fallback);
+    return Math.min(400, Math.max(15, paced / chunkCount));
+  }
+
+  /** 用户发言：转写逐字上屏 → 落库 → done。有配音时节奏跟随音频，播完再继续。 */
+  private async runUserSpeech(userText: string, line: DemoVoiceLine | null = null): Promise<void> {
     await this.emitStatus("listening");
     this.liveTimeline = emptyTimeline();
     this.liveInterrupted = false;
     this.liveTimeline.speechStartedMs = this.elapsedMs();
     const chunks = chunkText(userText);
+    const paced = line ? await line.ready : null;
     let emitted = "";
     for (const chunk of chunks) {
       emitted += chunk;
@@ -307,7 +328,7 @@ export class ScriptedLiveSession {
         text: emitted,
         done: false,
       });
-      await this.pauseBetween(this.randMs(USER_CHUNK_MS));
+      await this.pauseBetween(this.chunkDelay(paced, chunks.length, USER_CHUNK_MS));
       if (this.disposed) return;
     }
     this.liveTimeline.speechStoppedMs = this.elapsedMs();
@@ -320,35 +341,46 @@ export class ScriptedLiveSession {
       text: emitted,
       done: true,
     });
+    // 字幕先完成时等语音自然结束，避免 AI 回答叠在用户语音上。
+    if (line) await line.done;
   }
 
   /** 一轮完整脚本：用户发言 → 思考 → 回答（第 3 轮可被打断）。 */
-  private async runScriptedTurn(turn: DemoScriptTurn): Promise<void> {
+  private async runScriptedTurn(turn: DemoScriptTurn, turnIndex: number): Promise<void> {
     await this.gate();
     if (this.disposed) return;
-    await this.runUserSpeech(turn.userText);
+    const userLine = startDemoLine(scriptLineKey(this.script.id, turnIndex, "user"));
+    await this.runUserSpeech(turn.userText, userLine);
     if (this.disposed) return;
     await this.emitStatus("thinking");
     this.liveTimeline.responseCreatedMs = this.elapsedMs();
     await this.pauseBetween(this.randMs(THINKING_MS));
     if (this.disposed) return;
     await this.emitStatus("speaking");
+    const voiceKey = scriptLineKey(this.script.id, turnIndex, "ai");
+    const replyLine = startDemoLine(voiceKey);
+    const paced = replyLine ? await replyLine.ready : null;
     const pending: LiveTurn = {
       userText: turn.userText,
       assistantText: "",
+      voiceKey,
       materialsUsed: turn.materialsUsed,
       citations: turn.citations?.map((citation, index) => ({
         ...citation,
         chunkId: `${citation.materialId}-live-${index}`,
       })),
     };
-    if (isDemoVoiceEnabled()) speakDemoText(turn.replyText);
     const cut = turn.interruptAfterChars ?? null;
-    const streamed = await this.streamReplyChunks(pending, turn.replyText, cut);
+    const streamed = await this.streamReplyChunks(
+      pending,
+      turn.replyText,
+      cut,
+      this.chunkDelay(paced, chunkText(turn.replyText).length, REPLY_CHUNK_MS),
+    );
     if (cut !== null && streamed.length < turn.replyText.length) {
-      // 用户打断：清播放队列、回聆听态；截断的回答已由 streamReplyChunks 落库，
+      // 用户打断：停掉语音、清播放队列、回聆听态；截断的回答已由 streamReplyChunks 落库，
       // interrupted 标注同样由 streamReplyChunks 在快照前写入。
-      cancelDemoVoice();
+      stopDemoVoice();
       this.playbackSeq += 1;
       await this.emitEvent("session:playback-control:v1", {
         seq: this.playbackSeq,
@@ -358,6 +390,7 @@ export class ScriptedLiveSession {
       await this.pauseBetween(INTERRUPT_GAP_MS);
       return;
     }
+    if (replyLine) await replyLine.done;
     await this.emitStatus("listening");
     await this.pauseBetween(TURN_GAP_MS);
   }
@@ -365,26 +398,42 @@ export class ScriptedLiveSession {
   /** 用户文字插话：落库并回答（脚本耗尽后用兜底回复）。 */
   private async runUserTurn(text: string): Promise<void> {
     const tail = demoT().live.tailReplies;
-    const reply = tail[this.tailCursor % tail.length];
+    const tailIndex = this.tailCursor % tail.length;
+    const reply = tail[tailIndex];
     this.tailCursor += 1;
     await this.runUserSpeech(text);
     if (this.disposed) return;
+    // 用户说完再起播回答音频（元数据等待与思考停顿重叠，避免可感知延迟）。
+    const voiceKey = tailLineKey(tailIndex + 1);
+    const replyLine = startDemoLine(voiceKey);
+    const paced = replyLine ? await replyLine.ready : null;
     await this.emitStatus("thinking");
     this.liveTimeline.responseCreatedMs = this.elapsedMs();
     await this.pauseBetween(this.randMs(THINKING_MS));
     if (this.disposed) return;
     await this.emitStatus("speaking");
-    if (isDemoVoiceEnabled()) speakDemoText(reply);
-    await this.streamReplyChunks({ userText: text, assistantText: "" }, reply, null);
+    await this.streamReplyChunks(
+      { userText: text, assistantText: "", voiceKey },
+      reply,
+      null,
+      this.chunkDelay(paced, chunkText(reply).length, REPLY_CHUNK_MS),
+    );
     if (this.disposed) return;
+    if (replyLine) await replyLine.done;
     await this.emitStatus("listening");
   }
 
   /**
    * 回答流式上屏；完成后把全文写入 pending 并落库（done）。
    * cutAfterChars 非空时在截断点停止（打断演示），落库文本为截断内容。
+   * paceMs 为每块延迟（配音时按音频时长缩放），缺省用原有随机节奏。
    */
-  private async streamReplyChunks(pending: LiveTurn, replyText: string, cutAfterChars: number | null): Promise<string> {
+  private async streamReplyChunks(
+    pending: LiveTurn,
+    replyText: string,
+    cutAfterChars: number | null,
+    paceMs?: number,
+  ): Promise<string> {
     const chunks = chunkText(replyText);
     let emitted = "";
     let cutShort = false;
@@ -405,7 +454,7 @@ export class ScriptedLiveSession {
         text: emitted,
         done: false,
       });
-      await this.pauseBetween(this.randMs(REPLY_CHUNK_MS));
+      await this.pauseBetween(paceMs ?? this.randMs(REPLY_CHUNK_MS));
       if (this.disposed) return emitted;
     }
     if (!cutShort) {

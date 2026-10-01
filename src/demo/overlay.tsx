@@ -14,12 +14,12 @@ const ONBOARDING_KEY = "roleai.demo.onboarded";
 const GUIDE_STEPS = {
   "zh-CN": [
     { title: "选一个角色", detail: "工作台左下角可切换角色：严苛面试官、表达教练、会议助手、直播讲解员、辩论陪练、英语口语陪练等 8 个角色。" },
-    { title: "开始会话", detail: "点击“开始会话”，演示会自动播放一段脚本对话：字幕逐字出现、AI 流式回答，第 3 轮会演示打断。" },
+    { title: "开始会话", detail: "点击“开始会话”，演示会自动播放一段脚本对话：字幕逐字出现、AI 流式回答，全程真人音色配音（默认开启，可在顶部横幅关闭），第 3 轮会演示打断。" },
     { title: "回看记录", detail: "结束会话后到“记录”页回看对话、导出 Markdown；资料与服务页都可以随便点，数据均为虚构。" },
   ],
   en: [
     { title: "Pick a role", detail: "Switch roles from the bottom-left of the workspace: strict interviewer, expression coach, meeting assistant, live presenter, debate partner, and more — 8 in total." },
-    { title: "Start a session", detail: "Click \"Start session\" and the demo plays a scripted conversation: captions appear word by word, the AI streams its reply, and turn 3 demos an interruption." },
+    { title: "Start a session", detail: "Click \"Start session\" and the demo plays a scripted conversation: captions appear word by word, the AI streams its reply, all narrated with human-like voices (on by default, toggle in the banner). Turn 3 demos an interruption." },
     { title: "Review records", detail: "End the session, then review the conversation and export Markdown on the Records page. Materials and Services are safe to explore — all data is fictional." },
   ],
 };
@@ -30,7 +30,7 @@ const COPY = {
     bannerLead: "在线演示",
     bannerText: "：所有数据均为虚构，未连接任何 AI 服务。",
     download: "下载桌面版体验真实语音对话 →",
-    voiceToggle: "朗读 AI 回答（浏览器语音）",
+    voiceToggle: "演示语音（默认开启）",
     guideAria: "在线演示引导",
     guideHeading: "三步玩转在线演示",
     skip: "跳过引导",
@@ -42,7 +42,7 @@ const COPY = {
     bannerLead: "Online demo",
     bannerText: ": all data is fictional; no AI service is connected.",
     download: "Download the desktop app for real voice conversations →",
-    voiceToggle: "Read AI replies aloud (browser speech)",
+    voiceToggle: "Demo voice (on by default)",
     guideAria: "Online demo guide",
     guideHeading: "Three steps to try the demo",
     skip: "Skip the guide",

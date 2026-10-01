@@ -47,6 +47,8 @@ test("first visit shows onboarding, and all six pages open", async ({ page }) =>
 });
 
 test("runs one full scripted session, then sees it in records", async ({ page }) => {
+  // 配音后整段脚本按真实语速播放（约 100 秒），放宽本用例总超时。
+  test.setTimeout(300_000);
   await open(page, "#/workspace");
   await dismissGuideIfVisible(page);
   // 横幅在页面上（截图之外的常规 UX 的一部分）。
@@ -62,12 +64,13 @@ test("runs one full scripted session, then sees it in records", async ({ page })
     page.getByText("已读回执你们是怎么存储的", { exact: false }).first(),
   ).toBeVisible({ timeout: 30_000 });
   // 第 3 轮打断后的追问也播出来，证明打断演示完成。
+  // 配音后前两轮就要 ~55 秒，该行出现在 ~75 秒，宽放到 150 秒。
   await expect(page.getByText("不好意思打断一下", { exact: false }).first()).toBeVisible({
-    timeout: 60_000,
+    timeout: 150_000,
   });
   // 收尾轮（脚本第 4 轮回答）播完。
   await expect(page.getByText("主动打断并给出自己的论据", { exact: false }).first()).toBeVisible({
-    timeout: 30_000,
+    timeout: 90_000,
   });
 
   await page.getByRole("button", { name: "结束通话" }).click();

@@ -46,13 +46,16 @@ describe("DemoOverlay", () => {
     expect(window.localStorage.getItem("roleai.demo.onboarded")).toBe("1");
   });
 
-  it("persists the browser-speech toggle through the demo-voice storage", () => {
+  it("persists the demo-voice toggle: on by default, explicit off stores 0", () => {
     render(<DemoOverlay><div>app</div></DemoOverlay>);
-    const toggle = screen.getByRole("checkbox", { name: /朗读 AI 回答/ }) as HTMLInputElement;
-    expect(toggle.checked).toBe(false);
+    const toggle = screen.getByRole("checkbox", { name: /演示语音/ }) as HTMLInputElement;
+    // 默认开启：无需任何存储标记。
+    expect(toggle.checked).toBe(true);
+    expect(window.localStorage.getItem("roleai.demo.voice")).toBeNull();
     fireEvent.click(toggle);
-    expect(window.localStorage.getItem("roleai.demo.voice")).toBe("1");
+    expect(window.localStorage.getItem("roleai.demo.voice")).toBe("0");
     fireEvent.click(toggle);
+    // 重新打开即回到默认态（清除显式关闭标记）。
     expect(window.localStorage.getItem("roleai.demo.voice")).toBeNull();
   });
 });

@@ -4,3 +4,6 @@ src-tauri/tests/fixtures/materials/*.pdf -text
 src-tauri/tests/fixtures/materials/*.docx -text
 src-tauri/tests/fixtures/materials/*.doc -text
 *.pdf -text
+
+# 演示语音 mp3 是二进制产物，禁止任何换行符改写
+*.mp3 -text

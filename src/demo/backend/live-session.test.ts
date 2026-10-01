@@ -3,6 +3,21 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 
 import type { CommandResult, SessionStartResult } from "../../generated/bindings";
 
+import type { DemoVoiceLine } from "./demo-voice";
+
+const { startDemoLineMock, stopDemoVoiceMock } = vi.hoisted(() => ({
+  startDemoLineMock: vi.fn<(key: string) => DemoVoiceLine | null>(() => null),
+  stopDemoVoiceMock: vi.fn(() => undefined),
+}));
+
+// 语音模块整体打桩：默认无声（时间线与旧版一致）；音频驱动用例注入假台词行。
+vi.mock("./demo-voice", () => ({
+  scriptLineKey: (scriptId: string, turnIndex: number, side: string) => `${scriptId}.t${turnIndex}.${side}`,
+  tailLineKey: (index: number) => `tail.${index}`,
+  startDemoLine: (key: string) => startDemoLineMock(key),
+  stopDemoVoice: () => stopDemoVoiceMock(),
+}));
+
 import { chunkText, ScriptedLiveSession, type LivePersistence } from "./live-session";
 import { handleDemoInvoke } from "./index";
 import {
@@ -56,6 +71,8 @@ beforeEach(() => {
   vi.useFakeTimers();
   window.localStorage.clear();
   resetDemoState();
+  startDemoLineMock.mockReset().mockImplementation(() => null);
+  stopDemoVoiceMock.mockClear();
 });
 
 afterEach(() => {
@@ -123,6 +140,65 @@ describe("ScriptedLiveSession", () => {
     expect([...replySeqs].sort((a, b) => a - b)).toEqual(replySeqs);
     expect(live.getStatus().phase).toBe("listening");
     expect(live.getStatus().realtimeStatus).toBe("connected");
+  });
+
+  it("paces captions to the voice duration and waits for playback between lines", async () => {
+    const events: Array<{ event: string; payload: Record<string, unknown>; at: number }> = [];
+    const emit = (event: string, payload: unknown) => {
+      events.push({ event, payload: payload as Record<string, unknown>, at: Date.now() });
+    };
+    const session = createLiveSession("preset-strict-interviewer", "realtime-e2e");
+    // 用户/AI 行各 1600ms：4 块 → 400ms/块（节奏上限 400ms/块，短音频下字幕与语音严格同步）。
+    startDemoLineMock.mockImplementation((key: string) => {
+      if (key === "interview-strict.t1.user") return { ready: Promise.resolve(1600), done: Promise.resolve() };
+      if (key === "interview-strict.t1.ai") return { ready: Promise.resolve(1600), done: Promise.resolve() };
+      return null;
+    });
+    const live = new ScriptedLiveSession(
+      session.id,
+      { id: "interview-strict", turns: [{ userText: "你好世界测试用例", replyText: "好的收到没问题啊" }] },
+      { emitEvent: emit, random: () => 0.5 },
+      REAL_PERSISTENCE,
+    );
+    const startedAt = Date.now();
+    live.begin();
+    await driveUntil(() => {
+      const turns = getState().sessionTurns[session.id] ?? [];
+      return turns.length === 1 && turns[0].assistantText === "好的收到没问题啊";
+    });
+
+    // 用户字幕跟随音频：4×400ms + 700ms 开场 ≈ 2300ms，远慢于旧文字节奏（~1060ms）。
+    const transcriptDoneAt = events.find(
+      (e) => e.event === "session:transcript:v1" && e.payload.done,
+    )!.at;
+    expect(transcriptDoneAt - startedAt).toBeGreaterThanOrEqual(1800);
+    // AI 回答等待语音播完：700 + 1600 + 思考 675 + 1600 ≈ 4575ms。
+    const replyDoneAt = events.find((e) => e.event === "session:reply:v1" && e.payload.done)!.at;
+    expect(replyDoneAt - startedAt).toBeGreaterThanOrEqual(4400);
+    expect(startDemoLineMock).toHaveBeenNthCalledWith(1, "interview-strict.t1.user");
+    expect(startDemoLineMock).toHaveBeenNthCalledWith(2, "interview-strict.t1.ai");
+    expect(stopDemoVoiceMock).not.toHaveBeenCalled();
+  });
+
+  it("stops voice playback when the scripted interrupt lands", async () => {
+    const events: DemoEvent[] = [];
+    const session = createLiveSession("preset-strict-interviewer", "realtime-e2e");
+    // ready=null（退回文字节奏）、done 永不 resolve（模拟音频仍在播放）。
+    startDemoLineMock.mockImplementation((key: string) =>
+      key === "interrupt-demo.t1.ai" ? { ready: Promise.resolve(null), done: new Promise<void>(() => undefined) } : null,
+    );
+    const live = new ScriptedLiveSession(
+      session.id,
+      { id: "interrupt-demo", turns: [{ userText: "你好世界", replyText: "好的收到我们继续往下讲", interruptAfterChars: 5 }] },
+      { emitEvent: collectedEmitter(events), random: () => 0.5 },
+      REAL_PERSISTENCE,
+    );
+    live.begin();
+    await driveUntil(() =>
+      events.some((e) => e.event === "session:playback-control:v1" && (e.payload as { action: string }).action === "clear"),
+    );
+    expect(stopDemoVoiceMock).toHaveBeenCalled();
+    live.stop();
   });
 
   it("cuts the reply and clears playback when the turn demonstrates a barge-in", async () => {

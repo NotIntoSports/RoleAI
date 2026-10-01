@@ -19,7 +19,8 @@
     "test:e2e:desktop": "node e2e/desktop/wd-smoke.mjs",
     "test:e2e:desktop:main": "node e2e/desktop/main-flow.mjs",
     "screenshots": "node scripts/screenshots.mjs",
-    "demo:video": "node scripts/demo-video.mjs"
+    "demo:video": "node scripts/demo-video.mjs",
+    "demo:voice:gen": "node scripts/generate-demo-voice.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "2.11.1",
@@ -41,6 +42,7 @@
     "@vitejs/plugin-react": "6.1.1",
     "@vitest/coverage-v8": "5.0.0",
     "jsdom": "29.0.0",
+    "msedge-tts": "^2.0.8",
     "selenium-webdriver": "4.49.0",
     "typescript": "5.8.3",
     "vite": "8.2.2",
