@@ -688,17 +688,31 @@ impl RegistryView {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
+    /// 这批测试各自拉起真实的 powershell.exe。coverage 插桩下全量并行时，
+    /// 多个 5.1 冷启动（.NET JIT + Defender 扫描）叠加曾把单个启动拖过 30s
+    /// （CI 观测 4 个同时超时、套件整体翻倍），这里串行化消掉互踩。
+    static POWERSHELL_LAUNCH: Mutex<()> = Mutex::new(());
+
+    /// 串行化后单个冷启动仍可能远超常规秒级，给足余量；
+    /// 正常情况下脚本秒级退出，只有真异常才烧满。
+    fn launch_lock() -> std::sync::MutexGuard<'static, ()> {
+        POWERSHELL_LAUNCH
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     #[test]
     #[cfg(windows)]
     fn preparation_reports_only_allowed_phases_and_times_out() {
+        let _serial = launch_lock();
         let directory = tempfile::tempdir().unwrap();
         let script = directory.path().join("phases.ps1");
         std::fs::write(&script, "Write-Output '{\"phase\":\"verifying\"}'; Write-Output '{\"phase\":\"private-data\"}'; Write-Output '{\"phase\":\"installing\"}'; Start-Sleep -Seconds 120").unwrap();
         let mut phases = Vec::new();
-        // 30s: powershell.exe cold start under full-suite parallel load has been
-        // observed to exceed 5s on CI runners (Defender scan + .NET JIT); the
-        // script keeps sleeping for 120s so the timeout still fires after every
-        // phase has been emitted.
+        // 30s：脚本睡 120s，超时必然先于脚本自然退出触发，且保证所有
+        // phase 行都已发出后被截断（private-data 被过滤是断言的一部分）。
         let result = super::run_preparation_script(
             &script,
             &[],
@@ -716,6 +730,7 @@ mod tests {
     #[test]
     #[cfg(windows)]
     fn oversized_installer_output_is_rejected() {
+        let _serial = launch_lock();
         let directory = tempfile::tempdir().unwrap();
         let script = directory.path().join("huge.ps1");
         std::fs::write(
@@ -724,7 +739,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            super::run_script_success_bounded(&script, &[], std::time::Duration::from_secs(30))
+            super::run_script_success_bounded(&script, &[], std::time::Duration::from_secs(60))
                 .unwrap_err(),
             "PREREQUISITE_OUTPUT_TOO_LARGE"
         );
@@ -733,6 +748,7 @@ mod tests {
     #[test]
     #[cfg(windows)]
     fn timeout_then_live_worker_lock_blocks_reentry() {
+        let _serial = launch_lock();
         use std::io::Read;
         let directory = tempfile::tempdir().unwrap();
         let hang = directory.path().join("hang.ps1");
@@ -863,11 +879,12 @@ mod tests {
     #[test]
     #[cfg(windows)]
     fn installer_preserves_nonzero_structured_error() {
+        let _serial = launch_lock();
         let directory = tempfile::tempdir().unwrap();
         let script = directory.path().join("安装 diagnostic.ps1");
         std::fs::write(&script, "Write-Output '{\"installed\":false,\"errorCode\":\"PREREQUISITE_UAC_CANCELLED\"}'; exit 1").unwrap();
         assert_eq!(
-            super::run_script_bounded(&script, &[], std::time::Duration::from_secs(30))
+            super::run_script_bounded(&script, &[], std::time::Duration::from_secs(60))
                 .unwrap_err(),
             "PREREQUISITE_UAC_CANCELLED"
         );
@@ -876,11 +893,12 @@ mod tests {
     #[test]
     #[cfg(windows)]
     fn installer_preserves_download_error_from_stderr() {
+        let _serial = launch_lock();
         let directory = tempfile::tempdir().unwrap();
         let script = directory.path().join("fetch.ps1");
         std::fs::write(&script, "[Console]::Error.WriteLine('PREREQUISITE_HASH_MISMATCH: private path must not escape'); exit 1").unwrap();
         assert_eq!(
-            super::run_script_success_bounded(&script, &[], std::time::Duration::from_secs(30))
+            super::run_script_success_bounded(&script, &[], std::time::Duration::from_secs(60))
                 .unwrap_err(),
             "PREREQUISITE_HASH_MISMATCH"
         );
