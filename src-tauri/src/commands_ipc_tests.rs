@@ -143,7 +143,7 @@ fn slow_model_ipc_allows_takeover_and_stop_before_the_model_returns() {
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
     let server = std::thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(15);
         let mut socket = loop {
             match listener.accept() {
                 Ok((socket, _)) => break socket,
@@ -261,7 +261,9 @@ fn slow_model_ipc_allows_takeover_and_stop_before_the_model_returns() {
     turn.join().unwrap();
     let listener = server.join().unwrap();
     assert!(
-        elapsed < Duration::from_millis(2_000),
+        elapsed < Duration::from_millis(4_000),
+        // 验收线 500ms→2s（5b2b75c）→4s：coverage 插桩满载下两次实测
+        // 674ms、2.1008s；真阻塞会等满模型请求或挂到 recv 15s 预算。
         "control IPC blocked for {elapsed:?}"
     );
     assert!(
@@ -292,7 +294,7 @@ fn slow_model_ipc_allows_stop_and_read_commands_while_finalize_is_inflight() {
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
     let server = std::thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(15);
         let mut socket = loop {
             match listener.accept() {
                 Ok((socket, _)) => {
@@ -509,7 +511,7 @@ fn slow_llm_server() -> (
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
     let server = std::thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(15);
         let mut socket = loop {
             match listener.accept() {
                 Ok((socket, _)) => break socket,
@@ -563,7 +565,8 @@ fn slow_llm_server() -> (
                         // 同上：恢复阻塞模式，避免数据未到时 read_line 立即
                         // WouldBlock 被当成断连而跳过应答。
                         sock.set_nonblocking(false).unwrap();
-                        sock.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                        sock.set_read_timeout(Some(Duration::from_secs(15)))
+                            .unwrap();
                         let mut reader = BufReader::new(sock.try_clone().unwrap());
                         let mut request_line = String::new();
                         if matches!(reader.read_line(&mut request_line), Ok(0) | Err(_)) {
