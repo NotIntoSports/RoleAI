@@ -472,8 +472,8 @@ pub(super) fn run_e2e_turn(
     })
 }
 
-/// 端到端线路的会话指令：角色提示词 + 风格说明 +（点名规则的会议场景固定段）
-/// + 资料引用。会议点名门控由泵与 finalize 的 mention 判定在协议层保证，
+/// 端到端线路的会话指令：角色提示词、风格说明、点名规则的会议场景固定段、
+/// 资料引用。会议点名门控由泵与 finalize 的 mention 判定在协议层保证，
 /// 这里的固定段只影响被点名后的回应行为（知道自己的名字、不抢答不闲聊）。
 pub(crate) fn e2e_instructions(
     role: Option<&crate::config::RoleProfileConfig>,
