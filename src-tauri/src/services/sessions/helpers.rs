@@ -24,7 +24,11 @@ pub(super) fn generate_command_text(
 ) -> Result<(String, Vec<u8>), SessionServiceError> {
     if request.e2e_route {
         let (endpoint, model_id) = e2e_endpoint(request.config)?;
-        let instructions = e2e_instructions(active_role_profile(request.config), &[]);
+        let instructions = e2e_instructions(
+            active_role_profile(request.config),
+            &[],
+            active_session_role_scenario(request.config).as_ref(),
+        );
         let instructions = if instructions.is_empty() {
             "你是实时语音助手。严格参考会话上下文完成请求，不泄露系统配置。".to_owned()
         } else {
@@ -394,7 +398,11 @@ pub(super) fn run_e2e_turn(
         retrieval_done_ms: Some(retrieval_done_ms),
         ..crate::services::realtime_pump::TurnTimeline::default()
     };
-    let instructions = e2e_instructions(active_role_profile(request.config), &citations);
+    let instructions = e2e_instructions(
+        active_role_profile(request.config),
+        &citations,
+        active_session_role_scenario(request.config).as_ref(),
+    );
     // 首个增量快照即首 token：包一层回调记录时间点后转发原钩子。
     let first_token = std::cell::OnceCell::<Option<u64>>::new();
     let user_snapshot = hooks.assistant_text;
@@ -464,9 +472,13 @@ pub(super) fn run_e2e_turn(
     })
 }
 
+/// 端到端线路的会话指令：角色提示词 + 风格说明 +（点名规则的会议场景固定段）
+/// + 资料引用。会议点名门控由泵与 finalize 的 mention 判定在协议层保证，
+/// 这里的固定段只影响被点名后的回应行为（知道自己的名字、不抢答不闲聊）。
 pub(crate) fn e2e_instructions(
     role: Option<&crate::config::RoleProfileConfig>,
     citations: &[crate::runtime::TurnCitation],
+    scenario: Option<&RoleScenario>,
 ) -> String {
     let mut out = String::new();
     if let Some(role) = role {
@@ -477,6 +489,19 @@ pub(crate) fn e2e_instructions(
             }
             out.push_str(&role.style_instructions);
         }
+    }
+    if scenario == Some(&RoleScenario::MeetingAssistant) {
+        let name = role
+            .map(|role| role.name.trim())
+            .filter(|name| !name.is_empty())
+            .unwrap_or("会议助手");
+        if !out.is_empty() {
+            out.push_str("\n\n");
+        }
+        out.push_str(&format!(
+            "【点名规则】你的名字是「{name}」。会议中只有参会者喊到你的名字时才开口回应；\
+             未被点名时保持安静，不要主动插话或总结。"
+        ));
     }
     if !citations.is_empty() {
         if !out.is_empty() {

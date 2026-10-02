@@ -248,11 +248,6 @@ description = "Allows executing say, retry, correct, or report on the active ses
 commands.allow = ["session_agent_command"]
 
 [[permission]]
-identifier = "allow-session-trigger-assistant"
-description = "Allows an explicit user shortcut to answer from the active meeting audio buffer."
-commands.allow = ["session_trigger_assistant"]
-
-[[permission]]
 identifier = "allow-runtime-get-status"
 description = "Allows reading the current cascade runtime phase and mode."
 commands.allow = ["runtime_get_status"]

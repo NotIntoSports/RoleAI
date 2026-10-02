@@ -27,7 +27,6 @@ vi.mock("../../api/commands", async (importOriginal) => ({
   getRuntimeStatus: vi.fn(),
   getSession: vi.fn(),
   finalizeSessionUtterance: vi.fn(),
-  triggerMeetingAssistant: vi.fn(),
   sessionAgentCommand: vi.fn(),
   isSessionAudioReady: vi.fn(),
   pushMicPcm: vi.fn(),
@@ -137,7 +136,6 @@ describe("WorkspaceSession", () => {
       ok: true,
       data: turn(),
     });
-    vi.mocked(commands.triggerMeetingAssistant).mockResolvedValue({ ok: true, data: turn() });
     vi.mocked(commands.sessionAgentCommand).mockResolvedValue({
       ok: true,
       data: commandResult(),
@@ -232,30 +230,11 @@ describe("WorkspaceSession", () => {
     expect(document.body.textContent).not.toContain("raw backend text");
   });
 
-  it("answers once when the Rust global-hotkey event reaches an active meeting assistant", async () => {
-    const config: PublicConfig = {
-      configVersion: 1, application: { locale: null }, models: { providers: [], activeProviderId: null },
-      speech: { activeVoiceRouteId: "route-1", voiceRoutes: [{ id: "route-1", name: "测试线路", mode: "cascaded", asrProviderId: null, asrModelId: null, llmProviderId: null, llmModelId: null, ttsProviderId: null, ttsModelId: null, voiceId: null, e2eProviderId: null, e2eModelId: null, active: true, ready: true, status: null, configVersion: 1 }] },
-      knowledge: { embeddingConfigs: [], activeEmbeddingConfigId: null }, storage: { exportDirectory: null },
-      roleProfiles: [{ id: "role-1", name: "会议助手", systemPrompt: "listen", openingMessage: "", styleInstructions: "", scenario: "meetingAssistant", active: true, configVersion: 1 }],
-      activeRoleProfileId: "role-1", diagnostics: { logRetentionDays: 14 },
-    };
-    let hotkey: (() => void) | undefined;
-    const listen = vi.fn(async (event: string, handler: (payload: never) => void) => {
-      if (event === "session:assistant_hotkey:v1") hotkey = handler as () => void;
-      return () => {};
-    });
-    vi.mocked(commands.getConfigPublic).mockResolvedValue({ ok: true, data: config });
-    vi.mocked(commands.listMeetingProcesses).mockResolvedValue({ ok: true, data: [{ pid: 101, name: "zoom.exe", title: "Meeting" }] });
-    render(<WorkspaceSession listen={listen} />);
-    await screen.findByLabelText("输入来源");
-    if (screen.getByRole("button", { name: "会话配置" }).getAttribute("aria-expanded") === "false") fireEvent.click(screen.getByRole("button", { name: "会话配置" }));
-    fireEvent.change(screen.getByLabelText("输入来源"), { target: { value: "meeting" } });
-    await screen.findByRole("option", { name: /Meeting/ });
-    fireEvent.click(screen.getByRole("button", { name: "开始会话" }));
-    await waitFor(() => expect(hotkey).toBeTypeOf("function"));
-    act(() => hotkey?.());
-    await waitFor(() => expect(commands.triggerMeetingAssistant).toHaveBeenCalledTimes(1));
+  it("shows the name-gating hint outside the configuration area while a meeting assistant is active", async () => {
+    await startMeetingAssistantSession();
+    // 门控提示常驻可见，且位于「会话配置」折叠区之外；唤醒词取自角色名。
+    const hint = screen.getByText(/会议助手模式：只有喊到「会议助手」才回答/);
+    expect(hint.closest("#session-configuration")).toBeNull();
   });
 
   async function startMeetingAssistantSession() {
@@ -272,24 +251,6 @@ describe("WorkspaceSession", () => {
     vi.mocked(commands.getRuntimeStatus).mockResolvedValue({ ok: true, data: status({ phase: "listening", seq: 3 }) });
     await screen.findByText("聆听中");
   }
-
-  it("offers 让助手回答 while active and maps NOTHING_TO_ANSWER to a friendly hint", async () => {
-    await startMeetingAssistantSession();
-    // 门控提示常驻可见，且位于「会话配置」折叠区之外。
-    const hint = screen.getByText(/会议助手模式：普通讨论只转写/);
-    expect(hint.closest("#session-configuration")).toBeNull();
-    const button = (await screen.findByRole("button", { name: "让助手回答" })) as HTMLButtonElement;
-    // 还没有可追答的轮次：不点亮 pending 高亮。
-    expect(button.getAttribute("data-pending")).not.toBe("true");
-    expect(button.disabled).toBe(false);
-    vi.mocked(commands.triggerMeetingAssistant).mockResolvedValueOnce({
-      ok: false,
-      error: { code: "NOTHING_TO_ANSWER", message: "No speech is awaiting an answer", retryable: false, requestId: "t1" },
-    });
-    fireEvent.click(button);
-    await waitFor(() => expect(commands.triggerMeetingAssistant).toHaveBeenCalledTimes(1));
-    expect(await screen.findByText(/还没有可回答的发言/)).toBeTruthy();
-  });
 
   it("marks transcript-only turns as 未点名，仅转写 and hides the unused-materials note", async () => {
     const listeners: { transcript?: (payload: SessionTranscriptEvent) => void } = {};
@@ -327,14 +288,9 @@ describe("WorkspaceSession", () => {
     expect(screen.queryByText("本轮未使用资料")).toBeNull();
     // 有回答的轮不标注。
     expect(screen.getByLabelText("AI 回复 · 第 1 轮")).toBeTruthy();
-    // 最后一轮仅转写：标注旁有追答按钮，工具栏按钮点亮 pending 高亮。
+    // 仅转写标注旁不再提供追答按钮：点名作答由语音链路完成。
     const note = screen.getByLabelText("未点名仅转写 · 第 2 轮");
-    const followup = note.querySelector("button");
-    expect(followup).toBeTruthy();
-    const toolbarButton = screen.getAllByRole("button", { name: "让助手回答" })[0];
-    expect(toolbarButton.getAttribute("data-pending")).toBe("true");
-    fireEvent.click(followup as HTMLButtonElement);
-    await waitFor(() => expect(commands.triggerMeetingAssistant).toHaveBeenCalledTimes(1));
+    expect(note.querySelector("button")).toBeNull();
   });
 
   it("offers the follow-up button only on the last transcript-only turn", async () => {
@@ -361,8 +317,8 @@ describe("WorkspaceSession", () => {
     const note = screen.getByLabelText("未点名仅转写 · 第 1 轮");
     expect(note.querySelector("button")).toBeNull();
     expect(screen.queryByLabelText(/未点名仅转写 · 第 2 轮/)).toBeNull();
-    // 最后一轮已有回答：工具栏按钮不点亮 pending。
-    expect(screen.getByRole("button", { name: "让助手回答" }).getAttribute("data-pending")).not.toBe("true");
+    // 工具栏不再提供「让助手回答」按钮：点名作答由语音链路完成。
+    expect(screen.queryByRole("button", { name: "让助手回答" })).toBeNull();
   });
 
   it("does not mark transcript-only turns outside a meeting-assistant meeting session", async () => {

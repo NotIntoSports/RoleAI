@@ -1,4 +1,4 @@
-//! 单轮编排命令：收尾三阶段、强制回答、agent 指令与运行时状态（纯搬移自 sessions.rs）。
+//! 单轮编排命令：收尾三阶段、agent 指令与运行时状态（纯搬移自 sessions.rs）。
 
 use super::*;
 use crate::providers::CascadeError;
@@ -96,14 +96,7 @@ pub(in crate::commands) fn session_finalize_utterance_cmd(
     credentials: CascadeCredentials<'_>,
     text: Option<&str>,
 ) -> CommandResult<SessionTurnView> {
-    session_finalize_utterance_cmd_inner(
-        state,
-        probes,
-        credentials,
-        text,
-        false,
-        &TurnStreamHooks::none(),
-    )
+    session_finalize_utterance_cmd_inner(state, probes, credentials, text, &TurnStreamHooks::none())
 }
 
 /// 取当前会话最后一轮的视图（finalize 与强制回答共用返回结构）。
@@ -128,7 +121,6 @@ pub(in crate::commands) fn session_finalize_utterance_cmd_inner(
     probes: &SessionProbes<'_>,
     credentials: CascadeCredentials<'_>,
     text: Option<&str>,
-    force_meeting_assistant: bool,
     hooks: &TurnStreamHooks<'_>,
 ) -> CommandResult<SessionTurnView> {
     let config = match load_session_config(state) {
@@ -157,25 +149,10 @@ pub(in crate::commands) fn session_finalize_utterance_cmd_inner(
             );
         }
     };
-    if force_meeting_assistant {
-        // 端到端路线 + 会议桥接 + 泵在跑：级联 forced 分支取不到轮次（应答
-        // 由泵的点名门控决定），改为让泵对最近一条仅转写发言发起回答。回答
-        // 异步生成、由前端就绪轮询落库，这里立即返回最后一轮视图，不持
-        // sessions 锁等待——阻塞等待会占住锁并拖死就绪轮询。
-        let via_pump = active_voice_route(&config)
-            .is_some_and(|route| route.mode == crate::config::VoiceRouteMode::E2e)
-            && sessions.realtime_pump_running()
-            && sessions.capture().is_meeting_bridge();
-        if via_pump {
-            if !sessions.realtime_has_transcript_only() {
-                return session_service_error(SessionServiceError::NothingToAnswer);
-            }
-            sessions.trigger_realtime_assistant();
-            return last_session_turn_view(&sessions, &database);
-        }
-    }
     // 阶段一（持锁）：读取快照、生成本轮 id、登记收尾代次。
-    let plan = match sessions.begin_finalize(&database, &config, text, force_meeting_assistant) {
+    // 会议助手点名门控在泵（realtime_pump）与 finalize（mention 判定）内完成；
+    // 「让助手回答」手动兜底已随按钮/热键移除，仅转写发言等点名后自然作答。
+    let plan = match sessions.begin_finalize(&database, &config, text) {
         Ok(BeginFinalize::Plan(plan)) => plan,
         Ok(BeginFinalize::Idle) => {
             drop(sessions);
@@ -257,21 +234,13 @@ pub fn session_finalize_utterance_blocking<R: tauri::Runtime>(
     state: State<'_, AppState>,
     text: String,
 ) -> CommandResult<SessionTurnView> {
-    session_finalize_utterance_blocking_inner(app, state, text, false)
-}
-
-pub fn session_trigger_assistant_blocking<R: tauri::Runtime>(
-    app: AppHandle<R>,
-    state: State<'_, AppState>,
-) -> CommandResult<SessionTurnView> {
-    session_finalize_utterance_blocking_inner(app, state, String::new(), true)
+    session_finalize_utterance_blocking_inner(app, state, text)
 }
 
 fn session_finalize_utterance_blocking_inner<R: tauri::Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
     text: String,
-    force_meeting_assistant: bool,
 ) -> CommandResult<SessionTurnView> {
     let _guard = match service_guard(&state) {
         Ok(guard) => guard,
@@ -383,18 +352,13 @@ fn session_finalize_utterance_blocking_inner<R: tauri::Runtime>(
         assistant_text: Some(&emit_reply),
     };
     let trimmed = text.trim();
-    let mut result = if force_meeting_assistant {
-        session_finalize_utterance_cmd_inner(&state, &probes, credentials, None, true, &hooks)
-    } else {
-        session_finalize_utterance_cmd_inner(
-            &state,
-            &probes,
-            credentials,
-            (!trimmed.is_empty()).then_some(trimmed),
-            false,
-            &hooks,
-        )
-    };
+    let mut result = session_finalize_utterance_cmd_inner(
+        &state,
+        &probes,
+        credentials,
+        (!trimmed.is_empty()).then_some(trimmed),
+        &hooks,
+    );
     if let CommandResult::Ok { data } = &mut result {
         let web = cascade.web_result();
         data.web_sources = Some(web.sources.clone());
@@ -548,5 +512,4 @@ pub fn runtime_get_status(state: State<'_, AppState>) -> CommandResult<RuntimeSt
 }
 
 blocking_command!(with_events session_finalize_utterance, session_finalize_utterance_blocking(text: String) -> SessionTurnView);
-blocking_command!(with_events session_trigger_assistant, session_trigger_assistant_blocking() -> SessionTurnView);
 blocking_command!(with_events session_agent_command, session_agent_command_blocking(input: AgentCommandInput) -> AgentCommandResult);

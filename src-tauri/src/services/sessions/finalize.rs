@@ -38,7 +38,6 @@ pub(crate) struct FinalizePlan {
     pub e2e_route: bool,
     pub meeting_bridge: bool,
     pub meeting_role_name: Option<String>,
-    pub force_meeting_assistant: bool,
     /// 阶段一 tap 丢帧累计快照（原实现在落库前读取；累计值，仅诊断字段）。
     pub tap_dropped: u64,
     /// 泵读侧共享状态：阶段二轮询泵轮次与终局失败，不持 sessions 锁。
@@ -125,34 +124,7 @@ impl<S: PlaybackSink> SessionService<S> {
         text: Option<&str>,
         hooks: &TurnStreamHooks<'_>,
     ) -> Result<Option<CascadeTurn>, SessionServiceError> {
-        self.run_finalize_split(database, config, probes, credentials, text, false, hooks)
-    }
-
-    pub fn finalize_utterance_forced(
-        &mut self,
-        database: &Database,
-        config: &PublicConfig,
-        probes: &SessionProbes<'_>,
-        credentials: CascadeCredentials<'_>,
-    ) -> Result<Option<CascadeTurn>, SessionServiceError> {
-        self.finalize_utterance_forced_with_hooks(
-            database,
-            config,
-            probes,
-            credentials,
-            &TurnStreamHooks::none(),
-        )
-    }
-
-    pub fn finalize_utterance_forced_with_hooks(
-        &mut self,
-        database: &Database,
-        config: &PublicConfig,
-        probes: &SessionProbes<'_>,
-        credentials: CascadeCredentials<'_>,
-        hooks: &TurnStreamHooks<'_>,
-    ) -> Result<Option<CascadeTurn>, SessionServiceError> {
-        self.run_finalize_split(database, config, probes, credentials, None, true, hooks)
+        self.run_finalize_split(database, config, probes, credentials, text, hooks)
     }
 
     /// 便捷包装：三阶段连续执行（调用方本就持有 `&mut self`，语义与拆分前一致）。
@@ -165,10 +137,9 @@ impl<S: PlaybackSink> SessionService<S> {
         probes: &SessionProbes<'_>,
         credentials: CascadeCredentials<'_>,
         text: Option<&str>,
-        force_meeting_assistant: bool,
         hooks: &TurnStreamHooks<'_>,
     ) -> Result<Option<CascadeTurn>, SessionServiceError> {
-        match self.begin_finalize(database, config, text, force_meeting_assistant)? {
+        match self.begin_finalize(database, config, text)? {
             BeginFinalize::Idle => Ok(None),
             BeginFinalize::Plan(plan) => {
                 let outcome = finalize_network(&plan, database, probes, credentials, hooks);
@@ -189,17 +160,7 @@ impl<S: PlaybackSink> SessionService<S> {
         database: &Database,
         config: &PublicConfig,
         text: Option<&str>,
-        force_meeting_assistant: bool,
     ) -> Result<BeginFinalize, SessionServiceError> {
-        if force_meeting_assistant
-            && self
-                .config_snapshot
-                .as_ref()
-                .and_then(active_session_role_scenario)
-                != Some(RoleScenario::MeetingAssistant)
-        {
-            return Err(SessionServiceError::StateInvalid);
-        }
         // 并发收尾：阶段二/播放期间另一个 finalize 到来，对齐旧 `Ok(None)`。
         if self.finalizing_generation.is_some() {
             return Ok(BeginFinalize::Idle);
@@ -208,8 +169,7 @@ impl<S: PlaybackSink> SessionService<S> {
         let generation = self.finalize_generation;
         // 登记本代次为在飞收尾；begin 全程持锁，早退分支不存在并发方。
         self.finalizing_generation = Some(generation);
-        match self.begin_finalize_inner(database, config, text, force_meeting_assistant, generation)
-        {
+        match self.begin_finalize_inner(database, config, text, generation) {
             Ok(Some(plan)) => Ok(BeginFinalize::Plan(Box::new(plan))),
             Ok(None) => {
                 self.finalizing_generation = None;
@@ -227,7 +187,6 @@ impl<S: PlaybackSink> SessionService<S> {
         database: &Database,
         config: &PublicConfig,
         text: Option<&str>,
-        force_meeting_assistant: bool,
         generation: u64,
     ) -> Result<Option<FinalizePlan>, SessionServiceError> {
         self.poll_sidecar(database)?;
@@ -317,7 +276,6 @@ impl<S: PlaybackSink> SessionService<S> {
             e2e_route,
             meeting_bridge: self.capture.is_meeting_bridge(),
             meeting_role_name: active_role_profile(&config).map(|role| role.name.clone()),
-            force_meeting_assistant,
             tap_dropped: self.capture.tap_dropped(),
             realtime_shared: self.realtime_shared.clone(),
             pump_running: self.realtime_pump.is_some(),
@@ -532,7 +490,7 @@ impl<S: PlaybackSink> SessionService<S> {
             active_session_role_scenario(&plan.config) == Some(RoleScenario::Candidate);
         let mut meta = serde_json::json!({
             "turnId": plan.turn_id,
-            "triggerSource": if plan.force_meeting_assistant { "hotkey" } else if plan.user_text.is_some() { "manual" } else { "voice" },
+            "triggerSource": if plan.user_text.is_some() { "manual" } else { "voice" },
             "userConfirmed": !candidate_confirmation_required,
         });
         if let Some(object) = pump_turn_meta.as_object() {
@@ -695,10 +653,9 @@ pub(crate) fn finalize_network(
     };
     let effective_user_text = user_text.or(transcribed_meeting_text.as_deref());
     let meeting_role_name = plan.meeting_role_name.as_deref();
-    let transcript_only = !plan.force_meeting_assistant
-        && transcribed_meeting_text.as_deref().is_some_and(|text| {
-            !meeting_assistant_was_mentioned(text, meeting_role_name.unwrap_or("会议助手"))
-        });
+    let transcript_only = transcribed_meeting_text.as_deref().is_some_and(|text| {
+        !meeting_assistant_was_mentioned(text, meeting_role_name.unwrap_or("会议助手"))
+    });
     // mode 快照：`run_cascade_turn` 只读 `can_answer`（mode 比较），
     // 语义与原实现一致（mode 在 finalize 入口自 control 同步）。
     let mut runtime_snapshot = SessionRuntime::new();

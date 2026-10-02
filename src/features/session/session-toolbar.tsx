@@ -79,9 +79,8 @@ interface SessionToolbarProps {
   allowWebSearch: boolean;
   allowBargeIn: boolean;
   setAllowBargeIn: (allow: boolean) => void;
-  onTriggerAssistant: () => void;
-  /** 最后一轮有用户文本、没有回答：存在可追答的发言，按钮加 data-pending 高亮。 */
-  assistantPending: boolean;
+  /** 当前角色名：门控提示展示「喊到哪个名字才回答」。 */
+  roleName: string;
 }
 
 export function SessionToolbar({
@@ -121,8 +120,7 @@ export function SessionToolbar({
   allowWebSearch,
   allowBargeIn,
   setAllowBargeIn,
-  onTriggerAssistant,
-  assistantPending,
+  roleName,
 }: SessionToolbarProps) {
   useT();
   const meetingGating = active && inputSource === "meeting" && selectedRoleScenario === "meetingAssistant";
@@ -136,14 +134,10 @@ export function SessionToolbar({
         {realtimeStatus === "reconnecting" && <span className="status-badge" data-active={active}>{t("session.toolbar.reconnecting")}</span>}
         {realtimeStatus === "failed" && <span className="status-badge" data-active={false}>{t("session.toolbar.connectFailed")}</span>}
         <span className="session-mode">{modeLabel(mode)}</span>
-        {/* 会话配置 fieldset 在会话进行中整体禁用，按钮必须放外面才可点。 */}
-        {meetingGating && (
-          <button type="button" className="button-primary" data-pending={assistantPending} disabled={busy} onClick={onTriggerAssistant}>{t("session.toolbar.triggerAssistant")}</button>
-        )}
       </div>
       {/* 门控常驻提示：放在「会话配置」折叠区之外，会话进行中始终可见。 */}
       {meetingGating && (
-        <p className="session-gating-hint">{t("session.toolbar.gatingHint")}</p>
+        <p className="session-gating-hint">{t("session.toolbar.gatingHint", { name: roleName })}</p>
       )}
       <div className="session-config-heading">
         <span className="session-config-summary">{inputSource === "meeting" ? t("session.toolbar.meetingAudio") : t("session.toolbar.localMic")} · {config?.speech.voiceRoutes.find((route) => route.id === voiceRouteId)?.name ?? t("session.toolbar.noRouteSelected")}</span>

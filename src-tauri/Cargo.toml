@@ -27,6 +27,11 @@ rusqlite = { version = "=0.40.2", features = ["bundled", "backup"] }
 sqlite-vec = "=0.1.9"
 reqwest = { version = "=0.13.4", default-features = false, features = ["blocking", "json", "multipart", "rustls"] }
 tungstenite = { version = "=0.30.0", default-features = false, features = ["handshake", "rustls-tls-native-roots"] }
+# rustls 本体是 reqwest/tungstenite/tauri-plugin-updater 的共同传递依赖：updater 启用
+# `ring`、reqwest 的 rustls feature 启用 `aws-lc-rs`，两者并存时 rustls 拒绝自动选择
+# CryptoProvider，实时会话 WS 握手线程会 panic。直接依赖仅为在进程启动处显式
+# install_default()，与 reqwest 一致选 aws-lc-rs；不改变依赖树（crate 已被编译）。
+rustls = { version = "=0.23.45", default-features = false, features = ["std", "aws-lc-rs"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 base64 = "=0.22.1"
 sha2 = "=0.10.9"
@@ -58,9 +63,6 @@ rustfft = "=6.4.1"
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "=4.2.0", default-features = false, features = ["v1", "windows-native-keyring-store"] }
 windows-sys = { version = "=0.61.2", features = ["Win32_Storage_FileSystem", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
-
-[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
-tauri-plugin-global-shortcut = "=2.3.2"
 
 [dev-dependencies]
 tempfile = "=3.27.0"

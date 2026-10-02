@@ -35,7 +35,6 @@ function panelProps(overrides: Partial<Parameters<typeof TranscriptPanel>[0]> = 
     unusedMaterials: false,
     showTranscriptOnlyNotes: false,
     showLatency: false,
-    onTriggerAssistant: () => {},
     onCopy: () => {},
     onAdjustConfiguration: () => {},
     ...overrides,

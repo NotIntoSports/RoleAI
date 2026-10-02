@@ -55,7 +55,6 @@ export interface DemoText {
   };
   live: {
     noActiveSession: string;
-    triggerAssistant: string;
     retryFallback: string;
     tailReplies: string[];
     reportFallbackRole: string;
@@ -130,7 +129,6 @@ const ZH: DemoText = {
   },
   live: {
     noActiveSession: "当前没有进行中的会话。",
-    triggerAssistant: "@会议助手 请继续",
     retryFallback: "（重答）好的，我们再讲一遍。",
     tailReplies: [
       "演示脚本到这里就播完了。桌面的真实版本会持续进行语音对话；在线演示里你可以输入文字继续体验，或结束会话回看记录。",
@@ -216,7 +214,6 @@ const EN: DemoText = {
   },
   live: {
     noActiveSession: "No session is currently running.",
-    triggerAssistant: "@meeting-assistant please continue",
     retryFallback: "(Retry) Sure, let's go through it again.",
     tailReplies: [
       "That's the end of the demo script. The desktop app keeps the voice conversation going; in the online demo you can keep typing, or end the session and review the records.",

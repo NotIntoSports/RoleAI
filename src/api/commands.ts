@@ -195,10 +195,6 @@ export function finalizeSessionUtterance(text: string) {
   return invoke<CommandResult<SessionTurnView>>("session_finalize_utterance", { text });
 }
 
-export function triggerMeetingAssistant() {
-  return invoke<CommandResult<SessionTurnView>>("session_trigger_assistant");
-}
-
 export function sessionAgentCommand(input: AgentCommandInput) {
   return invoke<CommandResult<AgentCommandResult>>("session_agent_command", { input });
 }

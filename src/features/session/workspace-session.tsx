@@ -316,8 +316,6 @@ export function WorkspaceSession({
     && (transcript === "" || lastTurn.userText.startsWith(transcript))
     && (reply === "" || lastTurn.assistantText.startsWith(reply));
   const historyTurns = lastTurnIsLive ? turns.slice(0, -1) : turns;
-  // 最后一轮「有用户文本、没有回答」：发言尚未获回答（如仅转写轮），按钮高亮引导追答。
-  const assistantPending = !!lastTurn?.userText && !lastTurn?.assistantText;
 
   useEffect(() => {
     void (async () => {
@@ -366,17 +364,13 @@ export function WorkspaceSession({
   const roleName = config?.roleProfiles.find((role) => role.id === roleProfileId)?.name ?? "RoleAI";
   const showBargeHint = active && phase === "speaking" && allowBargeIn && mode === "ai_active";
   const selectedRoleScenario = roleScenario(config, roleProfileId);
-  const { realtimeStatus, setRealtimeStatus, resetStreamSeq, triggerAssistant } = useSessionEvents({
+  const { realtimeStatus, setRealtimeStatus, resetStreamSeq } = useSessionEvents({
     listen,
     refresh,
     applyStatus,
     setTranscript,
     setReply,
-    setMessage,
     webAudioPlayerRef,
-    active,
-    inputSource,
-    selectedRoleScenario,
   });
   const audioFinalizePending = useRef(false);
   const consecutiveAutoFailures = useRef(0);
@@ -542,8 +536,7 @@ export function WorkspaceSession({
         allowWebSearch={allowWebSearch}
         allowBargeIn={allowBargeIn}
         setAllowBargeIn={setAllowBargeIn}
-        onTriggerAssistant={triggerAssistant}
-        assistantPending={assistantPending}
+        roleName={roleName}
       />
       <PreflightIssues issues={issues} />
       {webDegraded && <p className="services-message">{t("session.workspace.webDegraded")}</p>}
@@ -572,7 +565,6 @@ export function WorkspaceSession({
         unusedMaterials={unusedMaterials}
         showTranscriptOnlyNotes={inputSource === "meeting" && selectedRoleScenario === "meetingAssistant"}
         showLatency={latencyWaterfallEnabled}
-        onTriggerAssistant={triggerAssistant}
         onCopy={copyText}
         onAdjustConfiguration={() => {
           setConfigurationOpen(true);

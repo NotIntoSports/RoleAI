@@ -1,5 +1,4 @@
-use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
-use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
 mod app_state;
 pub mod audio;
@@ -43,6 +42,10 @@ fn navigation_is_allowed(url: &tauri::Url) -> bool {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 依赖树里 rustls 的 `ring`（updater）与 `aws-lc-rs`（reqwest）同时启用，
+    // rustls 拒绝自动选择 CryptoProvider，实时 WS 握手线程会当场 panic。
+    // 必须在任何 TLS 连接前显式安装进程级默认 provider（与 reqwest 同用 aws-lc-rs）。
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let arguments = std::env::args_os().collect::<Vec<_>>();
     if startup::is_isolation_support_check(&arguments) {
         print!("{}", startup::ISOLATION_SUPPORT_MARKER);
@@ -80,15 +83,7 @@ pub fn run() {
         )
         .try_init();
 
-    let builder = tauri::Builder::default().plugin(
-        tauri_plugin_global_shortcut::Builder::new()
-            .with_handler(|app, _, event| {
-                if event.state() == ShortcutState::Pressed {
-                    let _ = app.emit("session:assistant_hotkey:v1", ());
-                }
-            })
-            .build(),
-    );
+    let builder = tauri::Builder::default();
     // 应用内手动检查更新（G07）：设置页按钮触发 check()；公钥未配置时
     // 插件在 check 阶段报错，前端捕获后显示「未配置更新源」，不影响启动。
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
@@ -149,7 +144,6 @@ pub fn run() {
             commands::session_get,
             commands::session_delete,
             commands::session_finalize_utterance,
-            commands::session_trigger_assistant,
             commands::session_agent_command,
             commands::runtime_get_status,
             commands::config_restore_last_good,
@@ -232,10 +226,6 @@ pub fn run() {
                 .on_navigation(navigation_is_allowed)
                 .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
                 .build()?;
-            let assistant_shortcut =
-                Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyA);
-            let registered = app.global_shortcut().register(assistant_shortcut).is_ok();
-            let _ = app.emit("session:assistant_hotkey_status:v1", registered);
             Ok(())
         })
         .run(tauri::generate_context!())

@@ -102,6 +102,7 @@ export function RoleEditor() {
               onChange={(event) => setRole({ ...role, name: event.target.value })}
             />
           </label>
+          <small>{t("roles.nameWakeHint")}</small>
           <label>
             {t("roles.systemPromptLabel")}
             <textarea

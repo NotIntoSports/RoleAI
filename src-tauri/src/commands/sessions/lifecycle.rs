@@ -445,7 +445,7 @@ fn attach_realtime_pump(
         credential,
         model_id,
         voice: route.voice_id.clone().unwrap_or_default(),
-        instructions: e2e_instructions(active_role_profile(config), &[]),
+        instructions: e2e_instructions(active_role_profile(config), &[], scenario.as_ref()),
         history: Vec::new(),
         auto_respond,
         enable_search: allow_web_search,

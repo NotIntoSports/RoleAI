@@ -1,10 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 
-import * as api from "../../api/commands";
-import { t } from "../../i18n";
 import { audioDiagnostics, decodePcm16Base64, type WebAudioPlayer } from "./web-audio-player";
-import { errorText } from "./workspace-format";
-import type { RoleScenario, RuntimeStatus, SessionReplyEvent, SessionTranscriptEvent } from "../../generated/bindings";
+import type { RuntimeStatus, SessionReplyEvent, SessionTranscriptEvent } from "../../generated/bindings";
 
 type SessionEventListen = <T>(
   event: string,
@@ -28,11 +25,7 @@ export interface SessionEventsParams {
   applyStatus: (next: RuntimeStatus) => void;
   setTranscript: Dispatch<SetStateAction<string>>;
   setReply: Dispatch<SetStateAction<string>>;
-  setMessage: Dispatch<SetStateAction<string>>;
   webAudioPlayerRef: { current: WebAudioPlayer | null };
-  active: boolean;
-  inputSource: string;
-  selectedRoleScenario: RoleScenario | undefined;
 }
 
 export function useSessionEvents({
@@ -41,31 +34,13 @@ export function useSessionEvents({
   applyStatus,
   setTranscript,
   setReply,
-  setMessage,
   webAudioPlayerRef,
-  active,
-  inputSource,
-  selectedRoleScenario,
 }: SessionEventsParams) {
   const transcriptSeq = useRef(0);
   const replySeq = useRef(0);
   const playbackSeq = useRef(0);
   const refreshRef = useRef<() => Promise<void>>(async () => {});
-  const hotkeyInFlight = useRef(false);
   const [realtimeStatus, setRealtimeStatus] = useState("idle");
-
-  // 快捷键与「让助手回答」按钮共用的触发逻辑：hotkeyInFlight 防重复触发。
-  const triggerAssistant = useCallback(() => {
-    if (hotkeyInFlight.current) return;
-    hotkeyInFlight.current = true;
-    void api.triggerMeetingAssistant()
-      .then((result) => {
-        if (!result.ok) setMessage(errorText(result.error));
-        else return refresh();
-      })
-      .catch(() => setMessage(t("session.controls.triggerAssistantFailed")))
-      .finally(() => { hotkeyInFlight.current = false; });
-  }, [refresh, setMessage]);
 
   const applyTranscript = useCallback((payload: SessionTranscriptEvent) => {
     if (payload.seq > transcriptSeq.current) {
@@ -153,25 +128,6 @@ export function useSessionEvents({
     };
   }, [listen, applyStatus, applyTranscript, applyReply, applyPlaybackAudio, applyPlaybackControl]);
 
-  useEffect(() => {
-    if (!active || inputSource !== "meeting" || selectedRoleScenario !== "meetingAssistant") return;
-    let disposed = false;
-    let unlisten = () => {};
-    void (async () => {
-      try {
-        unlisten = await Promise.resolve(listen("session:assistant_hotkey:v1", () => {
-          if (!disposed) triggerAssistant();
-        }));
-      } catch {
-          if (!disposed) setMessage(t("session.controls.hotkeyUnavailable"));
-      }
-    })();
-    return () => {
-      disposed = true;
-      unlisten();
-    };
-  }, [active, inputSource, selectedRoleScenario, triggerAssistant, listen, setMessage]);
-
   // 新会话从零计流式字幕 seq：上一会话的 partial 用过大号 seq，
   // 不重置会把本会话开头的字幕事件整体门控丢弃。
   const resetStreamSeq = useCallback(() => {
@@ -180,5 +136,5 @@ export function useSessionEvents({
     playbackSeq.current = 0;
   }, []);
 
-  return { realtimeStatus, setRealtimeStatus, resetStreamSeq, triggerAssistant };
+  return { realtimeStatus, setRealtimeStatus, resetStreamSeq };
 }

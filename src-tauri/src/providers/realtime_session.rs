@@ -269,9 +269,21 @@ impl RealtimeSession {
             assembler: Mutex::new(InputTranscriptAssembler::new()),
             pending_image: Mutex::new(None),
         });
+        // 监督线程 panic 不能静默：线程死亡会让事件通道悬空，前端停在
+        // 「聆听中」且无任何错误徽标。捕获 unwind 后向泵发送终局 Failed，
+        // 走既有 failed 标志路径显示「语音连接失败」。
         std::thread::Builder::new()
             .name("realtime-session".into())
-            .spawn(move || supervise(state))
+            .spawn(move || {
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    supervise(Arc::clone(&state))
+                }));
+                if outcome.is_err() {
+                    let _ = state
+                        .events
+                        .send(ActorEvent::Failed("实时会话线程异常退出".into()));
+                }
+            })
             .map_err(|_| RealtimeError::ConnectFailed)?;
         Ok(Self {
             commands: commands_tx,

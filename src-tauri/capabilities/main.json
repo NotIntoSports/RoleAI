@@ -53,7 +53,6 @@
     "allow-session-get",
     "allow-session-delete",
     "allow-session-finalize-utterance",
-    "allow-session-trigger-assistant",
     "allow-session-agent-command",
     "allow-runtime-get-status",
     "allow-open-web-source",

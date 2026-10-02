@@ -24,8 +24,6 @@ interface TranscriptPanelProps {
   showTranscriptOnlyNotes: boolean;
   /** 设置里可关的轮次延迟瀑布条（无 timeline 数据的旧轮次不显示）。 */
   showLatency: boolean;
-  /** 最后一轮仅转写标注旁的追答入口（与工具栏「让助手回答」同一路径）。 */
-  onTriggerAssistant: () => void;
   onCopy: (text: string) => void;
   onAdjustConfiguration: () => void;
 }
@@ -46,16 +44,12 @@ export function TranscriptPanel({
   unusedMaterials,
   showTranscriptOnlyNotes,
   showLatency,
-  onTriggerAssistant,
   onCopy,
   onAdjustConfiguration,
 }: TranscriptPanelProps) {
   useT();
   const conversationRef = useRef<HTMLDivElement | null>(null);
   const conversationBottomRef = useRef<HTMLDivElement | null>(null);
-  // 仅最后一轮仅转写轮旁提供追答：更早的转写轮的应答素材已被后续轮消费，
-  // 后端会返回 NOTHING_TO_ANSWER，按钮只挂在仍然可追答的那一轮上。
-  const lastTurn = turns[turns.length - 1];
   useEffect(() => {
     const container = conversationRef.current;
     const bottom = conversationBottomRef.current;
@@ -87,9 +81,6 @@ export function TranscriptPanel({
               {item.userText && !item.assistantText && showTranscriptOnlyNotes && (
                 <p className="session-transcript-note" aria-label={t("session.transcript.transcriptOnlyAria", { n: item.turnIndex + 1 })}>
                   {t("session.transcript.transcriptOnlyNote")}
-                  {active && item === lastTurn && (
-                    <button type="button" className="session-transcript-followup" disabled={busy} onClick={onTriggerAssistant}>{t("session.transcript.followUp")}</button>
-                  )}
                 </p>
               )}
               {item.assistantText && (

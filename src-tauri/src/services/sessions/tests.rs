@@ -877,42 +877,6 @@ fn meeting_assistant_answers_voice_on_local_microphone() {
 }
 
 #[test]
-fn meeting_assistant_hotkey_forces_one_answer_and_records_trigger() {
-    let (_directory, database) = opened();
-    let mut config = ready_public_config();
-    config.role_profiles[0].scenario = Some(crate::config::RoleScenario::MeetingAssistant);
-    let mut service = SessionService::with_sink(RecordingSink::default());
-    start_ready_sink(&mut service, &database, &config);
-    service.push_pcm(&[1, 0, 2, 0, 3, 0]);
-    let asr = ScriptedAsr::ok("今天讨论项目进度");
-    let llm = ScriptedLlm::ok("当前进度正常");
-    let tts = ScriptedTts::ok(&[7, 8]);
-    let embed = UnusedEmbed;
-
-    let turn = service
-        .finalize_utterance_forced(
-            &database,
-            &config,
-            &cascaded_probes(&asr, &llm, &tts, &embed),
-            credentials(),
-        )
-        .unwrap()
-        .expect("hotkey turn");
-
-    assert_eq!(turn.assistant_text, "当前进度正常");
-    assert_eq!(llm.calls.load(Ordering::SeqCst), 1);
-    let event = SessionStore::new(&database)
-        .list_events(service.session_id().unwrap())
-        .unwrap()
-        .into_iter()
-        .rev()
-        .find(|event| event.kind == "turn_meta")
-        .unwrap();
-    let payload: serde_json::Value = serde_json::from_str(&event.payload).unwrap();
-    assert_eq!(payload["triggerSource"], "hotkey");
-}
-
-#[test]
 fn meeting_assistant_answers_when_its_configured_name_is_mentioned() {
     let (_directory, database) = opened();
     let mut config = ready_public_config();
@@ -2178,7 +2142,7 @@ fn failed_turn_persist_releases_the_finalize_guard() {
     let probes = cascaded_probes(&asr, &llm, &tts, &embed);
 
     let plan = match service
-        .begin_finalize(&database, &config, Some("question"), false)
+        .begin_finalize(&database, &config, Some("question"))
         .unwrap()
     {
         BeginFinalize::Plan(plan) => plan,
@@ -2213,7 +2177,7 @@ fn failed_turn_persist_releases_the_finalize_guard() {
     // 守卫必须已复位：下一次收尾不得返回 Ok(Idle)——Idle 的唯一来源就是
     // 守卫未释放。（persist 失败遗留的 Thinking 相位会让后续尝试在相位
     // 迁移处报 StateInvalid；那是先于本修复存在的独立行为，不在本卡范围。）
-    let second = service.begin_finalize(&database, &config, Some("question"), false);
+    let second = service.begin_finalize(&database, &config, Some("question"));
     assert!(
         !matches!(second, Ok(BeginFinalize::Idle)),
         "guard must be released after a failed persist"
@@ -2232,7 +2196,7 @@ fn dropped_finalize_keeps_a_newer_finalizes_guard() {
 
     // A：旧会话的收尾进入阶段二。
     let plan_a = match service
-        .begin_finalize(&database, &config, Some("q1"), false)
+        .begin_finalize(&database, &config, Some("q1"))
         .unwrap()
     {
         BeginFinalize::Plan(plan) => plan,
@@ -2242,7 +2206,7 @@ fn dropped_finalize_keeps_a_newer_finalizes_guard() {
     service.stop(&database).unwrap();
     service.start(&database, &config, true, false).unwrap();
     let plan_b = match service
-        .begin_finalize(&database, &config, Some("q2"), false)
+        .begin_finalize(&database, &config, Some("q2"))
         .unwrap()
     {
         BeginFinalize::Plan(plan) => plan,
@@ -2257,7 +2221,7 @@ fn dropped_finalize_keeps_a_newer_finalizes_guard() {
 
     // B 仍在飞行：第三个收尾必须被单飞行守卫挡下（Idle）。
     let third = service
-        .begin_finalize(&database, &config, Some("q3"), false)
+        .begin_finalize(&database, &config, Some("q3"))
         .unwrap();
     assert!(
         matches!(third, BeginFinalize::Idle),
