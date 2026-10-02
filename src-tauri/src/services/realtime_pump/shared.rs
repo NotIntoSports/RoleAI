@@ -89,6 +89,14 @@ pub struct CompletedTurn {
     pub echo_dropped_total: u64,
     /// 回答请求发出后始终未开始（看门狗放弃）：用户文本保留、回答为空。
     pub response_failed: bool,
+    /// 打断来源：`server_speech_started` / `local_barge_in`；None=未被打断。
+    pub interrupted_by: Option<&'static str>,
+    /// 回答在途期间上行闸门被重开的次数（正常应为 0；>0 说明播放链路
+    /// 异常——假播净或 sidecar 假活绕过了闸门保护）。
+    pub gate_reopens_during_responding: usize,
+    /// 回答在途期间被忽略的过早「播净」回执数：流式增量间隙（实测可达
+    /// 2s+）会让 sidecar 缓冲短暂清空而误报播净，是句中丢字链路的直接证据。
+    pub premature_drained: usize,
 }
 
 /// 泵与 SessionService 之间的共享状态。

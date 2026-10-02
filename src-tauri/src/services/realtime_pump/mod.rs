@@ -20,7 +20,7 @@ use super::super::providers::realtime_session::{ActorCommand, ActorEvent, Realti
 use crate::audio::playback::PlaybackDiagnostics;
 
 use super::echo_guard::{
-    GATE_DRAIN_FALLBACK_TAIL, gate_drain_deadline_from_bytes, gate_timers_expired,
+    GATE_DRAIN_FALLBACK_TAIL, GATE_FORCE_OPEN_AFTER, gate_drain_deadline_from_bytes,
 };
 
 // 子模块：纯搬移拆分（C21），各项经 use 自举，pub 项保持原路径可用。
@@ -39,6 +39,12 @@ use self::turn::{TurnAccumulator, flush_in_flight_turn};
 /// 成轮）。实测 Qwen-Omni 偶发吞掉 item.create+response.create 后沉默 60-90s，
 /// 服务端 `RESPONSE_TIMEOUT` 只从 response.created 起算，罩不住这一段。
 pub const RESPOND_START_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// 门控模式（会议桥接）服务端打断确认窗：`speech_started` 后语音持续这么久
+/// 仍无 `speech_stopped` 才真正清空播放。会议环回的短噪声、咳嗽、旁人半句
+/// 都只会产生几十到几百毫秒的语音脉冲，立即清空会把「只听到半句」固化为
+/// 句中丢字；真实插话者不会在 600ms 内收声。代价仅是打断响应延迟一个窗口。
+pub const INTERRUPT_CONFIRM_WINDOW: Duration = Duration::from_millis(600);
 
 /// 流式播放抽象：生产实现是常驻 AudioBridge `StreamPlayback`；测试用内存替身。
 pub trait PlaybackStream: Send + Sync {
@@ -141,6 +147,29 @@ impl Drop for RealtimePump {
     }
 }
 
+/// 门控/会议桥接触发应答前的闸门预关：闸门在响应可能出声之前就关闭
+/// （而不是等首个音频增量），点名到出声之间服务端听不到会议环回音频，
+/// 生成期不会被环回噪声触发 speech_started 自取消（「点名没反应」的根源）。
+fn close_gate_at_trigger(
+    playback: &dyn PlaybackStream,
+    session: &RealtimeSession,
+    uplink_open: &mut bool,
+    gate_closed_at: &mut Option<Instant>,
+    uplink_reopen_at: &mut Option<Instant>,
+    gate_drain_deadline: &mut Option<Instant>,
+) {
+    if *uplink_open {
+        // 关门即清服务端输入缓冲：点名前渗入的环回残渣不得参与本次生成。
+        session.send(ActorCommand::ClearInputBuffer);
+    }
+    // 丢弃上轮残留播净回执：防陈旧回执在响应在途时被误信。
+    let _ = playback.take_drained();
+    *uplink_reopen_at = None;
+    *gate_drain_deadline = None;
+    *uplink_open = false;
+    *gate_closed_at = Some(Instant::now());
+}
+
 fn run_pump(
     session: RealtimeSession,
     mic_tap: mpsc::Receiver<Vec<u8>>,
@@ -190,6 +219,9 @@ fn run_pump(
     let mut recent_assistant: VecDeque<String> = VecDeque::new();
     // 本地打断后的延迟重开时刻；None 表示无挂起重开。
     let mut uplink_reopen_at: Option<Instant> = None;
+    // 门控模式打断确认窗：speech_started 已到、等待语音持续性证据；
+    // 窗口内出现 speech_stopped（短噪声）则放弃掐断。
+    let mut interrupt_pending_at: Option<Instant> = None;
 
     loop {
         if playback_mode == RealtimePlaybackMode::WebAudio
@@ -221,18 +253,62 @@ fn run_pump(
             if let Some(suppress) = config.suppress_echo.as_ref() {
                 suppress(Duration::from_secs(1));
             }
-            if uplink_reopen_at.is_some_and(|at| Instant::now() >= at)
-                || playback.take_drained()
-                || !playback.is_alive()
-                || gate_timers_expired(gate_drain_deadline, gate_closed_at, Instant::now())
-            {
+            let now = Instant::now();
+            // 卡死安全阀：关门后无任何播放活动超过 20s（sidecar 假活/事件
+            // 全丢），无论响应是否在途都强制重开，麦克风不被无限闭锁。
+            // gate_closed_at 随每个增量续期，长回复不会误触发。
+            let stalled =
+                gate_closed_at.is_some_and(|at| now.duration_since(at) > GATE_FORCE_OPEN_AFTER);
+            // 播净回执与兜底计时只在响应定稿之后可信：流式播放的增量间隙
+            // （实测可达 2s+）会让 sidecar 缓冲短暂清空而误报播净，回答在途
+            // 时据此重开闸门会让会议环回音频上行，服务端随即打断清空播放
+            // ——句中丢字的根源。responding 期间消耗回执仅作计数，不重开。
+            let drained_now = playback.take_drained();
+            if turn.responding && drained_now && turn.played_audio {
+                turn.premature_drained += 1;
+            }
+            let finished = !turn.responding
+                && (drained_now || gate_drain_deadline.is_some_and(|at| now >= at));
+            let barge_tail = uplink_reopen_at.is_some_and(|at| now >= at);
+            if barge_tail || !playback.is_alive() || stalled || finished {
                 // 打断/播净重开瞬间清一次服务端输入缓冲：关门期与重开尾窗渗入的
                 // 回声残渣（早于/晚于打断的零星帧）不得混进下一次提交。
                 session.send(ActorCommand::ClearInputBuffer);
+                if turn.responding && !barge_tail {
+                    turn.gate_reopens_during_responding += 1;
+                }
                 uplink_open = true;
                 gate_closed_at = None;
                 gate_drain_deadline = None;
                 uplink_reopen_at = None;
+            }
+        }
+        // 门控模式打断确认窗到期裁决：语音持续到窗末仍无停顿 → 真人插话，
+        // 清空取消；窗口内出现 speech_stopped → 短噪声，放弃掐断继续播放。
+        // 响应已不在途（轮次已被别的路径定稿）：挂起状态作废。
+        if let Some(started_at) = interrupt_pending_at {
+            if !turn.responding {
+                interrupt_pending_at = None;
+            } else if turn.speech_stopped_at.is_some_and(|at| at > started_at) {
+                interrupt_pending_at = None;
+                tracing::debug!(
+                    target: "realtime_pump",
+                    "打断确认窗内出现语音停顿：放弃掐断，回复继续播放"
+                );
+            } else if started_at.elapsed() >= INTERRUPT_CONFIRM_WINDOW {
+                interrupt_pending_at = None;
+                tracing::debug!(
+                    target: "realtime_pump",
+                    "打断确认窗到期且语音持续：清空播放并取消响应"
+                );
+                let _ = playback.clear();
+                session.send(ActorCommand::CancelResponse);
+                emit(&PumpLive::PlaybackControl(PlaybackControl::Clear));
+                turn.interrupted = true;
+                turn.interrupted_by = Some("server_speech_started");
+                shared.speaking.store(false, Ordering::SeqCst);
+                emit(&PumpLive::Speaking(false));
+                shared.interrupted_total.fetch_add(1, Ordering::Relaxed);
             }
         }
         // 2) 控制命令。
@@ -281,6 +357,7 @@ fn run_pump(
                     session.send(ActorCommand::CancelResponse);
                     emit(&PumpLive::PlaybackControl(PlaybackControl::Clear));
                     turn.interrupted = true;
+                    turn.interrupted_by = Some("local_barge_in");
                     shared.speaking.store(false, Ordering::SeqCst);
                     emit(&PumpLive::Speaking(false));
                     shared.interrupted_total.fetch_add(1, Ordering::Relaxed);
@@ -348,6 +425,16 @@ fn run_pump(
                         turn.echo_dropped = false;
                         turn.respond_requested_at = Some(Instant::now());
                         turn.respond_attempts = 0;
+                        if !config.auto_respond && playback_mode == RealtimePlaybackMode::Native {
+                            close_gate_at_trigger(
+                                playback.as_ref(),
+                                &session,
+                                &mut uplink_open,
+                                &mut gate_closed_at,
+                                &mut uplink_reopen_at,
+                                &mut gate_drain_deadline,
+                            );
+                        }
                         emit(&PumpLive::User(text));
                         session.send(ActorCommand::RespondText(turn.user_text.clone()));
                     }
@@ -367,6 +454,16 @@ fn run_pump(
                     turn.response_closed = false;
                     turn.respond_requested_at = Some(Instant::now());
                     turn.respond_attempts = 0;
+                    if !config.auto_respond && playback_mode == RealtimePlaybackMode::Native {
+                        close_gate_at_trigger(
+                            playback.as_ref(),
+                            &session,
+                            &mut uplink_open,
+                            &mut gate_closed_at,
+                            &mut uplink_reopen_at,
+                            &mut gate_drain_deadline,
+                        );
+                    }
                     emit(&PumpLive::User(text.clone()));
                     session.send(ActorCommand::RespondText(text));
                 }
@@ -384,6 +481,7 @@ fn run_pump(
                 if recoverable_text {
                     pending_recovered_text = Some(std::mem::take(&mut turn.user_text));
                     turn = TurnAccumulator::new();
+                    interrupt_pending_at = None;
                     shared.speaking.store(false, Ordering::SeqCst);
                     emit(&PumpLive::Speaking(false));
                 } else {
@@ -410,8 +508,11 @@ fn run_pump(
                     speech_started_ms = turn.timeline.speech_started_ms,
                     "服务端 speech_started（服务端 VAD 听到用户开口）"
                 );
-                // 服务端 VAD 听见用户开口：若一轮响应在途，立即清空播放 + 取消生成
+                // 服务端 VAD 听见用户开口：若一轮响应在途，清空播放 + 取消生成
                 // （生成期插话服务端也会自动取消，客户端取消是确定性兜底）。
+                // 门控模式（会议桥接）已出声时不立即清空：会议环回的短噪声/
+                // 咳嗽同样触发 speech_started，立即清空就是句中丢字的来源。
+                // 先进入确认窗，语音持续到窗末才真正掐断。
                 if turn.responding {
                     if !config.auto_respond && !turn.played_audio {
                         // 门控模式（会议助手 + 会议桥接）回答还没出声：别人插话、
@@ -421,11 +522,16 @@ fn run_pump(
                             target: "realtime_pump",
                             "门控模式：回答未出声，忽略服务端 speech_started"
                         );
+                    } else if !config.auto_respond {
+                        if interrupt_pending_at.is_none() {
+                            interrupt_pending_at = Some(Instant::now());
+                        }
                     } else {
                         let _ = playback.clear();
                         session.send(ActorCommand::CancelResponse);
                         emit(&PumpLive::PlaybackControl(PlaybackControl::Clear));
                         turn.interrupted = true;
+                        turn.interrupted_by = Some("server_speech_started");
                         shared.speaking.store(false, Ordering::SeqCst);
                         emit(&PumpLive::Speaking(false));
                         shared.interrupted_total.fetch_add(1, Ordering::Relaxed);
@@ -444,6 +550,11 @@ fn run_pump(
                 turn.response_closed = false;
                 // 服务端已确认响应开始：回答开始看门狗解除。
                 turn.respond_requested_at = None;
+                // 生成确认存活：续期卡死安全阀时钟，长生成（>20s）不出声
+                // 也不会被误判为闸门卡死。
+                if !uplink_open {
+                    gate_closed_at = Some(Instant::now());
+                }
                 // 真实响应开始：强制回答的候选素材视为已消费，避免响应失败
                 // 前素材残留导致重复追答同一句。
                 shared
@@ -460,7 +571,7 @@ fn run_pump(
                     if !is_current_or_recent_echo(
                         &text,
                         recent_assistant.make_contiguous(),
-                        &current_turn_echo(&turn, post_playback_echo_until, playback_mode),
+                        &current_turn_echo(&turn, post_playback_echo_until, playback_mode, true),
                     ) {
                         emit(&PumpLive::User(text));
                     } else {
@@ -477,7 +588,7 @@ fn run_pump(
                     if !is_current_or_recent_echo(
                         &turn.user_text,
                         recent_assistant.make_contiguous(),
-                        &current_turn_echo(&turn, post_playback_echo_until, playback_mode),
+                        &current_turn_echo(&turn, post_playback_echo_until, playback_mode, true),
                     ) {
                         emit(&PumpLive::User(turn.user_text.clone()));
                     } else {
@@ -500,7 +611,7 @@ fn run_pump(
                 if is_current_or_recent_echo(
                     &text,
                     recent_assistant.make_contiguous(),
-                    &current_turn_echo(&turn, post_playback_echo_until, playback_mode),
+                    &current_turn_echo(&turn, post_playback_echo_until, playback_mode, true),
                 ) {
                     tracing::debug!(
                         target: "realtime_pump",
@@ -588,6 +699,9 @@ fn run_pump(
                             playback_last_event: diagnostics.last_event,
                             echo_dropped: false,
                             echo_dropped_total: shared.echo_dropped_total(),
+                            interrupted_by: None,
+                            gate_reopens_during_responding: 0,
+                            premature_drained: 0,
                             timeline: transcript_timeline,
                             completed_at: Instant::now(),
                         });
@@ -625,6 +739,16 @@ fn run_pump(
                         turn.answer_item_id = Some(item_id);
                         turn.respond_requested_at = Some(Instant::now());
                         turn.respond_attempts = 0;
+                        if playback_mode == RealtimePlaybackMode::Native {
+                            close_gate_at_trigger(
+                                playback.as_ref(),
+                                &session,
+                                &mut uplink_open,
+                                &mut gate_closed_at,
+                                &mut uplink_reopen_at,
+                                &mut gate_drain_deadline,
+                            );
+                        }
                         session.send(ActorCommand::RespondText(prompt));
                         turn.responding = true;
                     } else {
@@ -662,11 +786,15 @@ fn run_pump(
                             echo_dropped: false,
                             echo_dropped_total: shared.echo_dropped_total(),
                             response_failed: false,
+                            interrupted_by: turn.interrupted_by,
+                            gate_reopens_during_responding: turn.gate_reopens_during_responding,
+                            premature_drained: turn.premature_drained,
                             timeline: turn.timeline.clone(),
                             completed_at: Instant::now(),
                         };
                         shared.push_turn(completed);
                         turn = TurnAccumulator::new();
+                        interrupt_pending_at = None;
                     }
                 }
             }
@@ -728,7 +856,17 @@ fn run_pump(
                             let _ = playback.take_drained();
                             uplink_reopen_at = None;
                             uplink_open = false;
-                            gate_closed_at.get_or_insert_with(Instant::now);
+                            gate_closed_at = Some(now);
+                        } else if !uplink_open {
+                            // 续期卡死安全阀时钟：20s 无任何播放活动才强制重开，
+                            // 长回复（远超关闸时刻 20s）不再被误判为卡死。
+                            gate_closed_at = Some(now);
+                        } else if turn.responding {
+                            // 防御：响应在途闸门却开着（安全阀/异常路径重开过），
+                            // 立即重新关门——会议环回音频不得在播报期间上行。
+                            turn.gate_reopens_during_responding += 1;
+                            uplink_open = false;
+                            gate_closed_at = Some(now);
                         }
                     }
                     turn.played_audio = true;
@@ -753,7 +891,12 @@ fn run_pump(
                     && is_current_or_recent_echo(
                         &turn.user_text,
                         recent_assistant.make_contiguous(),
-                        &current_turn_echo(&turn, post_playback_echo_until, playback_mode),
+                        &current_turn_echo(
+                            &turn,
+                            post_playback_echo_until,
+                            playback_mode,
+                            config.auto_respond,
+                        ),
                     );
                 tracing::debug!(
                     target: "realtime_pump",
@@ -773,6 +916,35 @@ fn run_pump(
                     ?playback_mode,
                     "响应结束（轮次定稿诊断）"
                 );
+                // 空响应兜底：done 已到但 created 从未出现且无任何音频/文本
+                // ——服务端吞掉请求，或生成期被环回噪声自取消（「点名没反应」
+                // 的根源，实测曾连续 6 轮全空）。有界重试一次；重试仍空则按
+                // 失败成轮，让前端可见而非静默等待。
+                let ghost_response = turn.responding
+                    && turn.timeline.response_created_ms.is_none()
+                    && turn.audio_bytes == 0
+                    && turn.assistant_text.is_empty()
+                    && !turn.echo_dropped
+                    && !user_echo
+                    && !turn.user_text.is_empty();
+                if ghost_response && turn.respond_attempts == 0 {
+                    tracing::warn!(
+                        target: "realtime_pump",
+                        user_chars = turn.user_text.chars().count(),
+                        cancelled,
+                        "空响应（无 created、无音频）：清服务端缓冲后重发一次应答请求"
+                    );
+                    turn.respond_attempts += 1;
+                    turn.respond_requested_at = Some(Instant::now());
+                    turn.interrupted = false;
+                    turn.response_closed = false;
+                    session.send(ActorCommand::ClearInputBuffer);
+                    session.send(ActorCommand::RespondText(turn.user_text.clone()));
+                    continue;
+                }
+                if ghost_response {
+                    turn.response_failed = true;
+                }
                 // 先截获本轮播报文本：下面 mem::take 进 CompletedTurn 后就取不到了。
                 let assistant_spoken = turn.assistant_text.clone();
                 let playback_diagnostics = playback.diagnostics();
@@ -808,7 +980,10 @@ fn run_pump(
                         playback_last_event: playback_diagnostics.last_event,
                         echo_dropped: turn.echo_dropped,
                         echo_dropped_total: shared.echo_dropped_total(),
-                        response_failed: false,
+                        response_failed: turn.response_failed,
+                        interrupted_by: turn.interrupted_by,
+                        gate_reopens_during_responding: turn.gate_reopens_during_responding,
+                        premature_drained: turn.premature_drained,
                         timeline: turn.timeline.clone(),
                         completed_at: Instant::now(),
                     };
@@ -825,6 +1000,7 @@ fn run_pump(
                 shared.speaking.store(false, Ordering::SeqCst);
                 emit(&PumpLive::Speaking(false));
                 turn = TurnAccumulator::new();
+                interrupt_pending_at = None;
                 // done 之后、下一个 created 之前：迟到尾包 delta 全部丢弃。
                 turn.response_closed = true;
                 if config.hold_playback {
@@ -855,6 +1031,16 @@ fn run_pump(
                     turn.echo_dropped = false;
                     turn.respond_requested_at = Some(Instant::now());
                     turn.respond_attempts = 0;
+                    if playback_mode == RealtimePlaybackMode::Native {
+                        close_gate_at_trigger(
+                            playback.as_ref(),
+                            &session,
+                            &mut uplink_open,
+                            &mut gate_closed_at,
+                            &mut uplink_reopen_at,
+                            &mut gate_drain_deadline,
+                        );
+                    }
                     emit(&PumpLive::User(text));
                     session.send(ActorCommand::RespondText(turn.user_text.clone()));
                 }
@@ -899,6 +1085,9 @@ fn run_pump(
                     held: false,
                     forced: turn.forced,
                     response_failed: true,
+                    interrupted_by: None,
+                    gate_reopens_during_responding: turn.gate_reopens_during_responding,
+                    premature_drained: turn.premature_drained,
                     audio_bytes: 0,
                     playback_write_failed: turn.playback_write_failed,
                     playback_alive: playback.is_alive(),
@@ -923,6 +1112,7 @@ fn run_pump(
                 // 仍在途的幽灵响应，防止它晚到后以空用户文本成轮播放。
                 session.send(ActorCommand::CancelResponse);
                 turn = TurnAccumulator::new();
+                interrupt_pending_at = None;
                 shared.speaking.store(false, Ordering::SeqCst);
                 emit(&PumpLive::Speaking(false));
                 // 文本还给「让助手回答」候选：用户可直接再点一次按钮。

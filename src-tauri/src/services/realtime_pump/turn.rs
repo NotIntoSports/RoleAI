@@ -42,6 +42,12 @@ pub(super) struct TurnAccumulator {
     pub(super) respond_requested_at: Option<Instant>,
     /// 看门狗重试次数：0=未重试（首次超时重发），1=已重试（再超时放弃）。
     pub(super) respond_attempts: u8,
+    /// response.done 到达但 response.created 从未出现且无任何音频/文本
+    /// （服务端吞请求或生成期自取消）：重试仍空时按失败成轮。
+    pub(super) response_failed: bool,
+    pub(super) interrupted_by: Option<&'static str>,
+    pub(super) gate_reopens_during_responding: usize,
+    pub(super) premature_drained: usize,
 }
 
 impl TurnAccumulator {
@@ -75,6 +81,10 @@ impl TurnAccumulator {
             last_user_item_id: None,
             respond_requested_at: None,
             respond_attempts: 0,
+            response_failed: false,
+            interrupted_by: None,
+            gate_reopens_during_responding: 0,
+            premature_drained: 0,
         }
     }
 
@@ -162,6 +172,9 @@ pub(super) fn flush_in_flight_turn(
             echo_dropped: turn.echo_dropped,
             echo_dropped_total: shared.echo_dropped_total(),
             response_failed: false,
+            interrupted_by: turn.interrupted_by,
+            gate_reopens_during_responding: turn.gate_reopens_during_responding,
+            premature_drained: turn.premature_drained,
             timeline: turn.timeline.clone(),
             completed_at: Instant::now(),
         });

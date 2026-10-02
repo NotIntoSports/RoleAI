@@ -176,7 +176,7 @@ fn char_bigrams(text: &str) -> std::collections::HashSet<(char, char)> {
 pub const GATE_DRAIN_FALLBACK_TAIL: Duration = Duration::from_millis(1500);
 /// 关门安全阀：兜底链路全部失效时，关门最长这么久后强制重开，
 /// 麦克风不被 20 秒安全阀无限闭锁后丢句。
-const GATE_FORCE_OPEN_AFTER: Duration = Duration::from_secs(20);
+pub const GATE_FORCE_OPEN_AFTER: Duration = Duration::from_secs(20);
 
 /// 排水兜底与安全阀是否已到点（不含设备侧因素：播净回执/存活由泵另行判定）。
 pub fn gate_timers_expired(

@@ -135,10 +135,11 @@ internal static class PlayStreamSession
               .WithDevice(device)
               .WithSharedMode()
               .WithEventSync()
-              // Realtime delta 到达存在几十到五百毫秒级抖动。较小设备缓冲会
-              // 在短暂无数据时插入静音，听感为句中掉字；500ms 仍在 2 秒
-              // 首响目标内，并给 WASAPI 队列留出足够消散时间。
-              .WithLatency(500)
+              // Realtime delta 到达存在几十到五百毫秒级抖动，实测最大间隙
+              // 可达 2s+。较小设备缓冲会在短暂无数据时插入静音，听感为
+              // 句中掉字；800ms 吸收常见抖动（dependency-decisions 记录
+              // 50→250→500→800 的演进），仍在可感延迟预算内。
+              .WithLatency(800)
               .BuildAsync();
         var playerFailure = new TaskCompletionSource<Exception?>(TaskCreationOptions.RunContinuationsAsynchronously);
         player.PlaybackStopped += (_, stopped) =>

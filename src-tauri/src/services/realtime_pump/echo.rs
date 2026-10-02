@@ -93,6 +93,11 @@ pub(super) struct CurrentTurnEcho<'a> {
     pub(super) post_playback_until: Option<Instant>,
     /// 原生播放闭锁期间才启用当前轮短片段回声闸；WebAudio 全双工不靠它挡打断。
     pub(super) guard: bool,
+    /// 是否启用「首音 400ms 后到达的短转写一律按回声」尾音兜底。仅对播放
+    /// 期间新到达的转写有意义；done 时刻对早在播放前就定稿的提问文本套用
+    /// 该规则会把整轮误判为回声丢弃（门控模式下提问文本受同句保护，不可
+    /// 能被迟到转写覆盖），因此由调用方按语义传入。
+    pub(super) tail_rule: bool,
 }
 
 /// 历史轮回声沿用通用相似度；当前轮已实际出声时，短片段也按回声处理。
@@ -136,7 +141,10 @@ pub(super) fn is_current_or_recent_echo(
 
     // 文本 transcript delta 可能远落后于音频。设备已出声一段时间后，
     // 麦克风闸门本就关闭；此时到达的短用户转写优先按当前轮尾音/回声处理。
-    user_len <= 12
+    // 仅对「播放期间新到达的转写」启用；对 done 时刻早已定稿的提问文本
+    // 不适用（见 CurrentTurnEcho.tail_rule 注释）。
+    current.tail_rule
+        && user_len <= 12
         && current
             .first_audio_at
             .is_some_and(|at| at.elapsed() >= Duration::from_millis(400))
@@ -146,6 +154,7 @@ pub(super) fn current_turn_echo<'a>(
     turn: &'a TurnAccumulator,
     post_playback_until: Option<Instant>,
     playback_mode: RealtimePlaybackMode,
+    tail_rule: bool,
 ) -> CurrentTurnEcho<'a> {
     CurrentTurnEcho {
         assistant: &turn.assistant_text,
@@ -154,6 +163,7 @@ pub(super) fn current_turn_echo<'a>(
         first_audio_at: turn.first_audio_at,
         post_playback_until,
         guard: playback_mode == RealtimePlaybackMode::Native,
+        tail_rule,
     }
 }
 

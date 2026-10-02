@@ -750,6 +750,9 @@ pub(crate) fn finalize_network(
             "playbackLastEvent": completed.playback_last_event,
             "echoDropped": completed.echo_dropped,
             "echoDroppedTotal": completed.echo_dropped_total,
+            "interruptedBy": completed.interrupted_by,
+            "gateReopensDuringResponding": completed.gate_reopens_during_responding,
+            "prematureDrained": completed.premature_drained,
             "timeline": completed.timeline,
             "finalizeLagMs": completed.completed_at.elapsed().as_millis() as u64,
         });

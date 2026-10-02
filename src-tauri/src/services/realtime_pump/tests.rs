@@ -356,12 +356,13 @@ mod pump_tests {
         assert!(turn.transcript_only);
         assert_eq!(turn.user_text, "这个方案大家怎么看");
 
-        // 点名 → RespondText（item.create + response.create）。
+        // 点名 → 闸门预关（清服务端缓冲）→ RespondText（item.create + response.create）。
         ws.send(Message::Text(
             r#"{"type":"conversation.item.input_audio_transcription.completed","item_id":"b","transcript":"会议助手，帮我记一下时间"}"#
                 .into(),
         ))
         .unwrap();
+        assert_eq!(read_frame(&mut ws)["type"], "input_audio_buffer.clear");
         let item = read_frame(&mut ws);
         assert_eq!(item["type"], "conversation.item.create");
         assert_eq!(
@@ -403,8 +404,9 @@ mod pump_tests {
             "transcript-only text must be kept as force-respond candidate"
         );
 
-        // 热键强制回答 → item.create（原文）+ response.create。
+        // 热键强制回答 → 闸门预关（clear）→ item.create（原文）+ response.create。
         fixture.pump.send(PumpCommand::ForceRespond);
+        assert_eq!(read_frame(&mut ws)["type"], "input_audio_buffer.clear");
         let item = read_frame(&mut ws);
         assert_eq!(item["type"], "conversation.item.create");
         assert_eq!(item["item"]["content"][0]["text"], "你听得见我说话吗");
@@ -452,12 +454,13 @@ mod pump_tests {
         let fixture = spawn_pump(port, false, "会议助手", false);
         let (_, mut ws) = accept_session(&listener);
 
-        // 点名触发正常回答。
+        // 点名触发正常回答（闸门预关先清一次服务端缓冲）。
         ws.send(Message::Text(
             r#"{"type":"conversation.item.input_audio_transcription.completed","item_id":"a","transcript":"会议助手，你好"}"#
                 .into(),
         ))
         .unwrap();
+        assert_eq!(read_frame(&mut ws)["type"], "input_audio_buffer.clear");
         assert_eq!(read_frame(&mut ws)["type"], "conversation.item.create");
         assert_eq!(read_frame(&mut ws)["type"], "response.create");
 
@@ -498,12 +501,13 @@ mod pump_tests {
         );
         let (_, mut ws) = accept_session(&listener);
 
-        // 点名 → item.create + response.create 发出，服务端全程沉默。
+        // 点名 → 闸门预关 clear → item.create + response.create，服务端全程沉默。
         ws.send(Message::Text(
             r#"{"type":"conversation.item.input_audio_transcription.completed","item_id":"a","transcript":"会议助手，帮我记一下时间"}"#
                 .into(),
         ))
         .unwrap();
+        assert_eq!(read_frame(&mut ws)["type"], "input_audio_buffer.clear");
         assert_eq!(read_frame(&mut ws)["type"], "conversation.item.create");
         assert_eq!(read_frame(&mut ws)["type"], "response.create");
 
@@ -539,7 +543,10 @@ mod pump_tests {
         );
 
         // 之后 ForceRespond 能再次发起请求（泵没有卡在「回答中」）。
+        // 放弃后闸门经播净回执重开（clear），ForceRespond 预关再 clear 一次。
         fixture.pump.send(PumpCommand::ForceRespond);
+        assert_eq!(read_frame(&mut ws)["type"], "input_audio_buffer.clear");
+        assert_eq!(read_frame(&mut ws)["type"], "input_audio_buffer.clear");
         assert_eq!(read_frame(&mut ws)["type"], "conversation.item.create");
         assert_eq!(read_frame(&mut ws)["type"], "response.create");
         drop(fixture.pump);
@@ -561,12 +568,13 @@ mod pump_tests {
         );
         let (_, mut ws) = accept_session(&listener);
 
-        // 点名触发回答，服务端沉默到看门狗放弃。
+        // 点名触发回答（闸门预关 clear），服务端沉默到看门狗放弃。
         ws.send(Message::Text(
             r#"{"type":"conversation.item.input_audio_transcription.completed","item_id":"a","transcript":"会议助手，你好"}"#
                 .into(),
         ))
         .unwrap();
+        assert_eq!(read_frame(&mut ws)["type"], "input_audio_buffer.clear");
         assert_eq!(read_frame(&mut ws)["type"], "conversation.item.create");
         assert_eq!(read_frame(&mut ws)["type"], "response.create");
         assert_eq!(read_frame(&mut ws)["type"], "input_audio_buffer.clear");
@@ -618,6 +626,7 @@ mod pump_tests {
                 .into(),
         ))
         .unwrap();
+        assert_eq!(read_frame(&mut ws)["type"], "input_audio_buffer.clear");
         assert_eq!(read_frame(&mut ws)["type"], "conversation.item.create");
         assert_eq!(read_frame(&mut ws)["type"], "response.create");
 
@@ -666,6 +675,7 @@ mod pump_tests {
                 .into(),
         ))
         .unwrap();
+        assert_eq!(read_frame(&mut ws)["type"], "input_audio_buffer.clear");
         assert_eq!(read_frame(&mut ws)["type"], "conversation.item.create");
         assert_eq!(read_frame(&mut ws)["type"], "response.create");
         ws.send(Message::Text(r#"{"type":"response.created"}"#.into()))
@@ -724,12 +734,13 @@ mod pump_tests {
         let fixture = spawn_pump(port, false, "会议助手", false);
         let (_, mut ws) = accept_session(&listener);
 
-        // 第一句点名 → 应答在途。
+        // 第一句点名 → 应答在途（闸门预关 clear）。
         ws.send(Message::Text(
             r#"{"type":"conversation.item.input_audio_transcription.completed","item_id":"a","transcript":"会议助手，今天几号"}"#
                 .into(),
         ))
         .unwrap();
+        assert_eq!(read_frame(&mut ws)["type"], "input_audio_buffer.clear");
         assert_eq!(read_frame(&mut ws)["type"], "conversation.item.create");
         assert_eq!(read_frame(&mut ws)["type"], "response.create");
         ws.send(Message::Text(r#"{"type":"response.created"}"#.into()))
@@ -761,6 +772,8 @@ mod pump_tests {
         );
         let first_answer = fixture.pump.shared.take_completed().unwrap();
         assert_eq!(first_answer.user_text, "会议助手，今天几号");
+        // 排队点名发起：上一轮无音频已即时重开闸门，预关再清一次缓冲。
+        assert_eq!(read_frame(&mut ws)["type"], "input_audio_buffer.clear");
         assert_eq!(read_frame(&mut ws)["type"], "conversation.item.create");
         assert_eq!(read_frame(&mut ws)["type"], "response.create");
 
@@ -1122,7 +1135,10 @@ mod pump_tests {
         assert!(fixture.sink.written().is_empty(), "候选模式不得直接出声");
 
         fixture.pump.send(PumpCommand::FlushHeld);
-        wait_for(|| fixture.sink.written().len() == 320, "flushed audio");
+        wait_for(
+            || fixture.sink.written.lock().unwrap().len() == 320,
+            "flushed audio",
+        );
         assert_eq!(fixture.sink.written(), [5u8; 320]);
     }
     /// 字幕事件：用户转写与助手回复的快照经 live_sink 发出（partial 帧）。
@@ -1254,10 +1270,10 @@ mod pump_tests {
         wait_for(|| !fixture.sink.written().is_empty(), "audio played");
 
         fixture.pump.send(PumpCommand::LocalBargeIn);
-        // MemSink 无缓冲即视为已播净：关门后下一圈重开先发 clear（回声残渣
-        // 清理），随后才是打断取消。真实设备由播净回执驱动，语义一致。
-        expect_gate_reopen_clear(&mut ws);
+        // MemSink 无缓冲即视为已播净：打断先取消在途响应（response.cancel），
+        // 关门期的服务端缓冲清理（clear）随后发出，上行等播净回执/尾窗重开。
         assert_eq!(read_frame(&mut ws)["type"], "response.cancel");
+        assert_eq!(read_frame(&mut ws)["type"], "input_audio_buffer.clear");
         wait_for(|| fixture.sink.clears() >= 1, "playback cleared");
         drop(fixture.pump);
     }
@@ -1766,7 +1782,7 @@ mod pump_tests {
         expect_gate_reopen_clear(&mut ws);
 
         // done 后迟到 delta：不得再写播放，也不得再成轮。
-        let written_after_done = fixture.sink.written().len();
+        let written_after_done = fixture.sink.written.lock().unwrap().len();
         ws.send(Message::Text(
             format!(
                 r#"{{"type":"response.audio.delta","delta":"{}"}}"#,
@@ -1780,7 +1796,10 @@ mod pump_tests {
         ))
         .unwrap();
         assert_no_frame(&mut ws, Duration::from_millis(400));
-        assert_eq!(fixture.sink.written().len(), written_after_done);
+        assert_eq!(
+            fixture.sink.written.lock().unwrap().len(),
+            written_after_done
+        );
         assert_eq!(
             fixture.pump.shared.completed_count(),
             0,
@@ -2238,6 +2257,7 @@ mod pump_tests {
             first_audio_at,
             post_playback_until: None,
             guard: true,
+            tail_rule: true,
         }
     }
 
@@ -2293,6 +2313,7 @@ mod pump_tests {
                 first_audio_at: Some(Instant::now()),
                 post_playback_until: None,
                 guard: false,
+                tail_rule: true,
             }
         }
         // 当轮播报被整体回收转写（同形/中文数字变体）。
@@ -2324,6 +2345,7 @@ mod pump_tests {
                 first_audio_at: None,
                 post_playback_until: None,
                 guard: false,
+                tail_rule: true,
             },
         ));
     }
@@ -2772,7 +2794,7 @@ mod pump_tests {
 
         fixture.pump.send(PumpCommand::FlushHeld);
         wait_for(
-            || fixture.sink.written().len() == HELD_CAP_BYTES,
+            || fixture.sink.written.lock().unwrap().len() == HELD_CAP_BYTES,
             "flushed held audio",
         );
         assert_eq!(
@@ -2862,6 +2884,317 @@ mod pump_tests {
             reopened,
             "sidecar 死亡后闸门必须立即重开，不得等播净回执或兜底截止"
         );
+        drop(pump);
+    }
+
+    /// 门控模式 + GatedSink 的泵：会议桥接丢字回归测试共用。
+    fn spawn_gated_meeting_pump(
+        listener_port: u16,
+    ) -> (RealtimePump, mpsc::SyncSender<Vec<u8>>, Arc<GatedSink>) {
+        let session = RealtimeSession::start_with_profile(
+            RealtimeCapabilityProfile::openai_compatible(realtime_dialect(
+                "http://127.0.0.1/api-ws/v1/realtime",
+            )),
+            RealtimeSessionConfig {
+                endpoint: ProviderEndpoint {
+                    provider_id: "test".into(),
+                    base_url: format!("http://127.0.0.1:{listener_port}/api-ws/v1/realtime"),
+                },
+                credential: None,
+                model_id: "qwen3.8-omni-flash-realtime".into(),
+                voice: String::new(),
+                instructions: "测试".into(),
+                history: vec![],
+                auto_respond: false,
+                enable_search: false,
+            },
+        )
+        .unwrap();
+        let (tap_tx, tap_rx) = mpsc::sync_channel::<Vec<u8>>(64);
+        let sink = Arc::new(GatedSink::default());
+        let pump = RealtimePump::start(
+            session,
+            tap_rx,
+            Arc::clone(&sink) as Arc<dyn PlaybackStream>,
+            PumpConfig {
+                auto_respond: false,
+                role_name: "会议助手".into(),
+                hold_playback: false,
+                playback_mode: RealtimePlaybackMode::Native,
+                suppress_echo: None,
+                respond_start_timeout: RESPOND_START_TIMEOUT,
+            },
+            None,
+        );
+        (pump, tap_tx, sink)
+    }
+
+    /// 点名 → 预关 clear → item.create + response.create → created → 首个增量
+    /// 落播放（闸门随写关闭）。`expected_written_bytes` 为播放缓冲应达到的
+    /// 累计字节数（跨轮累加，防上一轮残留骗过等待）。
+    fn gate_mention_and_first_delta(
+        ws: &mut WebSocket<TcpStream>,
+        _tap_tx: &mpsc::SyncSender<Vec<u8>>,
+        sink: &Arc<GatedSink>,
+        item_id: &str,
+        question: &str,
+        expected_written_bytes: usize,
+    ) {
+        ws.send(Message::Text(
+            format!(
+                r#"{{"type":"conversation.item.input_audio_transcription.completed","item_id":"{item_id}","transcript":"{question}"}}"#
+            )
+            .into(),
+        ))
+        .unwrap();
+        assert_eq!(read_frame(ws)["type"], "input_audio_buffer.clear");
+        assert_eq!(read_frame(ws)["type"], "conversation.item.create");
+        assert_eq!(read_frame(ws)["type"], "response.create");
+        ws.send(Message::Text(r#"{"type":"response.created"}"#.into()))
+            .unwrap();
+        ws.send(Message::Text(
+            format!(
+                r#"{{"type":"response.audio.delta","delta":"{}"}}"#,
+                STANDARD.encode([7u8, 8])
+            )
+            .into(),
+        ))
+        .unwrap();
+        wait_for(
+            || sink.written.lock().unwrap().len() >= expected_written_bytes,
+            "audio written",
+        );
+    }
+
+    /// 句中丢字根因回归：流式增量间隙超过 sidecar 缓冲宽限时 sidecar 会误报
+    /// 「已播净」，回答在途时闸门不得据此重开——否则会议环回音频上行触发
+    /// 服务端打断，回复被掐成句中丢字。过早回执只作诊断计数，待 done 后重开。
+    #[test]
+    fn mid_reply_drained_receipt_does_not_reopen_gate() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (pump, tap_tx, sink) = spawn_gated_meeting_pump(port);
+        let (_, mut ws) = accept_session(&listener);
+
+        gate_mention_and_first_delta(&mut ws, &tap_tx, &sink, "a", "会议助手，今天几号", 2);
+
+        // 模拟增量间隙超过宽限：sidecar 缓冲短暂清空误报「已播净」。
+        sink.drained.store(true, Ordering::SeqCst);
+        // 闸门必须保持关闭：tap 帧不得上行（旧实现此处立即重开并上行）。
+        tap_tx.send(vec![2u8; 9600]).unwrap();
+        assert_no_frame(&mut ws, Duration::from_millis(600));
+
+        // 间隙恢复后的后续增量同样不得重开闸门。
+        ws.send(Message::Text(
+            format!(
+                r#"{{"type":"response.audio.delta","delta":"{}"}}"#,
+                STANDARD.encode([9u8, 10])
+            )
+            .into(),
+        ))
+        .unwrap();
+        wait_for(
+            || sink.written.lock().unwrap().len() >= 4,
+            "second delta written",
+        );
+        tap_tx.send(vec![3u8; 9600]).unwrap();
+        assert_no_frame(&mut ws, Duration::from_millis(300));
+
+        // done → 播净回执 → 此时才重开，tap 帧恢复上行。
+        ws.send(Message::Text(
+            r#"{"type":"response.done","response":{"status":"completed"}}"#.into(),
+        ))
+        .unwrap();
+        expect_gate_reopen_clear(&mut ws);
+        let mut frame = None;
+        for _ in 0..20 {
+            tap_tx.send(vec![4u8; 9600]).unwrap();
+            if let Some(recovered) = try_read_frame(&mut ws, Duration::from_millis(150)) {
+                frame = Some(recovered);
+                break;
+            }
+        }
+        assert_eq!(
+            frame.expect("uplink must resume after done+drained")["type"],
+            "input_audio_buffer.append"
+        );
+        wait_for(|| pump.shared.completed_count() >= 1, "turn completed");
+        let turn = pump.shared.take_completed().unwrap();
+        assert!(turn.premature_drained >= 1, "过早播净回执必须留下诊断计数");
+        assert_eq!(
+            turn.gate_reopens_during_responding, 0,
+            "回答在途期间闸门不得被重开"
+        );
+        assert!(!turn.interrupted);
+        drop(pump);
+    }
+
+    /// 门控模式已出声后的服务端打断必须过确认窗：短噪声（started 后很快
+    /// stopped）不清空播放；持续语音（超窗无 stopped）才取消并标注来源。
+    #[test]
+    fn gate_mode_speech_started_requires_confirmation_window() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (pump, tap_tx, sink) = spawn_gated_meeting_pump(port);
+        let (_, mut ws) = accept_session(&listener);
+
+        // —— 第一段：短噪声不打断 ——
+        gate_mention_and_first_delta(&mut ws, &tap_tx, &sink, "a", "会议助手，今天几号", 2);
+        ws.send(Message::Text(
+            r#"{"type":"input_audio_buffer.speech_started"}"#.into(),
+        ))
+        .unwrap();
+        assert_no_frame(&mut ws, Duration::from_millis(300));
+        ws.send(Message::Text(
+            r#"{"type":"input_audio_buffer.speech_stopped"}"#.into(),
+        ))
+        .unwrap();
+        // 剩余确认窗内也不得补掐。
+        assert_no_frame(&mut ws, Duration::from_millis(500));
+        ws.send(Message::Text(
+            r#"{"type":"response.audio_transcript.delta","delta":"今天是十月一号"}"#.into(),
+        ))
+        .unwrap();
+        ws.send(Message::Text(
+            r#"{"type":"response.done","response":{"status":"completed"}}"#.into(),
+        ))
+        .unwrap();
+        wait_for(|| pump.shared.completed_count() >= 1, "first turn");
+        let turn = pump.shared.take_completed().unwrap();
+        assert!(!turn.interrupted, "短噪声不得掐断回复");
+        assert_eq!(turn.interrupted_by, None);
+        drop_residual_frames(&mut ws, &sink);
+
+        // —— 第二段：持续语音在确认窗到期后掐断 ——
+        gate_mention_and_first_delta(
+            &mut ws,
+            &tap_tx,
+            &sink,
+            "b",
+            "会议助手，再帮我记一下时间",
+            4,
+        );
+        ws.send(Message::Text(
+            r#"{"type":"input_audio_buffer.speech_started"}"#.into(),
+        ))
+        .unwrap();
+        // read_frame 默认 5s 预算远大于确认窗，必然覆盖窗到期时刻。
+        assert_eq!(read_frame(&mut ws)["type"], "response.cancel");
+        wait_for(
+            || sink.clear_calls.load(Ordering::SeqCst) >= 1,
+            "playback cleared",
+        );
+        ws.send(Message::Text(
+            r#"{"type":"response.done","response":{"status":"cancelled"}}"#.into(),
+        ))
+        .unwrap();
+        wait_for(|| pump.shared.completed_count() >= 1, "second turn");
+        let turn = pump.shared.take_completed().unwrap();
+        assert!(turn.interrupted);
+        assert_eq!(
+            turn.interrupted_by,
+            Some("server_speech_started"),
+            "确认窗放行的打断必须标注来源"
+        );
+        drop(pump);
+    }
+
+    /// 排干上一轮结束后 WS 中残留的闸门重开 clear 帧，并把设备 clear 计数
+    /// 清零，供下一段断言「新一次打断的清空」。
+    fn drop_residual_frames(ws: &mut WebSocket<TcpStream>, sink: &Arc<GatedSink>) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() || try_read_frame(ws, remaining).is_none() {
+                break;
+            }
+        }
+        sink.clear_calls.store(0, Ordering::SeqCst);
+    }
+
+    /// 空响应兜底：done 到达但 created 从未出现且无音频文本（服务端吞请求
+    /// 或生成期自取消）→ 清服务端缓冲后自动重发一次；重试成功则正常成轮。
+    #[test]
+    fn empty_response_retries_once_and_recovers() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (pump, _tap_tx, _sink) = spawn_gated_meeting_pump(port);
+        let (_, mut ws) = accept_session(&listener);
+
+        ws.send(Message::Text(
+            r#"{"type":"conversation.item.input_audio_transcription.completed","item_id":"a","transcript":"会议助手，今天几号"}"#
+                .into(),
+        ))
+        .unwrap();
+        assert_eq!(read_frame(&mut ws)["type"], "input_audio_buffer.clear");
+        assert_eq!(read_frame(&mut ws)["type"], "conversation.item.create");
+        assert_eq!(read_frame(&mut ws)["type"], "response.create");
+
+        // 服务端吞请求：直接 done（无 created、无音频、无文本）。
+        ws.send(Message::Text(
+            r#"{"type":"response.done","response":{"status":"completed"}}"#.into(),
+        ))
+        .unwrap();
+        // 兜底重试：clear + 重发 item.create + response.create。
+        assert_eq!(read_frame(&mut ws)["type"], "input_audio_buffer.clear");
+        assert_eq!(read_frame(&mut ws)["type"], "conversation.item.create");
+        assert_eq!(read_frame(&mut ws)["type"], "response.create");
+
+        // 重试成功。
+        ws.send(Message::Text(r#"{"type":"response.created"}"#.into()))
+            .unwrap();
+        ws.send(Message::Text(
+            r#"{"type":"response.audio_transcript.delta","delta":"今天是十月一号"}"#.into(),
+        ))
+        .unwrap();
+        ws.send(Message::Text(
+            r#"{"type":"response.done","response":{"status":"completed"}}"#.into(),
+        ))
+        .unwrap();
+        wait_for(|| pump.shared.completed_count() >= 1, "retried turn");
+        let turn = pump.shared.take_completed().unwrap();
+        assert!(!turn.response_failed);
+        assert_eq!(turn.assistant_text, "今天是十月一号");
+        drop(pump);
+    }
+
+    /// 空响应重试仍空：按失败成轮（response_failed），前端可见「点名没回答」，
+    /// 泵不卡在「回答中」。
+    #[test]
+    fn empty_response_retry_exhausted_marks_turn_failed() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (pump, _tap_tx, _sink) = spawn_gated_meeting_pump(port);
+        let (_, mut ws) = accept_session(&listener);
+
+        ws.send(Message::Text(
+            r#"{"type":"conversation.item.input_audio_transcription.completed","item_id":"a","transcript":"会议助手，今天几号"}"#
+                .into(),
+        ))
+        .unwrap();
+        assert_eq!(read_frame(&mut ws)["type"], "input_audio_buffer.clear");
+        assert_eq!(read_frame(&mut ws)["type"], "conversation.item.create");
+        assert_eq!(read_frame(&mut ws)["type"], "response.create");
+
+        // 第一次空 done → 重试。
+        ws.send(Message::Text(
+            r#"{"type":"response.done","response":{"status":"completed"}}"#.into(),
+        ))
+        .unwrap();
+        assert_eq!(read_frame(&mut ws)["type"], "input_audio_buffer.clear");
+        assert_eq!(read_frame(&mut ws)["type"], "conversation.item.create");
+        assert_eq!(read_frame(&mut ws)["type"], "response.create");
+
+        // 重试仍空 → 失败成轮。
+        ws.send(Message::Text(
+            r#"{"type":"response.done","response":{"status":"completed"}}"#.into(),
+        ))
+        .unwrap();
+        wait_for(|| pump.shared.completed_count() >= 1, "failed turn");
+        let turn = pump.shared.take_completed().unwrap();
+        assert!(turn.response_failed, "重试仍空必须标记 response_failed");
+        assert!(!turn.transcript_only);
+        assert_eq!(turn.user_text, "会议助手，今天几号");
         drop(pump);
     }
 }
