@@ -44,6 +44,44 @@ pub struct VideoFrameAcceptance {
     pub accepted: bool,
 }
 
+/// 麦克风选型的单设备实测证据：会话开始时逐候选试绑采样得到。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct AudioPathDeviceEvidence {
+    pub device_id: String,
+    pub label: String,
+    /// 名称特征判定为虚拟回环端点（VB-CABLE 等）。
+    pub virtual_endpoint: bool,
+    /// 探针流实测峰值 RMS（0..1，纯静音为 0）。
+    pub rms_peak: f64,
+}
+
+/// 交给大模型复核的音频输入路径证据。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct AudioPathEvidence {
+    pub inputs: Vec<AudioPathDeviceEvidence>,
+    /// 确定性快绑当前选中（或即将选中）的设备 id；全候选静音时可为空串。
+    pub bound_device_id: String,
+    /// 系统默认录音设备的原始 label（default 条目；拿不到为 null）。
+    pub os_default_label: Option<String>,
+    /// 界面语言（zh-CN / en），LLM 按它输出诊断文本。
+    pub locale: Option<String>,
+}
+
+/// 大模型复核结论：白名单校验后才会被前端采纳。
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct AudioPathReview {
+    /// 建议改绑的设备 id；None 表示维持快绑选择。
+    pub switch_device_id: Option<String>,
+    pub diagnosis: String,
+    pub advice: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
@@ -483,6 +521,9 @@ fn generated_bindings() -> String {
         AudioLevelEvent::decl(&config),
         AgentCommandInput::decl(&config),
         AgentCommandResult::decl(&config),
+        AudioPathDeviceEvidence::decl(&config),
+        AudioPathEvidence::decl(&config),
+        AudioPathReview::decl(&config),
         crate::livestream::LivestreamState::decl(&config),
         crate::livestream::LivestreamSegmentStatus::decl(&config),
         crate::livestream::LivestreamOutputState::decl(&config),
@@ -600,6 +641,9 @@ mod tests {
             "AudioLevelEvent",
             "AgentCommandInput",
             "AgentCommandResult",
+            "AudioPathDeviceEvidence",
+            "AudioPathEvidence",
+            "AudioPathReview",
             "VoiceReferenceSummary",
             "VoiceReferenceSaveInput",
             "VoiceReferenceAudioSaveInput",

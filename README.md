@@ -43,6 +43,8 @@
 
 内置面试官、HR、严苛面试官、求职者陪练、表达教练五种面试相关角色，预设提示词要求 AI 只依据你提供的真实经历提问与反馈，不编造履历、不作录用决定。
 
+本机麦克风模式在会话开始时逐个候选设备试绑并实测电平，自动绑定有信号的真实麦克风：系统默认输入被虚拟声卡（如会议模式残留的 CABLE Output）占用时无需手动处理；设备证据会交给当前线路的大模型复核并给出具体诊断（仅诊断建议，设备名与电平只发往你自己配置的模型服务）。若所有候选都无信号（如 Fn 静音键未关），会直接提示原因，详见 [troubleshooting](guide/troubleshooting.md)。
+
 | 工作台 | 资料库 |
 | --- | --- |
 | ![工作台](.github/assets/screenshots/workspace-dark.png) | ![资料库](.github/assets/screenshots/materials.png) |

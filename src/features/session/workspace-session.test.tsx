@@ -1318,6 +1318,56 @@ describe("WorkspaceSession", () => {
     await waitFor(() => expect(streamer.stop).toHaveBeenCalled());
   });
 
+  it("warns when the microphone keeps reporting silence after the stream starts", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const streamer = micStreamerFactory();
+      await startMicSession(streamer.factory as never);
+      await waitFor(() => expect(streamer.start).toHaveBeenCalled());
+      // 采集已运行但从未出现有效电平：看门狗在 4 秒后提示。
+      await act(async () => { await vi.advanceTimersByTimeAsync(4_500); });
+      expect(await screen.findByText(/麦克风一直没有信号/)).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not warn when the microphone reports signal in time", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const streamer = micStreamerFactory();
+      await startMicSession(streamer.factory as never);
+      await waitFor(() => expect(streamer.start).toHaveBeenCalled());
+      // 真实麦克风的电平每 ~100ms 持续上报：推进时钟期间按 2s 间隔喂电平，
+      // 任何间隙都不足 4s，看门狗不应触发。
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+        streamer.level(0.3);
+        await vi.advanceTimersByTimeAsync(2_000);
+        streamer.level(0.3);
+        await vi.advanceTimersByTimeAsync(2_500);
+      });
+      expect(screen.queryByText(/麦克风一直没有信号/)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears the silence hint once the microphone reports signal", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const streamer = micStreamerFactory();
+      await startMicSession(streamer.factory as never);
+      await waitFor(() => expect(streamer.start).toHaveBeenCalled());
+      await act(async () => { await vi.advanceTimersByTimeAsync(4_500); });
+      expect(await screen.findByText(/麦克风一直没有信号/)).toBeTruthy();
+      await act(async () => streamer.level(0.3));
+      expect(screen.queryByText(/麦克风一直没有信号/)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("loads audio output devices automatically for text and mic sessions", async () => {
     vi.mocked(commands.getConfigPublic).mockResolvedValue({ ok: true, data: micConfig });
     render(<WorkspaceSession />);

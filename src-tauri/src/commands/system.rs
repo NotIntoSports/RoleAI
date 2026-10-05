@@ -292,6 +292,67 @@ blocking_command!(diagnostics_export, diagnostics_export_blocking(destination: S
 blocking_command!(legacy_migration_status, legacy_migration_status_blocking() -> LegacyMigrationStatus);
 blocking_command!(legacy_import_source, legacy_import_source_blocking(path: String) -> LegacySessionImport);
 
+/// 麦克风路径智能复核：把前端探针证据交激活线路的大模型诊断。
+/// 只产出诊断文本与受白名单约束的建议设备 id，不改绑定、不碰系统状态；
+/// 任何失败都返回稳定错误码，前端据此降级为确定性选型。
+pub fn session_audio_path_review_blocking(
+    state: State<'_, AppState>,
+    evidence: AudioPathEvidence,
+) -> CommandResult<AudioPathReview> {
+    use crate::services::audio_diagnosis::{self, AudioDiagnosisError};
+    let degrade = |error: AudioDiagnosisError| service_error(error.code(), error.public_message());
+    if let Err(error) = audio_diagnosis::validate_evidence(&evidence) {
+        return degrade(error);
+    }
+    let config = match super::sessions::load_session_config(&state) {
+        Ok(config) => config,
+        Err(error) => return CommandResult::Err { error },
+    };
+    let route = match active_voice_route(&config) {
+        Some(route) => route,
+        None => return degrade(AudioDiagnosisError::EndpointMissing),
+    };
+    let Some(provider_id) = route.llm_provider_id.as_deref().filter(|id| !id.is_empty()) else {
+        return degrade(AudioDiagnosisError::EndpointMissing);
+    };
+    let Some(model_id) = route.llm_model_id.as_deref().filter(|id| !id.is_empty()) else {
+        return degrade(AudioDiagnosisError::EndpointMissing);
+    };
+    let endpoint = match config
+        .models
+        .providers
+        .iter()
+        .find(|provider| provider.id == provider_id)
+        .map(|provider| ProviderEndpoint {
+            provider_id: provider.id.clone(),
+            base_url: provider.base_url.clone(),
+        })
+        .filter(|endpoint| !endpoint.base_url.is_empty())
+    {
+        Some(endpoint) => endpoint,
+        None => return degrade(AudioDiagnosisError::EndpointMissing),
+    };
+    let credential = match read_provider_secret(&state, &config, Some(provider_id)) {
+        Ok(credential) => credential,
+        Err(error) => return CommandResult::Err { error },
+    };
+    let client = match OpenAiCompatibleCascade::new() {
+        Ok(client) => client,
+        Err(error) => return service_error(error.code(), "Cascade client is unavailable"),
+    };
+    match audio_diagnosis::review_audio_path(
+        &client,
+        &endpoint,
+        credential.as_deref().map(String::as_str),
+        model_id,
+        &evidence,
+    ) {
+        Ok(review) => CommandResult::Ok { data: review },
+        Err(error) => degrade(error),
+    }
+}
+blocking_command!(session_audio_path_review, session_audio_path_review_blocking(evidence: AudioPathEvidence) -> AudioPathReview);
+
 pub fn meeting_process_list_blocking(
     _state: State<'_, AppState>,
 ) -> CommandResult<Vec<crate::processes::MeetingProcess>> {

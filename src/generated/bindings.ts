@@ -207,6 +207,36 @@ export type AgentCommandInput = { id: string, action: string, text: string | nul
 
 export type AgentCommandResult = { commandId: string, action: string, ok: boolean, result: Record<string, unknown>, error: string, };
 
+export type AudioPathDeviceEvidence = { deviceId: string, label: string, 
+/**
+ * 名称特征判定为虚拟回环端点（VB-CABLE 等）。
+ */
+virtualEndpoint: boolean, 
+/**
+ * 探针流实测峰值 RMS（0..1，纯静音为 0）。
+ */
+rmsPeak: number, };
+
+export type AudioPathEvidence = { inputs: Array<AudioPathDeviceEvidence>, 
+/**
+ * 确定性快绑当前选中（或即将选中）的设备 id；全候选静音时可为空串。
+ */
+boundDeviceId: string, 
+/**
+ * 系统默认录音设备的原始 label（default 条目；拿不到为 null）。
+ */
+osDefaultLabel: string | null, 
+/**
+ * 界面语言（zh-CN / en），LLM 按它输出诊断文本。
+ */
+locale: string | null, };
+
+export type AudioPathReview = { 
+/**
+ * 建议改绑的设备 id；None 表示维持快绑选择。
+ */
+switchDeviceId: string | null, diagnosis: string, advice: string, };
+
 export type LivestreamState = "draft" | "ready" | "playing" | "paused" | "finished";
 
 export type LivestreamSegmentStatus = "draft" | "ready" | "playing" | "played";

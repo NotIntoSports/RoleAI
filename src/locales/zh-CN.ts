@@ -171,6 +171,8 @@ export const zhCN = {
       installVirtualAudioFirst: "请先安装并自动配置虚拟声卡。",
       sendFailed: "发送失败，请重试。",
       micUnavailable: "无法访问麦克风，请检查系统麦克风权限后重试。",
+      micSilenceHint: "会话已开始但麦克风一直没有信号：请检查系统默认输入设备是否被虚拟声卡（CABLE Output）占用，或确认麦克风已插入且未静音。",
+      micSwitched: "麦克风已切换到 {name}。",
       cameraUnavailable: "无法访问摄像头，请检查系统权限后重试。",
       screenShareUnavailable: "无法开始桌面共享，请重试。",
       outputNotFound: "未在浏览器中找到所选输出设备，已使用系统默认输出。",

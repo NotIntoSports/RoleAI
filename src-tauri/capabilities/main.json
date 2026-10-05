@@ -63,6 +63,7 @@
     "allow-session-audio-ready",
     "allow-session-push-mic-pcm",
     "allow-session-push-video-frame",
+    "allow-session-audio-path-review",
     "allow-livestream-create-draft",
     "allow-livestream-generate",
     "allow-livestream-get",

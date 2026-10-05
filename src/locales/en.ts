@@ -170,6 +170,8 @@ export const en: Dictionary = {
       installVirtualAudioFirst: "Install and configure the virtual audio device first.",
       sendFailed: "Send failed. Please retry.",
       micUnavailable: "Cannot access the microphone. Check the system microphone permission and retry.",
+      micSilenceHint: "The session has started but the microphone has no signal: check whether the system default input device is occupied by the virtual audio cable (CABLE Output), and confirm the microphone is plugged in and not muted.",
+      micSwitched: "Microphone switched to {name}.",
       cameraUnavailable: "Cannot access the camera. Check the system permission and retry.",
       screenShareUnavailable: "Could not start screen sharing. Please retry.",
       outputNotFound: "The selected output device was not found in the browser; using the system default output.",

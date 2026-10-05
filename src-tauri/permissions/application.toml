@@ -293,6 +293,11 @@ description = "Allows streaming camera or screen-share JPEG frames into the acti
 commands.allow = ["session_push_video_frame"]
 
 [[permission]]
+identifier = "allow-session-audio-path-review"
+description = "Allows reviewing microphone probe evidence with the configured LLM for audio path diagnosis (advice only, no system changes)."
+commands.allow = ["session_audio_path_review"]
+
+[[permission]]
 identifier = "allow-livestream-create-draft"
 description = "Allows creating a bounded local livestream script draft."
 commands.allow = ["livestream_create_draft"]

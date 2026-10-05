@@ -10,6 +10,8 @@ pub(crate) mod realtime_pump;
 mod roles;
 pub(crate) mod sessions;
 
+pub mod audio_diagnosis;
+
 /// 基准支撑（C32）：把 crate 内部热路径以最小面暴露给 `src-tauri/benches/`。
 /// 仅 benches/*.rs 允许使用；不为基准把内部 API 公开成正式接口（手册 C31）。
 #[doc(hidden)]

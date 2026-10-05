@@ -157,6 +157,7 @@ pub fn run() {
             commands::session_audio_ready,
             commands::session_push_mic_pcm,
             commands::session_push_video_frame,
+            commands::session_audio_path_review,
             commands::livestream_create_draft,
             commands::livestream_generate,
             commands::livestream_get,

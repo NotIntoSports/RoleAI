@@ -18,8 +18,8 @@ use crate::{
         diagnostic_view, public_view,
     },
     contracts::{
-        AgentCommandInput, AgentCommandResult, AudioLevelEvent, CommandResult,
-        DiagnosticsExportResult, DiagnosticsLatencySummary, FoundationStatus,
+        AgentCommandInput, AgentCommandResult, AudioLevelEvent, AudioPathEvidence, AudioPathReview,
+        CommandResult, DiagnosticsExportResult, DiagnosticsLatencySummary, FoundationStatus,
         LegacyMigrationStatus, LegacySessionImport, LivestreamDraftInput, LivestreamGenerateInput,
         LivestreamRuntime, MicPcmAcceptance, RuntimeStatus, SessionAudioEvent, SessionCitationView,
         SessionDetail, SessionExportResult, SessionPlaybackControlEvent, SessionReplyEvent,

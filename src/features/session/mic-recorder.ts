@@ -1,6 +1,13 @@
 // 本机麦克风对练：把 WebView 麦克风采集复用为会话的流式输入源。
 // 采样率原样上报，由后端 session_push_mic_pcm 统一重采样到 48kHz。
 import { WORKLET_CODE, bytesToBase64 } from "../services/wav-recorder";
+import { enumerateAudioInputs } from "./mic-device-selection";
+import {
+  chooseBoundDevice,
+  collectMicEvidence,
+  defaultMicProbe,
+  type MicDeviceEvidence,
+} from "./mic-signal-probe";
 
 export const CHUNK_TARGET_MS = 100;
 
@@ -41,8 +48,11 @@ export class MicChunkBatcher {
 }
 
 export interface MicStreamController {
-  start(): Promise<void>;
+  /** 开流；实现可返回探针证据表供 LLM 复核，测试替身可只返回 void。 */
+  start(): Promise<void | MicDeviceEvidence[]>;
   stop(): void;
+  /** LLM 复核建议改绑时调用；可选，测试替身可不实现。 */
+  switchDevice?(deviceId: string): Promise<void>;
 }
 
 export interface MicStreamCallbacks {
@@ -61,6 +71,13 @@ export function rmsLevel(samples: Float32Array): number {
   return Math.min(1, Math.sqrt(sum / samples.length) * 4);
 }
 
+export const MIC_BASE_AUDIO: MediaTrackConstraints = {
+  channelCount: 1,
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+};
+
 export class MicStreamer implements MicStreamController {
   private stream: MediaStream | null = null;
   private context: AudioContext | null = null;
@@ -71,18 +88,60 @@ export class MicStreamer implements MicStreamController {
   constructor(
     private callbacks: MicStreamCallbacks,
     private readonly sharedContext?: AudioContext,
+    private readonly probeSampleMs = 400,
   ) {}
 
-  async start(): Promise<void> {
-    if (this.context) throw new Error("mic streamer already started");
+  // 信号证据驱动的选型：先探针（逐候选试绑实测 RMS，即开即停），再绑
+  // 第一个有信号的非虚拟设备（用 exact 约束）；全候选静音或无候选时回退
+  // 系统默认。返回证据表供 LLM 复核；探针本身失败不阻断开流。
+  async openWithEvidence(): Promise<MicDeviceEvidence[]> {
+    const devices = await enumerateAudioInputs();
+    const evidence = await collectMicEvidence(devices, defaultMicProbe(MIC_BASE_AUDIO, this.probeSampleMs));
+    const chosen = chooseBoundDevice(evidence);
+    const audio: MediaTrackConstraints = {
+      ...MIC_BASE_AUDIO,
+      ...(chosen ? { deviceId: { exact: chosen } } : {}),
+    };
+    const stream = await navigator.mediaDevices.getUserMedia({ audio });
+    this.replaceStream(stream);
+    return evidence;
+  }
+
+  /** LLM 复核建议改绑时调用：换流并重建采集源，采集图（worklet/静音汇）保持不变。 */
+  async switchDevice(deviceId: string): Promise<void> {
+    if (!this.context || !this.worklet) throw new Error("mic streamer not started");
     const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        channelCount: 1,
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
+      audio: { ...MIC_BASE_AUDIO, deviceId: { exact: deviceId } },
     });
+    this.replaceStream(stream);
+  }
+
+  private replaceStream(stream: MediaStream): void {
+    this.stream?.getTracks().forEach((track) => track.stop());
+    this.stream = stream;
+    if (this.context && this.worklet) {
+      this.source?.disconnect();
+      this.source = this.context.createMediaStreamSource(stream);
+      this.source.connect(this.worklet);
+    }
+  }
+
+  /** 开流并返回探针证据表（探针失败时为空数组，供调用方跳过 LLM 复核）。 */
+  async start(): Promise<MicDeviceEvidence[]> {
+    if (this.context) throw new Error("mic streamer already started");
+    let evidence: MicDeviceEvidence[] = [];
+    let stream: MediaStream;
+    try {
+      evidence = await this.openWithEvidence();
+      const bound = this.stream;
+      if (!bound) throw new Error("mic probe did not bind a stream");
+      stream = bound;
+    } catch {
+      // 探针/证据选型失败（枚举不可用等）：回退系统默认开流，行为与未接入
+      // 探针时一致，后续由静音看门狗兜底。
+      evidence = [];
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { ...MIC_BASE_AUDIO } });
+    }
     const context = this.sharedContext ?? new AudioContext();
     try {
       // WebView2 中 AudioContext 可能以 suspended 状态创建；不显式恢复会导致
@@ -123,6 +182,7 @@ export class MicStreamer implements MicStreamController {
       this.teardown();
       throw error;
     }
+    return evidence;
   }
 
   stop(): void {
