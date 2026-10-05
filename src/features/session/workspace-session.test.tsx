@@ -13,6 +13,7 @@ import type {
   PublicConfig,
 } from "../../generated/bindings";
 import { WorkspaceSession } from "./workspace-session";
+import { INPUT_SOURCE_STORAGE_KEY } from "./input-source-preference";
 
 vi.mock("../../api/commands", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../api/commands")>()),
@@ -152,6 +153,7 @@ describe("WorkspaceSession", () => {
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+    window.localStorage.clear();
   });
 
   it("shows loading then idle start controls", async () => {
@@ -190,6 +192,47 @@ describe("WorkspaceSession", () => {
     fireEvent.change(screen.getByLabelText("会议进程"), { target: { value: "202" } });
     fireEvent.click(screen.getByRole("button", { name: "开始会话" }));
     await waitFor(() => expect(commands.startSession).toHaveBeenCalledWith(expect.objectContaining({ meetingPid: 202 })));
+  });
+
+  it("keeps the local output on the system default after visiting meeting mode", async () => {
+    vi.mocked(commands.getConfigPublic).mockResolvedValue({ ok: true, data: configuredSession() });
+    vi.mocked(commands.listMeetingProcesses).mockResolvedValue({ ok: true, data: [
+      { pid: 101, name: "zoom.exe", title: "Meeting A" },
+    ] });
+    render(<WorkspaceSession />);
+    await screen.findByLabelText("输入来源");
+    if (screen.getByRole("button", { name: "会话配置" }).getAttribute("aria-expanded") === "false") fireEvent.click(screen.getByRole("button", { name: "会话配置" }));
+    fireEvent.change(screen.getByLabelText("输入来源"), { target: { value: "meeting" } });
+    await screen.findByRole("option", { name: /Meeting A/ });
+    fireEvent.change(screen.getByLabelText("输入来源"), { target: { value: "mic" } });
+    fireEvent.click(screen.getByRole("button", { name: "开始会话" }));
+    await waitFor(() => expect(commands.startSession).toHaveBeenCalledTimes(1));
+    const payload = vi.mocked(commands.startSession).mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+    // 虚拟声卡端点不得残留到本机模式：本机默认就是系统真实扬声器。
+    expect(payload?.outputDeviceId).toBeUndefined();
+  });
+
+  it("restores the persisted meeting input source after a restart", async () => {
+    window.localStorage.setItem(INPUT_SOURCE_STORAGE_KEY, "meeting");
+    vi.mocked(commands.getConfigPublic).mockResolvedValue({ ok: true, data: configuredSession() });
+    vi.mocked(commands.listMeetingProcesses).mockResolvedValue({ ok: true, data: [
+      { pid: 101, name: "zoom.exe", title: "Meeting A" },
+    ] });
+    render(<WorkspaceSession />);
+    await screen.findByLabelText("会议进程");
+    expect(screen.getByLabelText("输入来源")).toHaveValue("meeting");
+    // 唯一会议进程自动选中。
+    expect(screen.getByLabelText("会议进程")).toHaveValue("101");
+    fireEvent.click(screen.getByRole("button", { name: "开始会话" }));
+    await waitFor(() => expect(commands.startSession).toHaveBeenCalledWith(expect.objectContaining({ meetingPid: 101 })));
+  });
+
+  it("defaults to the microphone input when no preference is stored", async () => {
+    vi.mocked(commands.getConfigPublic).mockResolvedValue({ ok: true, data: configuredSession() });
+    render(<WorkspaceSession />);
+    const source = await screen.findByLabelText("输入来源");
+    expect(source).toHaveValue("mic");
+    expect(screen.queryByLabelText("会议进程")).toBeNull();
   });
 
   it("disables meeting audio and falls back to the microphone when the platform is unsupported", async () => {

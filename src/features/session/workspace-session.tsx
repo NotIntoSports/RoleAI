@@ -24,6 +24,7 @@ import { SessionToolbar } from "./session-toolbar";
 import { TranscriptPanel } from "./transcript-panel";
 import { AgentToolsPanel } from "./agent-tools-panel";
 import { useLatencyWaterfallPreference } from "./latency-preference";
+import { readInputSourcePreference, writeInputSourcePreference } from "./input-source-preference";
 import type {
   RuntimeStatus,
   PreflightIssue,
@@ -101,7 +102,13 @@ export function WorkspaceSession({
   const [webDegraded, setWebDegraded] = useState(false);
   const [pendingConfirmation, setPendingConfirmation] = useState(false);
   const [confirmationText, setConfirmationText] = useState("");
-  const [inputSource, setInputSource] = useState("mic");
+  const [inputSource, setInputSourceState] = useState(readInputSourcePreference);
+  // 输入来源写回持久化偏好：重启后恢复上次选择，避免静默回退到本机麦克风；
+  // 平台不支持等强制回退路径也走这里，保证落库状态与界面一致。
+  const setInputSource = useCallback((source: string) => {
+    writeInputSourcePreference(source);
+    setInputSourceState(source);
+  }, []);
   const [meetingProcesses, setMeetingProcesses] = useState<MeetingProcess[]>([]);
   const [meetingPid, setMeetingPid] = useState("");
   const [audioOutputs, setAudioOutputs] = useState<AudioOutputDevice[]>([]);
@@ -129,7 +136,8 @@ export function WorkspaceSession({
       if (!result.ok) { setVirtualAudio(null); setMessage(errorText(result.error)); return; }
       setVirtualAudio(result.data);
       setAudioRetryBlocked(result.data.state === "installing");
-      setOutputDeviceId(result.data.renderEndpointId ?? "");
+      // 虚拟端点不回填 outputDeviceId：会议模式由后端 session_start 覆盖为 CABLE Input；
+      // 若回填，切回本机模式会把 AI 语音 setSinkId 进虚拟声卡而非真实扬声器。
     } catch { setVirtualAudio(null); setMessage(t("session.controls.virtualAudioCheckFailed")); }
   }
   async function installVirtualAudio() {
@@ -142,7 +150,7 @@ export function WorkspaceSession({
         setMessage(result.error.message);
         return;
       }
-      setVirtualAudio(result.data); setOutputDeviceId(result.data.renderEndpointId ?? "");
+      setVirtualAudio(result.data);
       setAudioRetryBlocked(result.data.diagnostic?.retryAllowed === false);
       setMessage(result.data.detail);
     } catch { setMessage(t("session.controls.virtualAudioInstallFailed")); }
@@ -170,6 +178,14 @@ export function WorkspaceSession({
       if (!result.data.length) setMessage(t("session.controls.noMeetingWindows"));
     } catch { setMeetingProcesses([]); setMessage(t("session.controls.meetingDetectFailed")); }
   }
+  // 重启恢复会议模式：与工具栏切换同路径加载会议进程与虚拟声卡状态。
+  useEffect(() => {
+    if (inputSource === "meeting") {
+      void refreshMeetings();
+      void refreshVirtualAudio();
+    }
+    // 仅按恢复的模式在挂载时加载一次。
+  }, []);
   useEffect(() => {
     let cancelled = false;
     void (async () => {
