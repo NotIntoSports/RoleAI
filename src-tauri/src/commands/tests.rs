@@ -1308,7 +1308,25 @@ fn session_stop_sets_cancel_while_finalize_holds_locks() {
             ))
             .unwrap()
         });
-        while !entered.load(std::sync::atomic::Ordering::SeqCst) {
+        // 自旋等待必须带终态检测与上限：finalize 若在进入 LLM 前异常退出
+        // （早退错误/毒化锁 panic），无上限自旋会让整个测试挂死——CI
+        // coverage 插桩环境实测两次 70+ 分钟无输出。早退或超时都立即失败，
+        // 并把 finalize 线程的真实结果/panic 一并暴露出来。
+        let wait_started = std::time::Instant::now();
+        loop {
+            if entered.load(std::sync::atomic::Ordering::SeqCst) {
+                break;
+            }
+            if finalize.is_finished() {
+                let finalized = finalize
+                    .join()
+                    .expect("finalize thread panicked before the LLM gate");
+                panic!("finalize finished without entering the LLM gate: {finalized}");
+            }
+            assert!(
+                wait_started.elapsed() < std::time::Duration::from_secs(60),
+                "finalize never entered the LLM gate within 60s"
+            );
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         let started = std::time::Instant::now();
