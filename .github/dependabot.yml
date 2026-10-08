@@ -7,6 +7,20 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    ignore:
+      # tests/tauri/dependency-contract.test.mjs 硬编码钉死以下基础依赖，
+      # 任何变动都会挂 verify。升级它们需同步改契约测试，属显式评审，
+      # 不进 dependabot 组 PR——ignore 下限 = 契约锁定的当前版本+1。
+      - dependency-name: "@tauri-apps/api"
+        versions: [">=2.11.2"]
+      - dependency-name: "@tauri-apps/cli"
+        versions: [">=2.11.5"]
+      - dependency-name: "react"
+        versions: [">=19.2.9"]
+      - dependency-name: "react-dom"
+        versions: [">=19.2.9"]
+      - dependency-name: "vite"
+        versions: [">=8.2.3"]
     groups:
       minor-and-patch:
         update-types:
