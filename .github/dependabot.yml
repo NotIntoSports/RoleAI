@@ -18,6 +18,14 @@ updates:
     directory: "/src-tauri"
     schedule:
       interval: "weekly"
+    ignore:
+      # tauri 2.11.6 的 test feature 有回归：其 src/test/mod.rs 构造
+      # AppConfig 漏初始化 app_directories_override（E0063），本项目
+      # dev-dependencies 启用 tauri/test，cargo test 直接编不过。修复
+      # 落在 2.12.1，跳过 2.11.6；tauri 2.12 线升级（updater 2.13+ 要
+      # 求 tauri ^2.12）单独评审后再放开。
+      - dependency-name: "tauri"
+        versions: [">=2.11.6, <2.12"]
     groups:
       minor-and-patch:
         update-types:
