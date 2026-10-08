@@ -51,6 +51,12 @@ updates:
         versions: [">=2.4.5"]
       - dependency-name: "tauri-plugin-updater"
         versions: [">=2.11.1"]
+      # ort 处于 2.0.0-rc 预发布线，rc 之间存在破坏性 API 变更：
+      # rc.13 移动/删除 execution_providers::CPUExecutionProvider 等，
+      # Silero VAD 代码（E0432/E0277 一串）编不过。rc 升级须随上游
+      # 迁移指南单独评审迁移代码。
+      - dependency-name: "ort"
+        versions: [">=2.0.0-rc.11"]
     groups:
       minor-and-patch:
         update-types:
