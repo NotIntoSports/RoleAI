@@ -22,10 +22,10 @@ tauri-build = { version = "=2.6.3", features = [] }
 chrono = { version = "=0.4.45", default-features = false, features = ["clock", "serde", "std"] }
 docx-rs = { version = "=0.4.22", default-features = false }
 obws = { version = "=0.15.0", default-features = false }
-pdf-extract = "=0.12.0"
+pdf-extract = "=0.12.1"
 rusqlite = { version = "=0.40.2", features = ["bundled", "backup"] }
 sqlite-vec = "=0.1.9"
-reqwest = { version = "=0.13.4", default-features = false, features = ["blocking", "json", "multipart", "rustls"] }
+reqwest = { version = "=0.13.5", default-features = false, features = ["blocking", "json", "multipart", "rustls"] }
 tungstenite = { version = "=0.30.0", default-features = false, features = ["handshake", "rustls-tls-native-roots"] }
 # rustls 本体是 reqwest/tungstenite/tauri-plugin-updater 的共同传递依赖：updater 启用
 # `ring`、reqwest 的 rustls feature 启用 `aws-lc-rs`，两者并存时 rustls 拒绝自动选择
@@ -42,11 +42,11 @@ tauri-plugin-single-instance = "=2.4.4"
 # 无签名公钥时前端显示「未配置更新源」，不影响启动。
 # 2.12+ 要求 tauri ^2.12（项目钉 tauri =2.11.5），故停在兼容线上 2.11.0。
 tauri-plugin-updater = "=2.11.0"
-thiserror = "=2.0.20"
+thiserror = "=2.0.21"
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", features = ["env-filter", "fmt"] }
 ts-rs = { version = "=12.0.1", features = ["chrono-impl", "serde-json-impl", "uuid-impl"] }
-uuid = { version = "=1.26.0", features = ["serde", "v4"] }
+uuid = { version = "=1.27.0", features = ["serde", "v4"] }
 zeroize = "=1.9.0"
 # ort 必须保持 Cargo.lock 钉住的 2.0.0-rc.10：该 crate 声明 ort = "2.0.0-rc.10"（开放范围），
 # 但 rc.11+ 移除了 CPUExecutionProvider，升级 ort 会导致编译失败。
