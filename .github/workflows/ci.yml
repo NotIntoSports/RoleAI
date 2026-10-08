@@ -215,7 +215,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # 供应链检查：许可证、RustSec 漏洞公告、重复依赖、来源白名单（src-tauri/deny.toml）。
-      - uses: EmbarkStudios/cargo-deny-action@b66acf5e9fe20f8aba065be86778a8a4c846f902 # v2 移动标签（v2.1.1 之后，2026-09-30）
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2 移动标签（v2.1.1 之后，2026-09-30）
         with:
           manifest-path: src-tauri/Cargo.toml
           command: check
