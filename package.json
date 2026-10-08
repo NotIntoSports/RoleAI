@@ -24,11 +24,11 @@
   },
   "dependencies": {
     "@tauri-apps/api": "2.11.1",
-    "@tauri-apps/plugin-updater": "2.11.0",
-    "lucide-react": "1.41.0",
+    "@tauri-apps/plugin-updater": "2.13.1",
+    "lucide-react": "1.52.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "wouter": "3.10.0",
+    "wouter": "3.13.0",
     "zod": "^3.25.0"
   },
   "devDependencies": {
@@ -39,14 +39,14 @@
     "@types/node": "^26.6.4",
     "@types/react": "^19.0.0",
     "@types/react-dom": "19.2.7",
-    "@vitejs/plugin-react": "6.1.1",
-    "@vitest/coverage-v8": "5.0.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "@vitest/coverage-v8": "5.0.3",
     "jsdom": "30.1.2",
-    "msedge-tts": "^2.0.8",
-    "selenium-webdriver": "4.49.0",
+    "msedge-tts": "^2.0.9",
+    "selenium-webdriver": "4.50.0",
     "typescript": "7.0.2",
     "vite": "8.2.2",
-    "vitest": "5.0.0"
+    "vitest": "5.0.3"
   },
   "overrides": {
     "nanoid": "3.3.18",
