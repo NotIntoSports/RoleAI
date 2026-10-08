@@ -33,14 +33,24 @@ updates:
     schedule:
       interval: "weekly"
     ignore:
-      # tauri 2.11.6 的 test feature 有回归：其 src/test/mod.rs 构造
-      # AppConfig 漏初始化 app_directories_override（E0063），本项目
-      # dev-dependencies 启用 tauri/test，cargo test 直接编不过。修复
-      # 落在 2.12.1。实测逗号区间（">=2.11.6, <2.12"）在 cargo 生态
-      # 不生效，故放开前先整段屏蔽：tauri 线升级（2.12 起需同步评估
-      # updater 2.13+ / @tauri-apps/api 等）单独评审后再抬高此下限。
+      # tauri 家族必须整体升级、单独评审，不进组 PR。实测任何局部
+      # bump 都会坏 cargo test（tauri/test feature）：tauri 2.11.6 与
+      # 2.11.5+tauri-utils 2.10.x（被 tauri-build 2.7.1 的 ~2.10.1 要
+      # 求拖进）都在其 src/test/mod.rs 漏初始化 AppConfig 新字段
+      # app_directories_override（E0063）；修复在 tauri 2.12.1。升级
+      # 到 2.12 线需连动 tauri-build / 两个 plugin / @tauri-apps JS
+      # 侧与契约测试，作为一次显式升级执行。ignore 下限 = 当前钉定
+      # 版本 +1（patch 也会破坏契约）。
+      # 注：逗号区间（">=2.11.6, <2.12"）在 cargo 生态不生效，一律
+      # 用单约束开区间，升级评审后手动抬高下限。
       - dependency-name: "tauri"
         versions: [">=2.11.6"]
+      - dependency-name: "tauri-build"
+        versions: [">=2.6.4"]
+      - dependency-name: "tauri-plugin-single-instance"
+        versions: [">=2.4.5"]
+      - dependency-name: "tauri-plugin-updater"
+        versions: [">=2.11.1"]
     groups:
       minor-and-patch:
         update-types:
