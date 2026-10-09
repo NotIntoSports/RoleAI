@@ -11,16 +11,18 @@ updates:
       # tests/tauri/dependency-contract.test.mjs 硬编码钉死以下基础依赖，
       # 任何变动都会挂 verify。升级它们需同步改契约测试，属显式评审，
       # 不进 dependabot 组 PR——ignore 下限 = 契约锁定的当前版本+1。
+      # 2026-10-09 已随 tauri 2.12 线升级至 api/cli 2.12.1、
+      # react/react-dom 19.3.0、vite 8.3.2。
       - dependency-name: "@tauri-apps/api"
-        versions: [">=2.11.2"]
+        versions: [">=2.12.2"]
       - dependency-name: "@tauri-apps/cli"
-        versions: [">=2.11.5"]
+        versions: [">=2.12.2"]
       - dependency-name: "react"
-        versions: [">=19.2.9"]
+        versions: [">=19.3.1"]
       - dependency-name: "react-dom"
-        versions: [">=19.2.9"]
+        versions: [">=19.3.1"]
       - dependency-name: "vite"
-        versions: [">=8.2.3"]
+        versions: [">=8.3.3"]
     groups:
       minor-and-patch:
         update-types:
@@ -33,28 +35,27 @@ updates:
     schedule:
       interval: "weekly"
     ignore:
-      # tauri 家族必须整体升级、单独评审，不进组 PR。实测任何局部
-      # bump 都会坏 cargo test（tauri/test feature）：tauri 2.11.6 与
-      # 2.11.5+tauri-utils 2.10.x（被 tauri-build 2.7.1 的 ~2.10.1 要
-      # 求拖进）都在其 src/test/mod.rs 漏初始化 AppConfig 新字段
-      # app_directories_override（E0063）；修复在 tauri 2.12.1。升级
-      # 到 2.12 线需连动 tauri-build / 两个 plugin / @tauri-apps JS
-      # 侧与契约测试，作为一次显式升级执行。ignore 下限 = 当前钉定
-      # 版本 +1（patch 也会破坏契约）。
-      # 注：逗号区间（">=2.11.6, <2.12"）在 cargo 生态不生效，一律
-      # 用单约束开区间，升级评审后手动抬高下限。
+      # tauri 家族必须整体升级、单独评审，不进组 PR。历史教训（2026-10）：
+      # tauri 2.11.6 与 tauri-utils 2.10.x 组合下，tauri 自带 test/mod.rs
+      # 漏初始化 AppConfig.app_directories_override（E0063），任何局部
+      # bump 都会破坏 cargo test。2026-10-09 已整体升至 tauri 2.12.1 /
+      # tauri-build 2.7.1 / single-instance 2.5.2 / updater 2.13.2，
+      # 下限 = 当前钉定版本 +1（patch 也需连动评审）。下次家族升级时
+      # 四条下限一起抬高。注意：逗号区间（">=a, <b"）在 cargo 生态不
+      # 生效，一律用单约束开区间。
       - dependency-name: "tauri"
-        versions: [">=2.11.6"]
+        versions: [">=2.12.2"]
       - dependency-name: "tauri-build"
-        versions: [">=2.6.4"]
+        versions: [">=2.7.2"]
       - dependency-name: "tauri-plugin-single-instance"
-        versions: [">=2.4.5"]
+        versions: [">=2.5.3"]
       - dependency-name: "tauri-plugin-updater"
-        versions: [">=2.11.1"]
+        versions: [">=2.13.3"]
       # ort 处于 2.0.0-rc 预发布线，rc 之间存在破坏性 API 变更：
-      # rc.13 移动/删除 execution_providers::CPUExecutionProvider 等，
-      # Silero VAD 代码（E0432/E0277 一串）编不过。rc 升级须随上游
-      # 迁移指南单独评审迁移代码。
+      # rc.13 移动/删除 execution_providers::CPUExecutionProvider 等。
+      # 且唯一依赖它的 silero-vad-rust 6.2.2（上游最新，2026-08-27）
+      # 自身源码引用该 API，ort >=rc.11 时无法编译，无修复版本——
+      # 阻塞在上游，等待 silero-vad-rust 适配 ort rc.13 后再评。
       - dependency-name: "ort"
         versions: [">=2.0.0-rc.11"]
     groups:
