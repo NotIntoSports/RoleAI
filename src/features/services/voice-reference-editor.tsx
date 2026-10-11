@@ -58,7 +58,7 @@ export function VoiceReferenceEditor({ visible }: { visible: boolean }) {
   }, []);
 
   useEffect(() => {
-    // 面板常驻挂载（服务页切标签只切显隐），供应商可能在其他标签新增；
+    // 面板常驻挂载（设置页切分类只切显隐），供应商可能在其他分类新增；
     // 每次面板变为可见时重拉配置，避免供应商下拉停留在页面加载时的快照。
     if (visible) void reload();
   }, [visible, reload]);

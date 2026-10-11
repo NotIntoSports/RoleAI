@@ -1,4 +1,4 @@
-// 语音线路、音色克隆与 OBS 密钥命令（服务页“语音线路/音色克隆”两个分类 + 设置页 OBS 区）。
+// 语音线路、音色克隆与 OBS 密钥命令（设置页“语音线路/音色克隆”两个分类 + OBS 区）。
 import type {
   SecretStatus,
   VoiceReferenceSummary,

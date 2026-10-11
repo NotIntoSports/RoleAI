@@ -19,7 +19,6 @@ export const en: Dictionary = {
         livestream: "Live studio",
         materials: "Materials",
         records: "Records",
-        services: "Services",
         settings: "Settings",
       },
       descriptions: {
@@ -27,8 +26,7 @@ export const en: Dictionary = {
         livestream: "Prepare scripts from product materials and stream a controlled virtual camera feed via OBS.",
         materials: "Organize reference materials that give every answer context.",
         records: "Review conversations and keep what is worth following up on.",
-        services: "Connect model and voice services to configure your AI capabilities.",
-        settings: "Tune your workspace, manage roles and local data.",
+        settings: "Connect model and voice services, and manage roles, appearance and local data.",
       },
       capabilities: {
         workspace: [
@@ -57,13 +55,11 @@ export const en: Dictionary = {
           "Record export",
           "Record deletion (two-step confirm)",
         ],
-        services: [
+        settings: [
           "Model provider configuration and status",
           "Voice route configuration and testing",
           "Key management (Windows Credential Manager)",
           "Connection tests and health checks",
-        ],
-        settings: [
           "System diagnostics export",
           "Config location selection and display",
           "Meeting video output modes",
@@ -152,7 +148,7 @@ export const en: Dictionary = {
       PLATFORM_UNSUPPORTED: "This audio feature is not supported on this platform. Use the local microphone instead.",
     },
     remoteHints: {
-      downstream_reconnect_exceeded: "Voice model unavailable: the provider account may not have realtime voice model access enabled. Switch voice routes on the Services page, or enable access in the provider console and retry.",
+      downstream_reconnect_exceeded: "Voice model unavailable: the provider account may not have realtime voice model access enabled. Switch voice routes under Settings → Voice routes, or enable access in the provider console and retry.",
       "1113": "Provider balance insufficient: no voice resource pack is available. Top up or switch voice routes.",
     },
     rateLimitHint: "If it failed repeatedly within a short time, the provider may be rate limiting. Wait 1–2 minutes, then speak again.",
@@ -192,7 +188,7 @@ export const en: Dictionary = {
       meetingAudioUnsupported: "Meeting audio (not supported on this platform)",
       localMic: "Local microphone",
       noRouteSelected: "No voice route selected",
-      noConfigLoaded: "Session configuration not loaded yet. Check routes and roles under Services and Settings.",
+      noConfigLoaded: "Session configuration not loaded yet. Check voice routes and roles in Settings.",
       configToggle: "Session settings",
       fieldsetLegend: "Session setup",
       inputSource: "Input source",
@@ -414,7 +410,6 @@ export const en: Dictionary = {
     cancel: "Cancel",
   },
   services: {
-    navAria: "Service categories",
     categories: {
       providers: "Model providers",
       routes: "Voice routes",
@@ -422,7 +417,7 @@ export const en: Dictionary = {
       embedding: "Embedding",
     },
     reading: "Reading local configuration…",
-    refreshedButStale: "The operation finished, but the configuration could not be reloaded. Reopen the services page to verify.",
+    refreshedButStale: "The operation finished, but the configuration could not be reloaded. Reopen Settings to verify.",
     discoveredModels: "Discovered {n} models",
     cannotInspectReferences: "Could not check provider references. Please try again.",
     ipc: {
@@ -653,7 +648,7 @@ export const en: Dictionary = {
   },
   roles: {
     heading: "Roles",
-    description: "Define your assistant with a prompt, opener, and speaking style. Saving an edited built-in template creates a personal copy.",
+    description: "Define your assistant with a prompt, opener, and speaking style. Names stay unique: the first save of a built-in template becomes your personal role, and later saves update that same role.",
     reading: "Reading local configuration…",
     ipc: {
       statusUnavailable: "IPC_UNAVAILABLE: cannot read local configuration",
@@ -666,8 +661,17 @@ export const en: Dictionary = {
     systemPromptLabel: "System prompt",
     openingLabel: "Opener",
     styleLabel: "Style instructions",
+    faceLabel: "Video face",
+    faceEmpty: "No video face",
+    faceHint: "After you pick a stock face, the workspace can start a Chinese video call with this role.",
+    faceNeedsKey: "No Tavus key saved yet, so there are no faces to pick.",
+    faceOpenTavus: "Save the key in “Video call (Tavus)”",
     save: "Save role",
     saved: "Role saved",
+    savedAndCurrent: "Saved and set as the current role",
+    savedAsCopyActive: "Saved as a personal copy and set as the current role",
+    savedAsCopy: "Saved as a personal copy. Set it as the default before the workspace uses it.",
+    hasFace: "Has a video face",
     listHeading: "Existing roles",
     empty: "No roles yet.",
     activeBadge: "Enabled",
@@ -771,7 +775,7 @@ export const en: Dictionary = {
   migrate: {
     banner: {
       title: "Re-enter your credentials",
-      action: "Go to Services",
+      action: "Go to Model providers",
     },
     legacyImport: {
       heading: "Import legacy sessions",
@@ -795,6 +799,47 @@ export const en: Dictionary = {
     importConfigTitle: "The safe file picker arrives with the permission hardening task",
     openConfig: "Open configuration file",
   },
+  tavus: {
+    heading: "Video call",
+    description: "The key stays in this machine's credential store. Listing faces does not start a call or use call minutes.",
+    keyLabel: "Tavus API key",
+    save: "Save key",
+    clear: "Clear key",
+    saved: "Key saved",
+    cleared: "Key cleared",
+    configured: "Configured",
+    missing: "Not configured",
+    listFaces: "List faces",
+    faceCount: "{n} faces available: {names}",
+    call: {
+      start: "Start video call",
+      hangup: "Hang up",
+      joined: "Connected. Speak Chinese.",
+      ended: "Call ended",
+      voiceBusy: "End the voice practice before starting a video call.",
+      noRole: "Choose a role that already has a face.",
+      phaseLabel: "Video call in progress",
+      modeLabel: "Avatar",
+      statusListening: "Listening",
+      statusReplicaSpeaking: "They're speaking",
+      statusUserSpeaking: "You're speaking",
+      mic: "Microphone",
+      micFailed: "Could not open the microphone, so the call was not connected. Check the system microphone permission and try again.",
+      previewCaption1: "Demo preview — Tavus is not contacted.",
+      previewCaption2: "This is a local preview; no real avatar is connected.",
+      stageAria: "Video call stage",
+    },
+    avatar: {
+      toggle: "Avatar",
+      toggleTitle: "On: a Tavus video call where the role appears as an avatar. Off: your configured voice route.",
+      hasFace: "Has a video face",
+      newHint: "Press Start video call to talk with the role's avatar.",
+      needsKey: "Save a Tavus key to use the avatar.",
+      openKey: "Save key",
+      needsFace: "This role has no video face yet.",
+      openRoles: "Pick a face",
+    },
+  },
   settings: {
     page: {
       navAria: "Settings categories",
@@ -804,6 +849,7 @@ export const en: Dictionary = {
         updater: "App updates",
         migration: "Data migration",
         diagnostics: "Diagnostics",
+        tavus: "Video call (Tavus)",
       },
     },
     appearance: {

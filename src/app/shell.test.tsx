@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { AVATAR_STORAGE_KEY } from "../features/session/avatar-preference";
 import { Shell } from "./shell";
 
 vi.mock("../api/commands", async (importOriginal) => ({
@@ -28,9 +29,12 @@ vi.mock("../api/commands", async (importOriginal) => ({
 
 describe("Shell", () => {
   beforeEach(() => {
-    window.location.hash = "";
+    window.history.replaceState(null, "", "/");
   });
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    window.localStorage.removeItem(AVATAR_STORAGE_KEY);
+  });
 
   it("renders navigation and default workspace page", () => {
     render(<Shell />);
@@ -50,13 +54,6 @@ describe("Shell", () => {
     expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("资料");
   });
 
-
-  it("renders services page when hash is #/services", () => {
-    window.location.hash = "#/services";
-    render(<Shell />);
-    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("服务");
-  });
-
   it("renders settings page when hash is #/settings", () => {
     window.location.hash = "#/settings";
     render(<Shell />);
@@ -70,8 +67,30 @@ describe("Shell", () => {
     expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("记录");
   });
 
+  it("drops a deep link's ?category= when navigating from the sidebar", () => {
+    window.history.replaceState(null, "", "/?category=routes#/workspace");
+    render(<Shell />);
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    expect(window.location.search).toBe("");
+    expect(window.location.hash).toBe("#/settings");
+    expect(document.getElementById("settings-panel-providers")?.hidden).toBe(false);
+    expect(document.getElementById("settings-panel-routes")?.hidden).toBe(true);
+  });
+
+  it("follows an in-page link to the settings category it names", async () => {
+    window.localStorage.setItem(AVATAR_STORAGE_KEY, "on");
+    render(<Shell />);
+    const link = await screen.findByRole("link", { name: "去选择形象" });
+    expect(link.getAttribute("href")).toBe("#/settings?category=roles");
+    fireEvent.click(link);
+    expect(window.location.hash).toBe("#/settings");
+    expect(window.location.search).toBe("?category=roles");
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("设置");
+    expect(document.getElementById("settings-panel-roles")?.hidden).toBe(false);
+  });
+
   it("starts the new page at the top after navigating from a long form", () => {
-    window.location.hash = "#/services";
+    window.location.hash = "#/settings";
     render(<Shell />);
     const main = screen.getByRole("main");
     main.scrollTop = 400;

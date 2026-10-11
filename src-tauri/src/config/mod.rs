@@ -206,6 +206,18 @@ pub struct RoleProfileConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub scenario: Option<RoleScenario>,
+    /// Tavus PAL id。人设变更后保留，下次通话再更新，避免重复创建。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tavus_pal_id: Option<String>,
+    /// 库存形象 id，对应 Tavus `default_face_id`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tavus_face_id: Option<String>,
+    /// 已同步到 PAL 的 `config_version`。与当前版本不一致时下次通话会更新 PAL。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tavus_synced_config_version: Option<u32>,
     pub active: bool,
     pub config_version: u32,
 }
@@ -329,6 +341,9 @@ impl From<RoleProfileInput> for RoleProfileConfig {
                 opening_message: String::new(),
                 style_instructions: String::new(),
                 scenario: None,
+                tavus_pal_id: None,
+                tavus_face_id: None,
+                tavus_synced_config_version: None,
                 active: false,
                 config_version: 0,
             },

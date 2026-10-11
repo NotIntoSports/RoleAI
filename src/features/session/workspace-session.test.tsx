@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -14,9 +14,18 @@ import type {
 } from "../../generated/bindings";
 import { WorkspaceSession } from "./workspace-session";
 import { INPUT_SOURCE_STORAGE_KEY } from "./input-source-preference";
+import { AVATAR_STORAGE_KEY } from "./avatar-preference";
+import { TavusCallProvider } from "../tavus/call-lock";
+
+vi.mock("../tavus/daily-room", () => ({
+  joinDailyRoom: vi.fn(async () => ({ leave: vi.fn(async () => undefined), setLocalAudio: vi.fn() })),
+}));
 
 vi.mock("../../api/commands", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../api/commands")>()),
+  getTavusCredentialStatus: vi.fn(),
+  startTavusConversation: vi.fn(),
+  endTavusConversation: vi.fn(),
   getConfigPublic: vi.fn(),
   listMeetingProcesses: vi.fn(),
   getVirtualAudioStatus: vi.fn(),
@@ -154,6 +163,7 @@ describe("WorkspaceSession", () => {
     cleanup();
     vi.clearAllMocks();
     window.localStorage.clear();
+    delete document.documentElement.dataset.roleaiDemo;
   });
 
   it("shows loading then idle start controls", async () => {
@@ -166,6 +176,150 @@ describe("WorkspaceSession", () => {
     expect((screen.getByRole("button", { name: "停止" }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByRole("heading", { name: "当前会话" })).toBeTruthy();
     expect(document.body.textContent).toContain("未开始");
+  });
+
+  describe("avatar switch", () => {
+    function tavusKey(configured: boolean) {
+      vi.mocked(commands.getTavusCredentialStatus).mockResolvedValue({ ok: true, data: { reference: "tavus/api-key", configured } });
+    }
+    function configWithFace(): PublicConfig {
+      const config = configuredSession();
+      config.roleProfiles[0].tavusFaceId = "r9d30b0e55ac";
+      return config;
+    }
+
+    it("is off by default and keeps the voice route start", async () => {
+      tavusKey(true);
+      vi.mocked(commands.getConfigPublic).mockResolvedValue({ ok: true, data: configWithFace() });
+      render(<WorkspaceSession />);
+      await screen.findAllByText("会议助手");
+      expect(screen.getByRole("switch", { name: "虚拟形象" })).toHaveAttribute("aria-checked", "false");
+      expect(screen.getByRole("button", { name: "开始会话" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "开始语音会话" })).toBeEnabled();
+      expect(screen.queryByRole("button", { name: "开始视频通话" })).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "开始会话" }));
+      await waitFor(() => expect(commands.startSession).toHaveBeenCalledTimes(1));
+      expect(commands.startTavusConversation).not.toHaveBeenCalled();
+    });
+
+    it("starts a Tavus call with the selected role instead of the voice session", async () => {
+      window.localStorage.setItem(AVATAR_STORAGE_KEY, "on");
+      tavusKey(true);
+      vi.mocked(commands.getConfigPublic).mockResolvedValue({ ok: true, data: configWithFace() });
+      vi.mocked(commands.startTavusConversation).mockResolvedValue({
+        ok: true,
+        data: { conversationId: "c123", conversationUrl: "https://tavus.daily.co/c123" },
+      });
+      // 通话舞台由 WorkspaceSession 渲染在会话主区域，替换空闲转写面板。
+      render(
+        <TavusCallProvider>
+          <WorkspaceSession />
+        </TavusCallProvider>,
+      );
+      expect(screen.getByRole("switch", { name: "虚拟形象" })).toHaveAttribute("aria-checked", "true");
+      expect(await screen.findByText("点击「开始视频通话」，和角色的虚拟形象对话。")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "开始语音会话" })).toBeDisabled();
+      const start = screen.getByRole("button", { name: "开始视频通话" });
+      await waitFor(() => expect(start).toBeEnabled());
+      fireEvent.click(start);
+      await waitFor(() => expect(commands.startTavusConversation).toHaveBeenCalledWith("role-1"));
+      expect(await screen.findByRole("button", { name: "挂断" })).toBeTruthy();
+      expect(commands.startSession).not.toHaveBeenCalled();
+      expect(screen.getByRole("switch", { name: "虚拟形象" })).toBeDisabled();
+      // 工具条阶段显示视频通话专用文案，不再显示语音会话的「未开始 / AI 应答」。
+      expect(screen.getByText("视频通话中")).toBeTruthy();
+      expect(document.querySelector(".session-mode")?.textContent).toBe("虚拟形象");
+      expect(screen.queryByText("未开始")).toBeNull();
+    });
+
+    it("blocks the start and links to the role settings when the role has no face", async () => {
+      window.localStorage.setItem(AVATAR_STORAGE_KEY, "on");
+      tavusKey(true);
+      vi.mocked(commands.getConfigPublic).mockResolvedValue({ ok: true, data: configuredSession() });
+      render(<WorkspaceSession />);
+      expect(await screen.findByText(/当前角色还没有视频形象。/)).toBeTruthy();
+      expect(screen.getByRole("link", { name: "去选择形象" })).toHaveAttribute("href", "/settings?category=roles");
+      expect(screen.getByRole("button", { name: "开始视频通话" })).toBeDisabled();
+      expect(commands.startTavusConversation).not.toHaveBeenCalled();
+    });
+
+    it("starts a labeled preview on the demo page without a Tavus key", async () => {
+      document.documentElement.dataset.roleaiDemo = "preview";
+      window.localStorage.setItem(AVATAR_STORAGE_KEY, "on");
+      tavusKey(false);
+      vi.mocked(commands.getConfigPublic).mockResolvedValue({ ok: true, data: configuredSession() });
+      vi.mocked(commands.startTavusConversation).mockResolvedValue({
+        ok: true,
+        data: { conversationId: "demo-preview", conversationUrl: "preview:roleai" },
+      });
+      render(
+        <TavusCallProvider>
+          <WorkspaceSession />
+        </TavusCallProvider>,
+      );
+      const start = await screen.findByRole("button", { name: "开始视频通话" });
+      expect(start).toBeEnabled();
+      expect(screen.queryByRole("link", { name: "去保存密钥" })).toBeNull();
+      fireEvent.click(start);
+      expect(await screen.findByText("演示预览，不会连接 Tavus。")).toBeTruthy();
+      expect(screen.getByText("这是本地预览，没有连接真实形象。")).toBeTruthy();
+      expect(screen.getByText("视频通话中")).toBeTruthy();
+    });
+
+    it("asks for the Tavus key before anything else", async () => {
+      window.localStorage.setItem(AVATAR_STORAGE_KEY, "on");
+      tavusKey(false);
+      vi.mocked(commands.getConfigPublic).mockResolvedValue({ ok: true, data: configWithFace() });
+      render(<WorkspaceSession />);
+      expect(await screen.findByText(/开启虚拟形象需要先保存 Tavus 密钥。/)).toBeTruthy();
+      expect(screen.getByRole("link", { name: "去保存密钥" })).toHaveAttribute("href", "/settings?category=tavus");
+      expect(screen.queryByRole("link", { name: "去选择形象" })).toBeNull();
+      expect(screen.getByRole("button", { name: "开始视频通话" })).toBeDisabled();
+    });
+
+    it("lets the backend explain when the key status cannot be read", async () => {
+      window.localStorage.setItem(AVATAR_STORAGE_KEY, "on");
+      vi.mocked(commands.getTavusCredentialStatus).mockRejectedValue(new Error("IPC down"));
+      vi.mocked(commands.getConfigPublic).mockResolvedValue({ ok: true, data: configWithFace() });
+      render(<WorkspaceSession />);
+      await screen.findAllByText("会议助手");
+      await waitFor(() => expect(screen.getByRole("button", { name: "开始视频通话" })).toBeEnabled());
+      expect(screen.queryByRole("link", { name: "去保存密钥" })).toBeNull();
+    });
+
+    it("remembers the choice and switches the start label", async () => {
+      tavusKey(true);
+      vi.mocked(commands.getConfigPublic).mockResolvedValue({ ok: true, data: configWithFace() });
+      const first = render(<WorkspaceSession />);
+      await screen.findAllByText("会议助手");
+      fireEvent.click(screen.getByRole("switch", { name: "虚拟形象" }));
+      expect(window.localStorage.getItem(AVATAR_STORAGE_KEY)).toBe("on");
+      expect(screen.getByRole("button", { name: "开始视频通话" })).toBeTruthy();
+      first.unmount();
+
+      render(<WorkspaceSession />);
+      await screen.findAllByText("会议助手");
+      const toggle = screen.getByRole("switch", { name: "虚拟形象" });
+      expect(toggle).toHaveAttribute("aria-checked", "true");
+      fireEvent.click(toggle);
+      expect(window.localStorage.getItem(AVATAR_STORAGE_KEY)).toBeNull();
+      expect(screen.getByRole("button", { name: "开始会话" })).toBeTruthy();
+    });
+
+    it("marks roles that have a video face in the role menu", async () => {
+      tavusKey(true);
+      const config = configWithFace();
+      config.roleProfiles.push({ id: "role-2", name: "面试官", systemPrompt: "ask", openingMessage: "", styleInstructions: "", active: false, configVersion: 1 });
+      vi.mocked(commands.getConfigPublic).mockResolvedValue({ ok: true, data: config });
+      render(<WorkspaceSession />);
+      await screen.findAllByText("会议助手");
+      fireEvent.click(screen.getByRole("button", { name: "角色" }));
+      const options = screen.getAllByRole("option");
+      expect(options[0]).toHaveTextContent("会议助手");
+      expect(within(options[0]).getByRole("img", { name: "有视频形象" })).toBeTruthy();
+      expect(options[1]).toHaveTextContent("面试官");
+      expect(within(options[1]).queryByRole("img", { name: "有视频形象" })).toBeNull();
+    });
   });
 
   it("requires an explicit choice with multiple meetings and sends the chosen PID", async () => {
@@ -488,7 +642,7 @@ describe("WorkspaceSession", () => {
     );
     expect(screen.getByRole("status").textContent).toContain("请选择一个会话角色。");
     expect(screen.getByRole("link", { name: "选择或创建角色" })).toHaveAttribute("href", "/settings?category=roles");
-    expect(screen.getByRole("link", { name: "配置语音线路" })).toHaveAttribute("href", "/services?category=routes");
+    expect(screen.getByRole("link", { name: "配置语音线路" })).toHaveAttribute("href", "/settings?category=routes");
 
     vi.mocked(commands.startSession).mockResolvedValueOnce({
       ok: false,

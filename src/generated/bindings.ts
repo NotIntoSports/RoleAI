@@ -90,7 +90,23 @@ export type StorageConfig = { exportDirectory: string | null, };
 
 export type RoleScenario = "interviewer" | "hr" | "candidate" | "meetingAssistant" | "livestreamPresenter";
 
-export type RoleProfileConfig = { id: string, name: string, systemPrompt: string, openingMessage: string, styleInstructions: string, scenario?: RoleScenario, active: boolean, configVersion: number, };
+export type RoleProfileConfig = { id: string, name: string, systemPrompt: string, openingMessage: string, styleInstructions: string, scenario?: RoleScenario, 
+/**
+ * Tavus PAL id。人设变更后保留，下次通话再更新，避免重复创建。
+ */
+tavusPalId?: string, 
+/**
+ * 库存形象 id，对应 Tavus `default_face_id`。
+ */
+tavusFaceId?: string, 
+/**
+ * 已同步到 PAL 的 `config_version`。与当前版本不一致时下次通话会更新 PAL。
+ */
+tavusSyncedConfigVersion?: number, active: boolean, configVersion: number, };
+
+export type TavusFace = { id: string, name: string, };
+
+export type TavusConversationStarted = { conversationId: string, conversationUrl: string, };
 
 export type DiagnosticsConfig = { logRetentionDays: number, };
 
@@ -120,7 +136,7 @@ export type VoiceReferenceSummary = { id: string, name: string, providerId: stri
 
 export type VoiceReferenceCloneResult = { referenceId: string, voiceId: string, remoteFileId: string, };
 
-export type RoleProfileSaveInput = { id: string | null, name: string, systemPrompt: string, openingMessage: string, styleInstructions: string, };
+export type RoleProfileSaveInput = { id: string | null, name: string, systemPrompt: string, openingMessage: string, styleInstructions: string, tavusFaceId?: string, };
 
 export type RoleProfileCopyInput = { sourceId: string, id: string | null, };
 

@@ -346,3 +346,28 @@ commands.allow = ["obs_password_status"]
 identifier = "allow-obs-password-save"
 description = "Allows saving or clearing the local OBS WebSocket password in Windows Credential Manager."
 commands.allow = ["obs_password_save"]
+
+[[permission]]
+identifier = "allow-tavus-credential-status"
+description = "Allows reading whether a Tavus API key is stored, without returning the key."
+commands.allow = ["tavus_credential_status"]
+
+[[permission]]
+identifier = "allow-tavus-credential-save"
+description = "Allows saving or clearing the Tavus API key in Windows Credential Manager."
+commands.allow = ["tavus_credential_save"]
+
+[[permission]]
+identifier = "allow-tavus-list-faces"
+description = "Allows listing Tavus stock faces. This does not start a conversation."
+commands.allow = ["tavus_list_faces"]
+
+[[permission]]
+identifier = "allow-tavus-conversation-start"
+description = "Allows starting one Tavus video conversation for a local role."
+commands.allow = ["tavus_conversation_start"]
+
+[[permission]]
+identifier = "allow-tavus-conversation-end"
+description = "Allows ending one Tavus video conversation."
+commands.allow = ["tavus_conversation_end"]

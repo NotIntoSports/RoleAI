@@ -9,6 +9,7 @@ mod providers;
 pub(crate) mod realtime_pump;
 mod roles;
 pub(crate) mod sessions;
+mod tavus;
 
 pub mod audio_diagnosis;
 
@@ -46,6 +47,7 @@ pub use roles::{
 pub use sessions::{
     SessionControl, SessionProbes, SessionService, SessionServiceError, SessionStartOutcome,
 };
+pub use tavus::{API_KEY_REFERENCE as TAVUS_API_KEY_REFERENCE, TavusCallError, TavusCallService};
 pub use voice_references::{
     VoiceCloneGateway, VoiceReferenceAudioSaveInput, VoiceReferenceCloneResult,
     VoiceReferenceSaveInput, VoiceReferenceService, VoiceReferenceServiceError,

@@ -7,6 +7,133 @@
   min-height: 0;
 }
 
+/* 视频通话大舞台：通话中占满会话卡片剩余高度；空闲时 display:contents 不占布局。
+   深色渐变底同时充当预览模式（没有真实视频流）时的人像占位。 */
+.tavus-call {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 420px;
+  overflow: hidden;
+  border-radius: 14px;
+  background: radial-gradient(120% 90% at 50% 18%, #2b2b34 0%, #17171d 55%, #0d0d11 100%);
+}
+
+.tavus-call-idle {
+  display: contents;
+}
+
+.tavus-call > video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 15%;
+  background: transparent;
+}
+
+.tavus-call > video[hidden] {
+  display: none;
+}
+
+/* 底部线性渐变承载字幕、状态与悬浮控件。 */
+.tavus-call-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 20px;
+  background: linear-gradient(to top, rgb(0 0 0 / 74%) 0%, rgb(0 0 0 / 30%) 40%, rgb(0 0 0 / 0%) 68%);
+  color: #fafafa;
+}
+
+.tavus-call-captions {
+  display: grid;
+  gap: 4px;
+  width: min(100%, 720px);
+  margin: 0 auto;
+  text-align: center;
+}
+
+.tavus-call-captions p {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 65%);
+}
+
+.tavus-call-status {
+  margin: 0;
+  font-size: 12px;
+  text-align: center;
+  color: rgb(250 250 250 / 72%);
+}
+
+.tavus-call-controls {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 14px;
+}
+
+.tavus-call-controls button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 0;
+  border: 0;
+  border-radius: 999px;
+  font-size: 13px;
+  color: #fafafa;
+  box-shadow: 0 6px 22px rgb(0 0 0 / 35%);
+}
+
+.tavus-call-mic {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  background: rgb(255 255 255 / 18%);
+  backdrop-filter: blur(6px);
+}
+
+.tavus-call-mic:hover:enabled {
+  background: rgb(255 255 255 / 28%);
+}
+
+.tavus-call-mic[data-on="true"] {
+  background: var(--accent-strong);
+  color: var(--accent-strong-contrast);
+}
+
+.tavus-call-hangup {
+  height: 44px;
+  padding: 0 20px;
+  background: #d5374a;
+}
+
+.tavus-call-hangup:hover:enabled {
+  background: #c02b3d;
+}
+
+.tavus-call-hangup:disabled {
+  opacity: 0.6;
+}
+
+.tavus-call-message {
+  margin: 0;
+  font-size: 12px;
+  text-align: center;
+  color: rgb(250 250 250 / 80%);
+  overflow-wrap: anywhere;
+}
+
 .workspace-page > .page-header {
   margin-bottom: 0;
 }
@@ -438,6 +565,17 @@
   cursor: pointer;
 }
 
+.session-avatar-hint {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.session-avatar-hint a {
+  color: var(--accent-strong);
+}
+
 /* 官方实时通话输入卡：上方文本输入，下方工具条（左：更多/角色/麦克风/视频，右：发送/通话）。 */
 .session-compose {
   display: flex;
@@ -708,6 +846,50 @@
   text-overflow: ellipsis;
 }
 
+.composer-role-option-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.composer-role-face {
+  color: var(--text-muted);
+}
+
+.composer-avatar-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  min-height: 32px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 13px;
+  background: transparent;
+  cursor: pointer;
+  transition: background 150ms ease, color 150ms ease, border-color 150ms ease;
+}
+
+.composer-avatar-toggle:hover:enabled {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.composer-avatar-toggle[aria-checked="true"],
+.composer-avatar-toggle[aria-checked="true"]:hover:enabled {
+  color: var(--accent-strong);
+  border-color: transparent;
+  background: var(--accent-strong-soft);
+}
+
+.composer-avatar-toggle:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
 .composer-start {
   min-height: 34px;
   padding: 6px 16px;
@@ -963,6 +1145,14 @@
     min-height: 0;
   }
 
+  .tavus-call {
+    min-height: 320px;
+  }
+
+  .tavus-call-overlay {
+    padding: 12px;
+  }
+
   .session-toolbar {
     gap: 9px;
     padding: 12px 16px;
@@ -1036,6 +1226,11 @@
   .workspace-page > .page-header p { display: none; }
   .session-toolbar-meta h2 { display: none; }
   .composer-role-chip, .composer-role-trigger { max-width: 130px; }
+  .composer-role-chip .composer-role-trigger { flex-shrink: 1; }
+  .composer-toolbar { flex-wrap: wrap; row-gap: 6px; }
+  .composer-toolbar-group:last-child { margin-left: auto; }
+  .composer-avatar-toggle { padding: 4px 8px; }
+  .composer-avatar-label { display: none; }
   .session-config-summary { max-width: 55%; }
   .workspace-page .session-controls { gap: 4px; }
   .workspace-page .session-controls button { padding: 6px 8px; }

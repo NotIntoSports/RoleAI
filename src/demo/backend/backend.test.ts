@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CommandResult, PublicConfig } from "../../generated/bindings";
 
 import { handleDemoInvoke } from "./index";
-import { resetDemoState } from "./state";
+import { getState, resetDemoState, updateState } from "./state";
 
 /** 领域处理器可能同步返回结果，await 统一；类型按调用点断言。 */
 async function invoke<T>(cmd: string, payload?: Record<string, unknown>): Promise<CommandResult<T>> {
@@ -102,6 +102,59 @@ describe("demo backend: config/roles/providers/voice", () => {
       await invoke<unknown>("model_provider_delete", { providerId: "provider-demo-cloud" }),
     );
     expect(error.code).toBe("PROVIDER_IN_USE");
+  });
+
+  it("presents Tavus as not configured, like a desktop install without a saved key", async () => {
+    const status = expectOk(await invoke<{ reference: string; configured: boolean }>("tavus_credential_status"));
+    expect(status).toEqual({ reference: "tavus/api-key", configured: false });
+    expect(expectErr(await invoke<unknown>("tavus_list_faces")).code).toBe("TAVUS_KEY_MISSING");
+  });
+
+  it("runs the video call as a local preview without asking for a Tavus key", async () => {
+    const started = expectOk(
+      await invoke<{ conversationId: string; conversationUrl: string }>("tavus_conversation_start", {
+        roleProfileId: "preset-meeting",
+      }),
+    );
+    expect(started).toEqual({ conversationId: "demo-preview", conversationUrl: "preview:roleai" });
+    // 预览挂断：结束接口照常返回 ok（包括 demo-preview 这个预览 id）。
+    const ended = expectOk(await invoke<{ ready: boolean }>("tavus_conversation_end", {
+      conversationId: started.conversationId,
+    }));
+    expect(ended.ready).toBe(true);
+  });
+
+  it("rejects saving a personal role with a name another role already uses", async () => {
+    const error = expectErr(
+      await invoke("role_profile_save", {
+        input: { id: null, name: "会议助手", systemPrompt: "x", openingMessage: "", styleInstructions: "" },
+      }),
+    );
+    expect(error.code).toBe("ROLE_PROFILE_FIELDS_INVALID");
+  });
+
+  it("hides a preset template once a personal role carries the same name", async () => {
+    updateState((s) => {
+      s.roleProfiles = [
+        ...s.roleProfiles,
+        {
+          id: "role-personal-meeting",
+          name: "会议助手",
+          systemPrompt: "个人提示",
+          openingMessage: "",
+          styleInstructions: "",
+          scenario: undefined,
+          active: false,
+          configVersion: 1,
+        },
+      ];
+    });
+    const config = expectOk(await invoke<PublicConfig>("config_get_public"));
+    expect(
+      config.roleProfiles.filter((role) => role.name.trim() === "会议助手").map((role) => role.id),
+    ).toEqual(["role-personal-meeting"]);
+    // 模板仍留在状态里，只是不进公共配置视图。
+    expect(getState().roleProfiles.some((role) => role.id === "preset-meeting")).toBe(true);
   });
 
   it("keeps bigint fields intact through localStorage persistence", async () => {

@@ -165,6 +165,8 @@ mod voice;
 pub use self::voice::*;
 mod system;
 pub use self::system::*;
+mod tavus;
+pub use self::tavus::*;
 
 #[cfg(test)]
 #[path = "../commands_ipc_tests.rs"]

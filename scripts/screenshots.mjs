@@ -257,8 +257,8 @@ async function captureAll(outDir, deviceScaleFactor) {
     await page.screenshot({ path: shotPath("records.png") });
     reportSize("records.png");
 
-    // 服务配置（Key 为空的脱敏态）。
-    await gotoApp(page, "#/services");
+    // 设置 → 模型供应商（Key 为空的脱敏态）。
+    await gotoApp(page, "&category=providers#/settings");
     await page.getByRole("heading", { name: copy.providerName }).waitFor();
     await page.getByRole("button", { name: copy.testProvider }).click();
     await page.getByText(copy.testPassed).first().waitFor({ timeout: 10_000 });

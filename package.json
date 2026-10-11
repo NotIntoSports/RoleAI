@@ -23,6 +23,7 @@
     "demo:voice:gen": "node scripts/generate-demo-voice.mjs"
   },
   "dependencies": {
+    "@daily-co/daily-js": "0.93.0",
     "@tauri-apps/api": "2.12.1",
     "@tauri-apps/plugin-updater": "2.13.2",
     "lucide-react": "1.52.0",

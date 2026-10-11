@@ -24,11 +24,12 @@ fn role_input(id: &str) -> RoleProfileSaveInput {
         system_prompt: " Ask one question ".into(),
         opening_message: " Hello ".into(),
         style_instructions: " Concise ".into(),
+        tavus_face_id: None,
     }
 }
 
 #[test]
-fn role_save_creates_trimmed_profile_and_edit_resets_active_with_new_version() {
+fn role_save_creates_trimmed_profile_and_edit_keeps_active_with_new_version() {
     let directory = tempfile::tempdir().unwrap();
     let config = ConfigStore::new(directory.path().join("config.json"));
     let service = RoleProfileService::new(&config);
@@ -40,9 +41,12 @@ fn role_save_creates_trimmed_profile_and_edit_resets_active_with_new_version() {
     assert_eq!(saved.opening_message, "Hello");
     assert_eq!(saved.style_instructions, "Concise");
     assert_eq!(saved.config_version, 1);
-    assert!(!saved.active);
+    assert!(saved.active);
+    assert_eq!(
+        config.load().unwrap().active_role_profile_id.as_deref(),
+        Some("interviewer")
+    );
 
-    assert!(service.activate("interviewer").unwrap().active);
     let edited = service
         .save(RoleProfileSaveInput {
             system_prompt: "Ask two questions".into(),
@@ -50,8 +54,316 @@ fn role_save_creates_trimmed_profile_and_edit_resets_active_with_new_version() {
         })
         .unwrap();
     assert_eq!(edited.config_version, 2);
-    assert!(!edited.active);
-    assert!(config.load().unwrap().active_role_profile_id.is_none());
+    assert!(edited.active);
+    assert_eq!(
+        config.load().unwrap().active_role_profile_id.as_deref(),
+        Some("interviewer")
+    );
+}
+
+#[test]
+fn saving_the_active_preset_forks_a_copy_that_takes_over_as_default() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = ConfigStore::new(directory.path().join("config.json"));
+    config
+        .update(|config| {
+            crate::config::presets::ensure_role_presets(config);
+            Ok(())
+        })
+        .unwrap();
+    let service = RoleProfileService::new(&config);
+    service.activate("preset-interviewer").unwrap();
+    let original_prompt = config
+        .load()
+        .unwrap()
+        .role_profiles
+        .iter()
+        .find(|profile| profile.id == "preset-interviewer")
+        .unwrap()
+        .system_prompt
+        .clone();
+
+    let saved = service
+        .save(RoleProfileSaveInput {
+            id: Some("preset-interviewer".into()),
+            name: "面试官".into(),
+            system_prompt: "改过的提示".into(),
+            opening_message: "你好".into(),
+            style_instructions: "简洁".into(),
+            tavus_face_id: Some("r9d30b0e55ac".into()),
+        })
+        .unwrap();
+
+    assert_ne!(saved.id, "preset-interviewer");
+    assert!(uuid::Uuid::parse_str(&saved.id).is_ok());
+    assert!(saved.active);
+    assert_eq!(saved.system_prompt, "改过的提示");
+    assert_eq!(
+        saved.scenario,
+        Some(crate::config::RoleScenario::Interviewer)
+    );
+    let loaded = config.load().unwrap();
+    assert_eq!(
+        loaded.active_role_profile_id.as_deref(),
+        Some(saved.id.as_str())
+    );
+    let preset = loaded
+        .role_profiles
+        .iter()
+        .find(|profile| profile.id == "preset-interviewer")
+        .unwrap();
+    assert!(!preset.active);
+    assert_eq!(preset.system_prompt, original_prompt);
+    assert!(
+        loaded
+            .role_profiles
+            .iter()
+            .filter(|profile| profile.active)
+            .all(|profile| profile.id == saved.id)
+    );
+
+    // 再次保存同名内置角色：写回同一份个人角色，不新建第二条「面试官」。
+    let before = config.load().unwrap().role_profiles.len();
+    let saved_again = service
+        .save(RoleProfileSaveInput {
+            id: Some("preset-interviewer".into()),
+            name: "面试官".into(),
+            system_prompt: "又改过的提示".into(),
+            opening_message: "你好".into(),
+            style_instructions: "简洁".into(),
+            tavus_face_id: None,
+        })
+        .unwrap();
+    assert_eq!(saved_again.id, saved.id);
+    assert_eq!(saved_again.system_prompt, "又改过的提示");
+    assert_eq!(saved_again.config_version, 2);
+    let loaded = config.load().unwrap();
+    assert_eq!(loaded.role_profiles.len(), before);
+    assert_eq!(
+        loaded
+            .role_profiles
+            .iter()
+            .filter(|profile| profile.name.trim() == "面试官" && !crate::config::presets::is_preset(&profile.id))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn saving_an_inactive_preset_forks_a_copy_and_makes_it_the_default() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = ConfigStore::new(directory.path().join("config.json"));
+    config
+        .update(|config| {
+            crate::config::presets::ensure_role_presets(config);
+            Ok(())
+        })
+        .unwrap();
+    let service = RoleProfileService::new(&config);
+    service.save(role_input("mine")).unwrap();
+
+    let before = config.load().unwrap().role_profiles.len();
+    let saved = service
+        .save(RoleProfileSaveInput {
+            id: Some("preset-interviewer".into()),
+            name: "面试官".into(),
+            system_prompt: "改过的提示".into(),
+            opening_message: "你好".into(),
+            style_instructions: "简洁".into(),
+            tavus_face_id: None,
+        })
+        .unwrap();
+
+    assert!(saved.active);
+    assert_ne!(saved.id, "preset-interviewer");
+    assert_ne!(saved.id, "mine");
+    let loaded = config.load().unwrap();
+    assert_eq!(loaded.role_profiles.len(), before + 1);
+    assert_eq!(
+        loaded.active_role_profile_id.as_deref(),
+        Some(saved.id.as_str())
+    );
+    assert!(
+        !loaded
+            .role_profiles
+            .iter()
+            .find(|profile| profile.id == "mine")
+            .unwrap()
+            .active
+    );
+    assert!(
+        !loaded
+            .role_profiles
+            .iter()
+            .find(|profile| profile.id == "preset-interviewer")
+            .unwrap()
+            .active
+    );
+}
+
+#[test]
+fn saving_a_personal_role_with_a_duplicate_name_is_rejected() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = ConfigStore::new(directory.path().join("config.json"));
+    let service = RoleProfileService::new(&config);
+    service.save(role_input("interviewer")).unwrap();
+
+    // 新建（无 id）时名字与现有角色同名（比较前 trim）→ 字段错误。
+    let mut duplicate = role_input("unused");
+    duplicate.name = " Interviewer ".into();
+    assert_eq!(
+        service.save(duplicate).unwrap_err().code(),
+        "ROLE_PROFILE_FIELDS_INVALID"
+    );
+
+    // 编辑另一个 id 时也不能占用别人的名字。
+    let mut rename = role_input("panelist");
+    rename.name = "Interviewer".into();
+    assert_eq!(
+        service.save(rename).unwrap_err().code(),
+        "ROLE_PROFILE_FIELDS_INVALID"
+    );
+
+    // 编辑自己的 id 保留原名是允许的。
+    let edited = service
+        .save(RoleProfileSaveInput {
+            system_prompt: "Ask two questions".into(),
+            ..role_input("interviewer")
+        })
+        .unwrap();
+    assert_eq!(edited.id, "interviewer");
+    assert_eq!(config.load().unwrap().role_profiles.len(), 1);
+}
+
+#[test]
+fn role_copy_deduplicates_the_copy_suffix() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = ConfigStore::new(directory.path().join("config.json"));
+    let service = RoleProfileService::new(&config);
+    let source = service.save(role_input("interviewer")).unwrap();
+
+    let first = service
+        .copy(RoleProfileCopyInput { source_id: "interviewer".into(), id: None })
+        .unwrap();
+    let second = service
+        .copy(RoleProfileCopyInput { source_id: "interviewer".into(), id: None })
+        .unwrap();
+    let third = service
+        .copy(RoleProfileCopyInput { source_id: first.id.as_str().into(), id: None })
+        .unwrap();
+
+    assert_eq!(first.name, format!("{} 副本", source.name));
+    assert_eq!(second.name, format!("{} 副本 2", source.name));
+    // 副本的副本按原名继续加「副本」后缀，并避开已占用的名字。
+    assert_eq!(third.name, format!("{} 副本 副本", source.name));
+}
+
+#[test]
+fn startup_load_merges_same_name_personal_roles_and_keeps_presets() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("config.json");
+    let config = ConfigStore::new(path.clone());
+    config
+        .update(|config| {
+            crate::config::presets::ensure_role_presets(config);
+            Ok(())
+        })
+        .unwrap();
+    // 旧版本缺陷留下的现场：三条同名「面试官」个人角色。
+    config
+        .update(|config| {
+            // 先取消既有 active（preset-meeting），避免出现两个 active 触发配置校验失败。
+            for profile in &mut config.role_profiles {
+                profile.active = false;
+            }
+            for (id, version, face, active) in [
+                ("dup-a", 1, false, true),
+                ("dup-b", 3, true, false),
+                ("dup-c", 2, false, false),
+            ] {
+                config.role_profiles.push(crate::config::RoleProfileConfig {
+                    id: id.into(),
+                    name: " 面试官 ".into(),
+                    system_prompt: format!("prompt {id}"),
+                    opening_message: String::new(),
+                    style_instructions: String::new(),
+                    scenario: None,
+                    tavus_pal_id: None,
+                    tavus_face_id: face.then(|| "r9d30b0e55ac".into()),
+                    tavus_synced_config_version: None,
+                    active,
+                    config_version: version,
+                });
+            }
+            config.active_role_profile_id = Some("dup-a".into());
+            Ok(())
+        })
+        .unwrap();
+
+    let store = ConfigStore::new(path);
+    store.load_for_startup().unwrap();
+    let merged = store.load().unwrap();
+    let survivors: Vec<&crate::config::RoleProfileConfig> = merged
+        .role_profiles
+        .iter()
+        .filter(|profile| !crate::config::presets::is_preset(&profile.id))
+        .collect();
+    assert_eq!(survivors.len(), 1);
+    // 保留规则 active 优先于版本与形象：dup-a 是 active，保留 dup-a。
+    assert_eq!(survivors[0].id, "dup-a");
+    assert!(survivors[0].active);
+    assert_eq!(merged.active_role_profile_id.as_deref(), Some("dup-a"));
+    // 内置模板一个不少。
+    assert!(
+        crate::config::presets::PRESET_IDS
+            .iter()
+            .all(|id| merged.role_profiles.iter().any(|profile| &profile.id == id))
+    );
+}
+
+#[test]
+fn saving_a_preset_updates_the_same_name_personal_default_in_place() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = ConfigStore::new(directory.path().join("config.json"));
+    let service = RoleProfileService::new(&config);
+    service
+        .save(RoleProfileSaveInput {
+            id: Some("meeting-copy".into()),
+            name: "会议助手".into(),
+            system_prompt: "旧提示".into(),
+            opening_message: String::new(),
+            style_instructions: "简洁".into(),
+            tavus_face_id: None,
+        })
+        .unwrap();
+    let before = config.load().unwrap().role_profiles.len();
+
+    let saved = service
+        .save(RoleProfileSaveInput {
+            id: Some("preset-meeting".into()),
+            name: "会议助手".into(),
+            system_prompt: "改过的提示".into(),
+            opening_message: "你好".into(),
+            style_instructions: "简洁".into(),
+            tavus_face_id: Some("r9d30b0e55ac".into()),
+        })
+        .unwrap();
+
+    assert_eq!(saved.id, "meeting-copy");
+    assert!(saved.active);
+    assert_eq!(saved.config_version, 2);
+    assert_eq!(saved.system_prompt, "改过的提示");
+    assert_eq!(saved.tavus_face_id.as_deref(), Some("r9d30b0e55ac"));
+    assert_eq!(
+        saved.scenario,
+        Some(crate::config::RoleScenario::MeetingAssistant)
+    );
+    let loaded = config.load().unwrap();
+    assert_eq!(loaded.role_profiles.len(), before);
+    assert_eq!(
+        loaded.active_role_profile_id.as_deref(),
+        Some("meeting-copy")
+    );
 }
 
 #[test]
@@ -186,7 +498,9 @@ fn role_activation_is_singleton_and_delete_clears_active_id_and_reports_missing_
     let config = ConfigStore::new(directory.path().join("config.json"));
     let service = RoleProfileService::new(&config);
     service.save(role_input("interviewer")).unwrap();
-    service.save(role_input("panelist")).unwrap();
+    let mut panelist = role_input("panelist");
+    panelist.name = "Panelist".into();
+    service.save(panelist).unwrap();
 
     service.activate("interviewer").unwrap();
     assert!(service.activate("panelist").unwrap().active);

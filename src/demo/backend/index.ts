@@ -7,10 +7,13 @@
 import type {
   AudioOutputDevice,
   CommandResult,
+  FoundationStatus,
   LegacySessionImport,
   MeetingProcess,
   ObsRuntimeStatus,
   RuntimeStatus,
+  SecretStatus,
+  TavusConversationStarted,
   VirtualAudioPreparation,
 } from "../../generated/bindings";
 
@@ -90,7 +93,26 @@ function handleMeetingAndAudio(cmd: string): unknown {
   }
 }
 
-/** 领域分发：config / roles / providers / voice / 资料 / 记录 / 会议与音频 / 其余兜底。 */
+// 演示版不保存也不要求 Tavus 密钥：视频通话返回本地预览会话（conversationUrl
+// 以 preview: 开头，界面不连接 Daily），文案标明这是演示预览。
+function handleTavus(cmd: string): unknown {
+  switch (cmd) {
+    case "tavus_credential_status":
+      return ok({ reference: "tavus/api-key", configured: false } satisfies SecretStatus);
+    case "tavus_list_faces":
+      return err("TAVUS_KEY_MISSING", demoT().misc.tavusKeyMissing);
+    case "tavus_conversation_start":
+      return latency(200, 500).then(() =>
+        ok({ conversationId: "demo-preview", conversationUrl: "preview:roleai" } satisfies TavusConversationStarted),
+      );
+    case "tavus_conversation_end":
+      return ok({ ready: true } satisfies FoundationStatus);
+    default:
+      return undefined;
+  }
+}
+
+/** 领域分发：config / roles / providers / voice / 资料 / 记录 / 会议与音频 / Tavus / 其余兜底。 */
 function dispatch(cmd: string, payload: Record<string, unknown>): unknown {
   return (
     handleConfigCommand(cmd, payload) ??
@@ -101,6 +123,7 @@ function dispatch(cmd: string, payload: Record<string, unknown>): unknown {
     handleRecordCommand(cmd, payload) ??
     handleLivestreamCommand(cmd, payload) ??
     handleMeetingAndAudio(cmd) ??
+    handleTavus(cmd) ??
     err("DEMO_NOT_IMPLEMENTED", demoT().misc.notImplemented(cmd))
   );
 }

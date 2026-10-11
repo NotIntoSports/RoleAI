@@ -11,6 +11,7 @@ vi.mock("../../api/commands", () => ({
   copyRoleProfile: vi.fn(),
   activateRoleProfile: vi.fn(),
   deleteRoleProfile: vi.fn(),
+  listTavusFaces: vi.fn(),
 }));
 
 const emptyConfig: PublicConfig = {
@@ -41,6 +42,7 @@ function profile(overrides: Partial<RoleProfileConfig> = {}): RoleProfileConfig 
 describe("RoleEditor", () => {
   beforeEach(() => {
     vi.mocked(commands.getConfigPublic).mockResolvedValue({ ok: true, data: emptyConfig });
+    vi.mocked(commands.listTavusFaces).mockResolvedValue({ ok: true, data: [] });
   });
   afterEach(() => {
     cleanup();
@@ -118,6 +120,99 @@ describe("RoleEditor", () => {
     expect(screen.getByLabelText("系统提示").getAttribute("maxLength")).toBe("32768");
     expect(screen.getByLabelText("开场白").getAttribute("maxLength")).toBe("4096");
     expect(screen.getByLabelText("风格说明").getAttribute("maxLength")).toBe("8192");
+  });
+
+  it("says a saved built-in role became a personal copy and the current role", async () => {
+    const preset = profile({ id: "preset-interviewer", name: "面试官" });
+    vi.mocked(commands.getConfigPublic).mockResolvedValue({
+      ok: true,
+      data: { ...emptyConfig, roleProfiles: [preset], activeRoleProfileId: "preset-interviewer" },
+    });
+    vi.mocked(commands.saveRoleProfile).mockResolvedValue({
+      ok: true,
+      data: profile({ id: "copy-1", name: "面试官", active: true, systemPrompt: "改过的提示" }),
+    });
+    render(<RoleEditor />);
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 面试官" }));
+    fireEvent.change(screen.getByLabelText("系统提示"), { target: { value: "改过的提示" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存角色" }));
+    await waitFor(() => expect(commands.saveRoleProfile).toHaveBeenCalledWith(expect.objectContaining({ id: "preset-interviewer" })));
+    const status = await screen.findByRole("status");
+    expect(status.textContent).toContain("已另存为个人副本，并设为当前角色");
+    expect(status.getAttribute("data-tone")).toBe("success");
+    expect(status.parentElement).toBe(screen.getByRole("button", { name: "保存角色" }).parentElement);
+  });
+
+  it("says an edited built-in role was written onto the current personal role", async () => {
+    const preset = profile({ id: "preset-interviewer", name: "面试官" });
+    vi.mocked(commands.getConfigPublic).mockResolvedValue({
+      ok: true,
+      data: { ...emptyConfig, roleProfiles: [preset], activeRoleProfileId: "preset-meeting" },
+    });
+    vi.mocked(commands.saveRoleProfile).mockResolvedValue({
+      ok: true,
+      data: profile({ id: "copy-1", name: "面试官", active: true, configVersion: 2, tavusFaceId: "r9d30b0e55ac" }),
+    });
+    render(<RoleEditor />);
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 面试官" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存角色" }));
+    const status = await screen.findByRole("status");
+    expect(status.textContent).toContain("已保存，并设为当前角色");
+    expect(status.getAttribute("data-tone")).toBe("success");
+  });
+
+  it("marks a role card that has a video face", async () => {
+    vi.mocked(commands.getConfigPublic).mockResolvedValue({
+      ok: true,
+      data: { ...emptyConfig, roleProfiles: [profile({ tavusFaceId: "r9d30b0e55ac" })] },
+    });
+    render(<RoleEditor />);
+    expect(await screen.findByText("有视频形象")).toBeTruthy();
+  });
+
+  it("explains a missing Tavus key and offers a jump to the Tavus panel", async () => {
+    vi.mocked(commands.listTavusFaces).mockResolvedValue({
+      ok: false,
+      error: { code: "TAVUS_KEY_MISSING", message: "请先在设置里保存 Tavus 密钥", requestId: "r3", retryable: false },
+    });
+    const onOpenTavus = vi.fn();
+    render(<RoleEditor onOpenTavus={onOpenTavus} />);
+    expect(await screen.findByText("还没有保存 Tavus 密钥，暂时没有形象可选。")).toBeTruthy();
+    expect(screen.queryByText("选一张库存形象后，工作台可以和这个角色进行中文视频通话。")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "去「视频通话（Tavus）」保存密钥" }));
+    expect(onOpenTavus).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows other Tavus errors next to the same jump button", async () => {
+    vi.mocked(commands.listTavusFaces).mockResolvedValue({
+      ok: false,
+      error: { code: "TAVUS_UNAUTHORIZED", message: "Tavus 密钥被拒绝", requestId: "r4", retryable: false },
+    });
+    render(<RoleEditor onOpenTavus={vi.fn()} />);
+    expect(await screen.findByText("TAVUS_UNAUTHORIZED：Tavus 密钥被拒绝")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "去「视频通话（Tavus）」保存密钥" })).toBeTruthy();
+  });
+
+  it("loads faces only while visible and refreshes them each time it is shown", async () => {
+    vi.mocked(commands.listTavusFaces)
+      .mockResolvedValueOnce({
+        ok: false,
+        error: { code: "TAVUS_KEY_MISSING", message: "请先在设置里保存 Tavus 密钥", requestId: "r5", retryable: false },
+      })
+      .mockResolvedValue({ ok: true, data: [{ id: "r9d30b0e55ac", name: "Luna" }] });
+    const { rerender } = render(<RoleEditor visible={false} />);
+    await screen.findByText("还没有角色。");
+    expect(commands.listTavusFaces).not.toHaveBeenCalled();
+
+    rerender(<RoleEditor visible />);
+    expect(await screen.findByText("还没有保存 Tavus 密钥，暂时没有形象可选。")).toBeTruthy();
+
+    rerender(<RoleEditor visible={false} />);
+    rerender(<RoleEditor visible />);
+    expect(await screen.findByRole("option", { name: "Luna" })).toBeTruthy();
+    expect(screen.queryByText("还没有保存 Tavus 密钥，暂时没有形象可选。")).toBeNull();
+    expect(screen.getByText("选一张库存形象后，工作台可以和这个角色进行中文视频通话。")).toBeTruthy();
+    expect(commands.listTavusFaces).toHaveBeenCalledTimes(2);
   });
 
   it("does not use fetch, /api/, login, or low-level Tauri imports", async () => {

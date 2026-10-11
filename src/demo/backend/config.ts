@@ -6,6 +6,7 @@ import type {
   StartupState,
 } from "../../generated/bindings";
 
+import { visibleRoleProfiles } from "../../features/roles/visible-roles";
 import { getState, resetDemoState } from "./state";
 import { latency, ok } from "./util";
 
@@ -21,7 +22,8 @@ export function publicConfig(): PublicConfig {
       activeEmbeddingConfigId: s.activeEmbeddingConfigId,
     },
     storage: { exportDirectory: null },
-    roleProfiles: s.roleProfiles,
+    // 与桌面端同规则：个人角色与内置模板 trim 后同名时只显示个人角色。
+    roleProfiles: visibleRoleProfiles(s.roleProfiles),
     activeRoleProfileId: s.activeRoleProfileId,
     diagnostics: { logRetentionDays: 14 },
   };

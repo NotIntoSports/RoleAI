@@ -74,6 +74,11 @@
     "allow-obs-virtual-camera-stop",
     "allow-obs-password-status",
     "allow-obs-password-save",
+    "allow-tavus-credential-status",
+    "allow-tavus-credential-save",
+    "allow-tavus-list-faces",
+    "allow-tavus-conversation-start",
+    "allow-tavus-conversation-end",
     "updater:default"
   ]
 }

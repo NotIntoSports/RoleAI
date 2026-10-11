@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 /**
- * 在线演示版冒烟用例：六个页面、完整脚本会话、刷新保留、一键重置。
+ * 在线演示版冒烟用例：五个页面、完整脚本会话、刷新保留、一键重置。
  * 共享一个 dev server 的 localStorage（workers=1 串行），用例按顺序构成一条用户旅程。
  */
 
@@ -23,7 +23,7 @@ async function dismissGuideIfVisible(page: Page) {
   await expect(dialog).toHaveCount(0);
 }
 
-test("first visit shows onboarding, and all six pages open", async ({ page }) => {
+test("first visit shows onboarding, and all five pages open", async ({ page }) => {
   await open(page);
   const dialog = page.getByRole("dialog", { name: "在线演示引导" });
   await expect(dialog).toBeVisible();
@@ -36,7 +36,6 @@ test("first visit shows onboarding, and all six pages open", async ({ page }) =>
     ["#/livestream", "虚拟直播"],
     ["#/materials", "资料"],
     ["#/records", "记录"],
-    ["#/services", "服务"],
     ["#/settings", "设置"],
     ["#/workspace", "工作台"],
   ];

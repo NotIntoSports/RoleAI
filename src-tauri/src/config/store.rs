@@ -44,6 +44,9 @@ impl ConfigStore {
             }
         };
         let mut changed = super::presets::ensure_role_presets(&mut config);
+        // 历史配置里可能积累出多条同名个人角色（旧版每次保存内置角色都新建 id）：
+        // 启动加载路径统一合并成一份，保留规则与保存内置角色时的写回选择一致。
+        changed |= super::presets::merge_same_name_roles(&mut config);
         changed |= super::presets_local::ensure_local_model_presets(&mut config);
         if changed {
             let _guard = self.lock_writes()?;

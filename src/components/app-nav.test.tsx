@@ -11,16 +11,15 @@ describe("AppNav", () => {
     expect(nav).toBeTruthy();
   });
 
-  it("renders 6 navigation buttons with Chinese labels", () => {
+  it("renders 5 navigation buttons with Chinese labels", () => {
     render(<AppNav current="workspace" onNavigate={() => {}} />);
     const buttons = screen.getAllByRole("button").filter((button) => button.classList.contains("app-nav-item"));
-    expect(buttons.length).toBe(6);
+    expect(buttons.length).toBe(5);
     expect(buttons[0].textContent).toBe("工作台");
     expect(buttons[1].textContent).toBe("虚拟直播");
     expect(buttons[2].textContent).toBe("资料");
     expect(buttons[3].textContent).toBe("记录");
-    expect(buttons[4].textContent).toBe("服务");
-    expect(buttons[5].textContent).toBe("设置");
+    expect(buttons[4].textContent).toBe("设置");
   });
 
   it("marks the current route button with aria-current and data-active", () => {
@@ -44,9 +43,9 @@ describe("AppNav", () => {
   it("clicking an inactive button calls onNavigate with the correct route id", () => {
     const onNavigate = vi.fn();
     render(<AppNav current="workspace" onNavigate={onNavigate} />);
-    const servicesButton = screen.getByRole("button", { name: "服务" });
-    fireEvent.click(servicesButton);
-    expect(onNavigate).toHaveBeenCalledWith("services");
+    const settingsButton = screen.getByRole("button", { name: "设置" });
+    fireEvent.click(settingsButton);
+    expect(onNavigate).toHaveBeenCalledWith("settings");
     expect(onNavigate).toHaveBeenCalledTimes(1);
   });
 

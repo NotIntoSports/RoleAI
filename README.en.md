@@ -139,7 +139,7 @@ flowchart LR
 | Local models | Ollama / LM Studio (LLM), speaches (local Whisper ASR), Kokoro-FastAPI (TTS) | Local OpenAI-compatible endpoints, works offline — see the [local models guide](guide/local-models.md) |
 | Meeting audio | Local virtual audio cable (e.g. VB-CABLE) | Captured / played by AudioBridge; system defaults are never changed |
 
-Providers, keys, and connectivity tests are managed in the in-app Services page — no config files to hand-edit.
+Providers, keys, and connectivity tests are managed in the in-app Settings page — no config files to hand-edit.
 
 ## Getting started
 
@@ -159,7 +159,7 @@ npm run tauri:build    # produce the installer
 
 ### First run (3 steps)
 
-1. **Configure a provider**: open the Services page, pick a preset provider or enter a custom URL, save your API key (it goes into Credential Manager), and hit "Test".
+1. **Configure a provider**: open Settings → Model providers, pick a preset provider or enter a custom URL, save your API key (it goes into Credential Manager), and hit "Test".
 2. **Pick a role**: choose a built-in role on the Workspace (Interviewer / Meeting assistant / Product presenter…) or write your own prompt and opening line.
 3. **Start a session**: launch a session on the Workspace and allow microphone access. To rehearse with an interviewer role, import your résumé and the job description into the Materials page first.
 

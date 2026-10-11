@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-import type { AgentCommandInput, AgentCommandResult, AudioPathEvidence, AudioPathReview, CommandResult, DiagnosticsLatencySummary, DiagnosticsExportResult, EmbeddingConfig, EmbeddingConfigSaveInput, EmbeddingTestResult, FoundationStatus, LegacyMigrationStatus, LegacySessionImport, LivestreamDraftInput, LivestreamGenerateInput, LivestreamRuntime, MaterialIndexResult, MaterialSearchHit, MaterialSummary, MicPcmAcceptance, ModelDiscoveryResult, ObsRuntimeStatus, ProviderConfig, ProviderSaveInput, ProviderTestResult, PublicConfig, RoleProfileConfig, RoleProfileCopyInput, RoleProfileSaveInput, RuntimeStatus, SecretStatus, SessionDetail, SessionExportResult, SessionStartResult, SessionSummary, SessionTurnView, StartupState, VideoFrameAcceptance, VoiceReferenceAudioSaveInput, VoiceReferenceCloneResult, VoiceReferenceSaveInput, VoiceReferenceSummary, VoiceReferenceUpdateInput, VoiceRouteConfig, VoiceRouteSaveInput, VoiceRouteTestResult } from "../generated/bindings";
+import type { AgentCommandInput, AgentCommandResult, AudioPathEvidence, AudioPathReview, CommandResult, DiagnosticsLatencySummary, DiagnosticsExportResult, EmbeddingConfig, EmbeddingConfigSaveInput, EmbeddingTestResult, FoundationStatus, LegacyMigrationStatus, LegacySessionImport, LivestreamDraftInput, LivestreamGenerateInput, LivestreamRuntime, MaterialIndexResult, MaterialSearchHit, MaterialSummary, MicPcmAcceptance, ModelDiscoveryResult, ObsRuntimeStatus, ProviderConfig, ProviderSaveInput, ProviderTestResult, PublicConfig, RoleProfileConfig, RoleProfileCopyInput, RoleProfileSaveInput, RuntimeStatus, SecretStatus, SessionDetail, SessionExportResult, SessionStartResult, SessionSummary, SessionTurnView, StartupState, TavusConversationStarted, TavusFace, VideoFrameAcceptance, VoiceReferenceAudioSaveInput, VoiceReferenceCloneResult, VoiceReferenceSaveInput, VoiceReferenceSummary, VoiceReferenceUpdateInput, VoiceRouteConfig, VoiceRouteSaveInput, VoiceRouteTestResult } from "../generated/bindings";
 
 export function getFoundationStatus() {
   return invoke<CommandResult<FoundationStatus>>("foundation_get_status");
@@ -281,4 +281,24 @@ export function saveVoiceReferenceAudio(input: VoiceReferenceAudioSaveInput) {
 
 export function updateVoiceReference(input: VoiceReferenceUpdateInput) {
   return invoke<CommandResult<VoiceReferenceSummary>>("voice_reference_update", { input });
+}
+
+export function getTavusCredentialStatus() {
+  return invoke<CommandResult<SecretStatus>>("tavus_credential_status");
+}
+
+export function saveTavusCredential(apiKey: string) {
+  return invoke<CommandResult<SecretStatus>>("tavus_credential_save", { apiKey });
+}
+
+export function listTavusFaces() {
+  return invoke<CommandResult<TavusFace[]>>("tavus_list_faces");
+}
+
+export function startTavusConversation(roleProfileId: string) {
+  return invoke<CommandResult<TavusConversationStarted>>("tavus_conversation_start", { roleProfileId });
+}
+
+export function endTavusConversation(conversationId: string) {
+  return invoke<CommandResult<FoundationStatus>>("tavus_conversation_end", { conversationId });
 }

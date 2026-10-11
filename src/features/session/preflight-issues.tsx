@@ -15,9 +15,9 @@ type KnownIssueCode = (typeof ISSUE_CODES)[number];
 function issueHrefs(): Record<KnownIssueCode, { href: string }> {
   return {
     SESSION_ROLE_REQUIRED: { href: "/settings?category=roles" },
-    SESSION_ROUTE_REQUIRED: { href: "/services?category=routes" },
-    SESSION_STAGE_INCOMPLETE: { href: "/services?category=routes" },
-    SESSION_CREDENTIAL_MISSING: { href: "/services?category=providers" },
+    SESSION_ROUTE_REQUIRED: { href: "/settings?category=routes" },
+    SESSION_STAGE_INCOMPLETE: { href: "/settings?category=routes" },
+    SESSION_CREDENTIAL_MISSING: { href: "/settings?category=providers" },
     SESSION_DATABASE_UNAVAILABLE: { href: "/settings" },
   };
 }

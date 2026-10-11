@@ -97,6 +97,11 @@
   margin-top: 12px;
 }
 
+.role-save-feedback {
+  flex: 1 1 220px;
+  margin: 0;
+}
+
 .configuration-editor > button,
 .configuration-migration-form > button {
   justify-self: start;
@@ -156,12 +161,17 @@
     flex-direction: row;
     flex-wrap: wrap;
   }
+
+  .configuration-layout > .settings-nav button[data-group-start] {
+    margin-top: 0;
+  }
 }
 
 .configuration-content { padding-bottom: 24px; }
 .configuration-description { font-size: 13px; }
 .configuration-list .service-card { padding-block: 24px; }
 .settings-nav button { min-height: 40px; border-radius: 10px; }
+.settings-nav button[data-group-start] { margin-top: 12px; }
 @media (max-width: 600px) { .configuration-editor { padding: 16px; } }
 
 .voice-recorder-field {

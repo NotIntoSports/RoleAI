@@ -11,6 +11,7 @@ The source repository and Windows distribution use third-party components. Their
 | lucide-react 1.41.0 | ISC (inherited Feather icons retain MIT notices) | https://github.com/lucide-icons/lucide |
 | livekit-client | Apache-2.0 | https://github.com/livekit/client-sdk-js |
 | livekit-api | Apache-2.0 | https://github.com/livekit/rust-sdks |
+| @daily-co/daily-js 0.93.0 | BSD-2-Clause | https://github.com/daily-co/daily-js |
 | wouter | Unlicense | https://github.com/molefrog/wouter |
 | zod | MIT | https://github.com/colinhacks/zod |
 | rusqlite | MIT | https://github.com/rusqlite/rusqlite |

@@ -3,16 +3,17 @@ import { t } from "../../i18n";
 
 interface ReenterSecretsBannerProps {
   status: LegacyMigrationStatus | null;
+  onOpenProviders: () => void;
 }
 
-export function ReenterSecretsBanner({ status }: ReenterSecretsBannerProps) {
+export function ReenterSecretsBanner({ status, onOpenProviders }: ReenterSecretsBannerProps) {
   if (!status?.reenterSecrets) {
     return null;
   }
   return (
     <p className="reenter-secrets-banner" role="status">
       {t("migrate.banner.title")}
-      <a href="#/services">{t("migrate.banner.action")}</a>
+      <button type="button" className="button-ghost" onClick={onOpenProviders}>{t("migrate.banner.action")}</button>
     </p>
   );
 }

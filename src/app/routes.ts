@@ -6,7 +6,7 @@
 
 import { t, tList } from "../i18n";
 
-export const routeIds = ["workspace", "livestream", "materials", "records", "services", "settings"] as const;
+export const routeIds = ["workspace", "livestream", "materials", "records", "settings"] as const;
 
 export type RouteId = typeof routeIds[number];
 
@@ -40,7 +40,6 @@ export function routeDesignRef(id: RouteId): string {
     livestream: "6.1",
     materials: "6.2",
     records: "6.3",
-    services: "6.4",
     settings: "6.5",
   };
   return refs[id];

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Camera, Check, ChevronDown, Mic, MicOff, Pause, Play, Plus, ScreenShare, Send, Square, X } from "lucide-react";
+import { Camera, Check, ChevronDown, Mic, MicOff, Pause, Play, Plus, ScreenShare, Send, Square, UserRound, Video, X } from "lucide-react";
+import { Link } from "wouter";
 
 import * as api from "../../api/commands";
 import "../../styles/workspace.css";
@@ -23,8 +24,12 @@ import { t, useT } from "../../i18n";
 import { SessionToolbar } from "./session-toolbar";
 import { TranscriptPanel } from "./transcript-panel";
 import { AgentToolsPanel } from "./agent-tools-panel";
+import { useTavusCall } from "../tavus/call-lock";
+import { TavusCall } from "../tavus/tavus-call";
+import { visibleRoleProfiles } from "../roles/visible-roles";
 import { useLatencyWaterfallPreference } from "./latency-preference";
 import { readInputSourcePreference, writeInputSourcePreference } from "./input-source-preference";
+import { readAvatarPreference, writeAvatarPreference } from "./avatar-preference";
 import type {
   RuntimeStatus,
   PreflightIssue,
@@ -109,6 +114,13 @@ export function WorkspaceSession({
     writeInputSourcePreference(source);
     setInputSourceState(source);
   }, []);
+  const [avatarEnabled, setAvatarEnabledState] = useState(readAvatarPreference);
+  const setAvatarEnabled = useCallback((enabled: boolean) => {
+    writeAvatarPreference(enabled);
+    setAvatarEnabledState(enabled);
+  }, []);
+  // null 表示密钥状态未知（读取中或读取失败）：此时不预先拦截，开始通话时由后端返回具体错误。
+  const [tavusKeyConfigured, setTavusKeyConfigured] = useState<boolean | null>(null);
   const [meetingProcesses, setMeetingProcesses] = useState<MeetingProcess[]>([]);
   const [meetingPid, setMeetingPid] = useState("");
   const [audioOutputs, setAudioOutputs] = useState<AudioOutputDevice[]>([]);
@@ -204,6 +216,16 @@ export function WorkspaceSession({
           void refreshAudioOutputs();
         }
       } catch { /* The runtime preflight supplies actionable configuration errors. */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const result = await api.getTavusCredentialStatus();
+        if (!cancelled && result.ok) setTavusKeyConfigured(result.data.configured);
+      } catch { /* 保持未知状态。 */ }
     })();
     return () => { cancelled = true; };
   }, []);
@@ -350,6 +372,11 @@ export function WorkspaceSession({
   }, [applyStatus]);
 
   const active = ACTIVE_PHASES.has(phase);
+  const { videoActive, setVoiceActive, startCall, callBusy } = useTavusCall();
+  useEffect(() => {
+    setVoiceActive(active);
+    return () => setVoiceActive(false);
+  }, [active, setVoiceActive]);
   // 通话计时：以会话在本界面内首次进入活跃态的时刻为锚点。
   useEffect(() => {
     if (!active) {
@@ -378,6 +405,20 @@ export function WorkspaceSession({
     setMessage,
   });
   const roleName = config?.roleProfiles.find((role) => role.id === roleProfileId)?.name ?? "RoleAI";
+  // 虚拟形象开启时「开始」改走 Tavus 视频通话，用这里已选的角色；缺密钥或角色没有形象时禁用开始并引导去设置。
+  const selectedRoleHasFace = !!config?.roleProfiles.find((role) => role.id === roleProfileId)?.tavusFaceId;
+  const demoPreview = document.documentElement.dataset.roleaiDemo === "preview";
+  const avatarBlocked = avatarEnabled && !demoPreview && (tavusKeyConfigured === false || !selectedRoleHasFace);
+  const avatarHint = !avatarEnabled || active || videoActive || demoPreview ? null
+    : tavusKeyConfigured === false
+      ? { text: t("tavus.avatar.needsKey"), href: "/settings?category=tavus", action: t("tavus.avatar.openKey") }
+      : config && !selectedRoleHasFace
+        ? { text: t("tavus.avatar.needsFace"), href: "/settings?category=roles", action: t("tavus.avatar.openRoles") }
+        : null;
+  const handleVideoStart = async () => {
+    const result = await startCall(roleProfileId);
+    if (!result.ok && result.message) setMessage(result.message);
+  };
   const showBargeHint = active && phase === "speaking" && allowBargeIn && mode === "ai_active";
   const selectedRoleScenario = roleScenario(config, roleProfileId);
   const { realtimeStatus, setRealtimeStatus, resetStreamSeq } = useSessionEvents({
@@ -479,6 +520,7 @@ export function WorkspaceSession({
     resetStreamSeq,
     setRealtimeStatus,
   });
+  const beginSession = () => void (avatarEnabled ? handleVideoStart() : start());
 
   // 视频帧上行（摄像头/桌面共享）仅端到端 Qwen-Omni 系线路支持
   // （input_image_buffer.append 为 DashScope 方言能力，与联网搜索同判定模式）。
@@ -553,6 +595,7 @@ export function WorkspaceSession({
         allowBargeIn={allowBargeIn}
         setAllowBargeIn={setAllowBargeIn}
         roleName={roleName}
+        videoActive={videoActive}
       />
       <PreflightIssues issues={issues} />
       {webDegraded && <p className="services-message">{t("session.workspace.webDegraded")}</p>}
@@ -565,13 +608,17 @@ export function WorkspaceSession({
           {message}
         </p>
       )}
-      <TranscriptPanel
+      {/* 视频通话舞台占用会话主区域并替换空状态/转写；媒体元素始终挂载，空闲时不占布局。 */}
+      <TavusCall />
+      {!videoActive && (
+        <TranscriptPanel
         transcript={transcript}
         reply={reply}
         turns={turns}
         historyTurns={historyTurns}
         roleName={roleName}
         welcomeRoleName={config?.roleProfiles.find((role) => role.id === roleProfileId)?.name ?? t("session.workspace.welcomeFallback")}
+        idleHint={avatarEnabled ? t("tavus.avatar.newHint") : undefined}
         active={active}
         pendingConfirmation={pendingConfirmation}
         confirmationText={confirmationText}
@@ -586,7 +633,8 @@ export function WorkspaceSession({
           setConfigurationOpen(true);
           requestAnimationFrame(() => document.getElementById("session-configuration")?.querySelector<HTMLElement>("select, input, button")?.focus());
         }}
-      />
+        />
+      )}
       <div className="session-footer">
         <div className="session-footer-status">
           {showBargeHint && (
@@ -597,6 +645,11 @@ export function WorkspaceSession({
             >
               <Pause size={12} aria-hidden="true" />{t("session.workspace.bargeHint")}
             </button>
+          )}
+          {avatarHint && (
+            <p className="session-avatar-hint" role="status">
+              {avatarHint.text} <Link href={avatarHint.href}>{avatarHint.action}</Link>
+            </p>
           )}
         </div>
         <div className="session-compose">
@@ -656,7 +709,7 @@ export function WorkspaceSession({
                   aria-label={t("session.workspace.roleAria")}
                   aria-haspopup="listbox"
                   aria-expanded={roleMenuOpen}
-                  disabled={busy || active || !config}
+                  disabled={busy || active || videoActive || !config}
                   onClick={() => setRoleMenuOpen(!roleMenuOpen)}
                 >
                   <span className="composer-role-dot" aria-hidden="true" />
@@ -665,7 +718,7 @@ export function WorkspaceSession({
                 </button>
                 {roleMenuOpen && config && (
                   <ul className="composer-role-menu" role="listbox" aria-label={t("session.workspace.switchRoleTitle")}>
-                    {config.roleProfiles.filter((role) => role.configVersion > 0).map((role) => (
+                    {visibleRoleProfiles(config.roleProfiles).filter((role) => role.configVersion > 0).map((role) => (
                       <li key={role.id}>
                         <button
                           type="button"
@@ -679,7 +732,10 @@ export function WorkspaceSession({
                           }}
                         >
                           <span className="composer-role-option-name">{role.name}</span>
-                          {role.id === roleProfileId && <Check size={14} aria-hidden="true" />}
+                          <span className="composer-role-option-meta">
+                            {role.tavusFaceId && <Video size={13} className="composer-role-face" role="img" aria-label={t("tavus.avatar.hasFace")} />}
+                            {role.id === roleProfileId && <Check size={14} aria-hidden="true" />}
+                          </span>
                         </button>
                       </li>
                     ))}
@@ -688,10 +744,24 @@ export function WorkspaceSession({
               </div>
               <button
                 type="button"
+                role="switch"
+                aria-checked={avatarEnabled}
+                aria-label={t("tavus.avatar.toggle")}
+                className="composer-avatar-toggle"
+                title={t("tavus.avatar.toggleTitle")}
+                disabled={busy || active || videoActive || callBusy}
+                onClick={() => setAvatarEnabled(!avatarEnabled)}
+              >
+                <UserRound size={14} aria-hidden="true" />
+                <span className="composer-avatar-label">{t("tavus.avatar.toggle")}</span>
+              </button>
+              {/* 虚拟形象模式下麦克风交给 Tavus 通话，这里的语音会话快捷开始不可用。 */}
+              <button
+                type="button"
                 className="composer-mic"
                 aria-label={!active ? t("session.workspace.micStart") : mode === "muted" ? t("session.workspace.micUnmute") : t("session.workspace.micMute")}
                 data-live={active && inputSource === "mic" && mode === "ai_active"}
-                disabled={busy}
+                disabled={busy || (!active && (videoActive || avatarEnabled))}
                 onClick={() => {
                   if (!active) void start();
                   else void setModeName(mode === "muted" ? "ai_active" : "muted");
@@ -752,8 +822,15 @@ export function WorkspaceSession({
                   <span className="session-call-time">{formatDuration(callSeconds)}</span>
                 </button>
               ) : (
-                <button key="call-start" className="button-primary composer-start" disabled={busy} type="button" onClick={() => void start()}>
-                  <Play size={14} aria-hidden="true" />{t("session.workspace.startSession")}
+                <button
+                  key="call-start"
+                  className="button-primary composer-start"
+                  disabled={busy || videoActive || callBusy || avatarBlocked}
+                  type="button"
+                  onClick={beginSession}
+                >
+                  {avatarEnabled ? <Video size={14} aria-hidden="true" /> : <Play size={14} aria-hidden="true" />}
+                  {avatarEnabled ? t("tavus.call.start") : t("session.workspace.startSession")}
                 </button>
               )}
             </div>

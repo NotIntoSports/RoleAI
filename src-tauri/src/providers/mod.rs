@@ -8,6 +8,7 @@ mod openai_compatible;
 mod openai_realtime;
 mod realtime_protocol;
 pub(crate) mod realtime_session;
+pub(crate) mod tavus;
 mod voice_clone;
 mod voice_clone_dashscope;
 pub mod web_search;
@@ -39,6 +40,9 @@ pub(crate) use openai_realtime::{
 pub use openai_realtime::{
     OpenAiCompatibleRealtime, RealtimeAudioRequest, RealtimeError, RealtimeModel,
     RealtimeTextRequest, RealtimeTurn, probe_realtime_session,
+};
+pub use tavus::{
+    TavusApi, TavusConversationStarted, TavusError, TavusFace, TavusHttpClient, tavus_id_is_valid,
 };
 pub use voice_clone::{
     VOICE_CLONE_TRIAL_TEXT, VoiceCloneError, VoiceCloneOutcome, VoiceCloneProbe,

@@ -484,6 +484,8 @@ fn generated_bindings() -> String {
         StorageConfig::decl(&config),
         RoleScenario::decl(&config),
         RoleProfileConfig::decl(&config),
+        crate::providers::TavusFace::decl(&config),
+        crate::providers::TavusConversationStarted::decl(&config),
         DiagnosticsConfig::decl(&config),
         PublicConfig::decl(&config),
         ProviderSaveInput::decl(&config),

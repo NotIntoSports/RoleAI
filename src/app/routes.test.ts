@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { routeIds, parseHash, formatHash, routeLabel, routeDesignRef, routeCapabilities, isRouteId, type RouteId } from "./routes";
 
 describe("routes", () => {
-  it("routeIds is a fixed ordered tuple of 6 pages", () => {
-    expect(routeIds).toEqual(["workspace", "livestream", "materials", "records", "services", "settings"]);
+  it("routeIds is a fixed ordered tuple of 5 pages", () => {
+    expect(routeIds).toEqual(["workspace", "livestream", "materials", "records", "settings"]);
   });
 
   describe("parseHash", () => {
@@ -17,12 +17,12 @@ describe("routes", () => {
       expect(parseHash("#/workspace")).toBe("workspace");
       expect(parseHash("#/materials")).toBe("materials");
       expect(parseHash("#/records")).toBe("records");
-      expect(parseHash("#/services")).toBe("services");
       expect(parseHash("#/settings")).toBe("settings");
     });
     it("unknown path falls back to workspace", () => {
       expect(parseHash("#/unknown")).toBe("workspace");
       expect(parseHash("#/login")).toBe("workspace");
+      expect(parseHash("#/services")).toBe("workspace");
     });
     it("tolerates query parameters", () => {
       expect(parseHash("#/settings?x=1")).toBe("settings");
@@ -31,7 +31,7 @@ describe("routes", () => {
     it("handles wouter location format (no # prefix)", () => {
       expect(parseHash("/materials")).toBe("materials");
       expect(parseHash("/")).toBe("workspace");
-      expect(parseHash("/services")).toBe("services");
+      expect(parseHash("/settings")).toBe("settings");
     });
   });
 
@@ -48,7 +48,6 @@ describe("routes", () => {
       expect(routeLabel("workspace")).toBe("工作台");
       expect(routeLabel("materials")).toBe("资料");
       expect(routeLabel("records")).toBe("记录");
-      expect(routeLabel("services")).toBe("服务");
       expect(routeLabel("settings")).toBe("设置");
     });
   });
@@ -58,7 +57,6 @@ describe("routes", () => {
       expect(routeDesignRef("workspace")).toBe("6.1");
       expect(routeDesignRef("materials")).toBe("6.2");
       expect(routeDesignRef("records")).toBe("6.3");
-      expect(routeDesignRef("services")).toBe("6.4");
       expect(routeDesignRef("settings")).toBe("6.5");
     });
   });
@@ -80,14 +78,10 @@ describe("routes", () => {
       expect(caps.length).toBeGreaterThan(0);
       expect(caps.some(c => c.includes("记录"))).toBe(true);
     });
-    it("services includes provider and speech capabilities", () => {
-      const caps = routeCapabilities("services");
-      expect(caps.length).toBeGreaterThan(0);
-      expect(caps.some(c => c.includes("模型"))).toBe(true);
-    });
-    it("settings includes diagnostics and config capabilities", () => {
+    it("settings includes provider, diagnostics and config capabilities", () => {
       const caps = routeCapabilities("settings");
       expect(caps.length).toBeGreaterThan(0);
+      expect(caps.some(c => c.includes("模型"))).toBe(true);
       expect(caps.some(c => c.includes("诊断"))).toBe(true);
     });
     it("all routes have non-empty capabilities", () => {
@@ -102,10 +96,10 @@ describe("routes", () => {
       expect(isRouteId("workspace")).toBe(true);
       expect(isRouteId("materials")).toBe(true);
       expect(isRouteId("records")).toBe(true);
-      expect(isRouteId("services")).toBe(true);
       expect(isRouteId("settings")).toBe(true);
     });
     it("returns false for invalid values", () => {
+      expect(isRouteId("services")).toBe(false);
       expect(isRouteId("login")).toBe(false);
       expect(isRouteId("stage")).toBe(false);
       expect(isRouteId("")).toBe(false);

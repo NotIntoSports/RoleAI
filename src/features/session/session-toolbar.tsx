@@ -81,6 +81,8 @@ interface SessionToolbarProps {
   setAllowBargeIn: (allow: boolean) => void;
   /** 当前角色名：门控提示展示「喊到哪个名字才回答」。 */
   roleName: string;
+  /** 视频通话进行中：阶段与模式显示通话专用文案，而不是语音会话的状态。 */
+  videoActive?: boolean;
 }
 
 export function SessionToolbar({
@@ -121,6 +123,7 @@ export function SessionToolbar({
   allowBargeIn,
   setAllowBargeIn,
   roleName,
+  videoActive = false,
 }: SessionToolbarProps) {
   useT();
   const meetingGating = active && inputSource === "meeting" && selectedRoleScenario === "meetingAssistant";
@@ -128,12 +131,12 @@ export function SessionToolbar({
     <header className="session-toolbar">
       <div className="session-toolbar-meta">
         <h2 id="workspace-session-heading">{t("session.toolbar.heading")}</h2>
-        <span className="status-badge" data-active={active}>
-          {phaseLabel(phase)}
+        <span className="status-badge" data-active={videoActive || active}>
+          {videoActive ? t("tavus.call.phaseLabel") : phaseLabel(phase)}
         </span>
         {realtimeStatus === "reconnecting" && <span className="status-badge" data-active={active}>{t("session.toolbar.reconnecting")}</span>}
         {realtimeStatus === "failed" && <span className="status-badge" data-active={false}>{t("session.toolbar.connectFailed")}</span>}
-        <span className="session-mode">{modeLabel(mode)}</span>
+        <span className="session-mode">{videoActive ? t("tavus.call.modeLabel") : modeLabel(mode)}</span>
       </div>
       {/* 门控常驻提示：放在「会话配置」折叠区之外，会话进行中始终可见。 */}
       {meetingGating && (

@@ -2,11 +2,10 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 import { AudioLines, Boxes, Mic, Server } from "lucide-react";
 import * as api from "../../api/commands";
 import { EmptyState } from "../../components/empty-state";
-import { EmbeddingEditor } from "../../features/services/embedding-editor";
-import { VoiceReferenceEditor } from "../../features/services/voice-reference-editor";
+import { EmbeddingEditor } from "./embedding-editor";
+import { VoiceReferenceEditor } from "./voice-reference-editor";
 import type { CommandResult, ProviderDependency, ProviderTestResult, PublicConfig, VoiceReferenceSummary, VoiceRouteMode, WebCapability } from "../../generated/bindings";
 import { t, useT, type DictionaryStringKey } from "../../i18n";
-import { PageShell } from "../page-shell";
 import "../../styles/configuration.css";
 
 const optional = (value: string) => value.trim() || null;
@@ -47,19 +46,21 @@ const providerTestSuccessMessage = (result: ProviderTestResult) => {
 const initialRoute = { id: "", name: "", mode: "cascaded" as VoiceRouteMode, asrProviderId: "", asrModelId: "", llmProviderId: "", llmModelId: "", ttsProviderId: "", ttsModelId: "", voiceId: "", e2eProviderId: "", e2eModelId: "" };
 type MessageTone = "info" | "pending" | "success" | "error";
 type ProviderTestState = { tone: Exclude<MessageTone, "info">; text: string };
-const categories = [
+
+export const serviceCategories = [
   { id: "providers", labelKey: "services.categories.providers", icon: Server },
   { id: "routes", labelKey: "services.categories.routes", icon: AudioLines },
   { id: "voices", labelKey: "services.categories.voices", icon: Mic },
   { id: "embedding", labelKey: "services.categories.embedding", icon: Boxes },
 ] as const;
 
-export function ServicesPage() {
+export type ServiceCategory = (typeof serviceCategories)[number]["id"];
+
+export const isServiceCategory = (id: string): id is ServiceCategory => serviceCategories.some((item) => item.id === id);
+
+// 由设置页的分类导航控制显隐；category 为 null 表示当前停在非服务分类。
+export function ServiceSettings({ category, onCategoryChange }: { category: ServiceCategory | null; onCategoryChange: (category: ServiceCategory) => void }) {
   useT();
-  const [category, setCategory] = useState<(typeof categories)[number]["id"]>(() => {
-    const requested = new URLSearchParams(window.location.search).get("category");
-    return categories.find((item) => item.id === requested)?.id ?? "providers";
-  });
   const [config, setConfig] = useState<PublicConfig | null>(null);
   const [message, setMessage] = useState(() => t("services.reading"));
   const [messageTone, setMessageTone] = useState<MessageTone>("pending");
@@ -111,10 +112,10 @@ export function ServicesPage() {
     if (reference.kind === "voiceRoute") {
       const item = config?.speech.voiceRoutes.find((value) => value.id === reference.id);
       if (item) setRoute({ ...initialRoute, ...Object.fromEntries(Object.entries(item).filter(([key]) => key in initialRoute).map(([key, value]) => [key, value ?? ""])) } as typeof initialRoute);
-      setCategory("routes");
+      onCategoryChange("routes");
     } else {
       setEmbeddingFocusId(reference.id);
-      setCategory("embedding");
+      onCategoryChange("embedding");
     }
     setDeletion(null);
     announce(t("services.deletion.referenceNotice", { name: reference.name, id: reference.id }), "info");
@@ -251,20 +252,14 @@ export function ServicesPage() {
   const providers = config?.models.providers ?? [];
   const setRouteField = (key: keyof typeof route, value: string) => setRoute((current) => ({ ...current, [key]: value }));
 
-  return <div className="services-page">
-    <PageShell id="services" />
-    <div className="configuration-layout">
-      <nav className="settings-nav" aria-label={t("services.navAria")}>
-        {categories.map(({ id, labelKey, icon: Icon }) => <button key={id} id={`services-category-${id}`} type="button" aria-current={category === id ? "page" : undefined} aria-controls={`services-panel-${id}`} onClick={() => setCategory(id)}><Icon size={16} aria-hidden="true" />{t(labelKey)}</button>)}
-      </nav>
-      <div className="configuration-content">
-      {message && <p className="services-message" data-tone={messageTone} role="status" aria-live="polite">{message}</p>}
-      {deletion && <section className="service-card" role="region" aria-label={t("services.deletion.regionAria")}>
+  return <>
+      {category && message && <p className="services-message" data-tone={messageTone} role="status" aria-live="polite">{message}</p>}
+      {category && deletion && <section className="service-card" role="region" aria-label={t("services.deletion.regionAria")}>
         <h3>{deletion.references.length ? t("services.deletion.blockedHeading", { name: deletion.name }) : deletion.cleanup ? t("services.deletion.cleanupHeading", { name: deletion.name }) : t("services.deletion.confirmHeading", { name: deletion.name })}</h3>
         {deletion.references.length ? <><p>{t("services.deletion.blockedHint")}</p><ul>{deletion.references.map((reference) => <li key={`${reference.kind}/${reference.id}`}><button disabled={busy} onClick={() => openReference(reference)}>{t("services.deletion.referenceAction", { kind: reference.kind === "voiceRoute" ? t("services.deletion.kindVoiceRoute") : t("services.deletion.kindEmbedding"), name: reference.name })}</button></li>)}</ul></> : <><p>{deletion.cleanup ? t("services.deletion.cleanupHint") : t("services.deletion.confirmHint")}</p><button className="button-danger" disabled={busy} onClick={() => void confirmDeletion()}>{deletion.cleanup ? t("services.deletion.retryCleanup") : t("services.deletion.confirmAction")}</button></>}
         <button disabled={busy} onClick={() => setDeletion(null)}>{t("services.deletion.cancel")}</button>
       </section>}
-      <section id="services-panel-providers" className="service-panel" hidden={category !== "providers"} aria-labelledby="services-category-providers">
+      <section id="settings-panel-providers" className="service-panel" hidden={category !== "providers"} aria-labelledby="settings-category-providers">
         <h2 className="section-heading">{t("services.providers.heading")}</h2>
         <p className="configuration-description">{t("services.providers.description")}</p>
         <div className="configuration-columns">
@@ -301,7 +296,7 @@ export function ServicesPage() {
         </div>
         </div>
       </section>
-      <section id="services-panel-routes" className="service-panel" hidden={category !== "routes"} aria-labelledby="services-category-routes">
+      <section id="settings-panel-routes" className="service-panel" hidden={category !== "routes"} aria-labelledby="settings-category-routes">
         <h2 className="section-heading">{t("services.routes.heading")}</h2>
         <p className="configuration-description">{t("services.routes.description")}</p>
         <div className="configuration-columns">
@@ -342,11 +337,9 @@ export function ServicesPage() {
         </div>
         </div>
       </section>
-      <section id="services-panel-embedding" hidden={category !== "embedding"} aria-labelledby="services-category-embedding"><EmbeddingEditor focusId={embeddingFocusId} /></section>
-      <section id="services-panel-voices" hidden={category !== "voices"} aria-labelledby="services-category-voices"><VoiceReferenceEditor visible={category === "voices"} /></section>
-      </div>
-    </div>
-  </div>;
+      <section id="settings-panel-embedding" hidden={category !== "embedding"} aria-labelledby="settings-category-embedding"><EmbeddingEditor focusId={embeddingFocusId} /></section>
+      <section id="settings-panel-voices" hidden={category !== "voices"} aria-labelledby="settings-category-voices"><VoiceReferenceEditor visible={category === "voices"} /></section>
+  </>;
 }
 
 function ProviderModelFields(props: { prefix: string; providers: PublicConfig["models"]["providers"]; provider: string; model: string; modelChoices: string[]; onProvider: (value: string) => void; onModel: (value: string) => void }) {

@@ -77,7 +77,7 @@ describe("errorText", () => {
 describe("humanizeRemoteError", () => {
   it("translates provider codes that prefix the message", () => {
     expect(humanizeRemoteError("downstream_reconnect_exceeded after 3 attempts")).toBe(
-      "语音模型不可用：当前供应商账号可能未开通实时语音模型权限。请在服务页更换语音线路，或到供应商控制台开通后重试。",
+      "语音模型不可用：当前供应商账号可能未开通实时语音模型权限。请在「设置 → 语音线路」更换线路，或到供应商控制台开通后重试。",
     );
     expect(humanizeRemoteError("1113: no quota")).toBe(
       "供应商余额不足：账号没有可用的语音资源包，请充值或更换语音线路。",

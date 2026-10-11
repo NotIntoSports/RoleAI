@@ -13,13 +13,23 @@ vi.mock("../../api/commands", () => ({
   activateRoleProfile: vi.fn(),
   deleteRoleProfile: vi.fn(),
   getDiagnosticsLatencySummary: vi.fn(),
+  listTavusFaces: vi.fn(),
+  getTavusCredentialStatus: vi.fn(),
+  saveTavusCredential: vi.fn(),
+  listVoiceReferences: vi.fn(),
 }));
 
 describe("SettingsPage", () => {
   beforeEach(() => {
+    vi.mocked(commands.listVoiceReferences).mockResolvedValue({ ok: true, data: [] });
     vi.mocked(commands.getLegacyMigrationStatus).mockResolvedValue({
       ok: true,
       data: { applied: false, reenterSecrets: false, omitted: [] },
+    });
+    vi.mocked(commands.listTavusFaces).mockResolvedValue({ ok: true, data: [] });
+    vi.mocked(commands.getTavusCredentialStatus).mockResolvedValue({
+      ok: true,
+      data: { reference: "tavus/api-key", configured: false },
     });
     vi.mocked(commands.getConfigPublic).mockResolvedValue({
       ok: true,
@@ -46,15 +56,28 @@ describe("SettingsPage", () => {
     expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("设置");
   });
 
-  it("opens appearance by default and keeps inactive panels inaccessible", () => {
+  it("opens model providers by default and keeps inactive panels inaccessible", async () => {
     render(<SettingsPage />);
     const navigation = within(screen.getByRole("navigation", { name: "设置分类" }));
-    expect(navigation.getByRole("button", { name: "外观" }).getAttribute("aria-current")).toBe("page");
+    expect(navigation.getByRole("button", { name: "模型供应商" }).getAttribute("aria-current")).toBe("page");
+    expect(await screen.findByRole("heading", { name: "模型供应商" })).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "角色" })).toBeNull();
     expect(screen.queryByRole("textbox", { name: "角色 ID" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "导入旧会话" })).toBeNull();
+    expect(document.getElementById("settings-panel-appearance")?.hidden).toBe(true);
     expect(document.getElementById("settings-panel-roles")?.hidden).toBe(true);
     expect(document.getElementById("settings-panel-migration")?.hidden).toBe(true);
+  });
+
+  it("lists the service categories first and splits the navigation into three groups", () => {
+    render(<SettingsPage />);
+    const buttons = within(screen.getByRole("navigation", { name: "设置分类" })).getAllByRole("button");
+    expect(buttons.map((button) => button.textContent)).toEqual([
+      "模型供应商", "语音线路", "音色克隆", "Embedding", "视频通话（Tavus）",
+      "角色", "外观",
+      "应用更新", "数据迁移", "诊断",
+    ]);
+    expect(buttons.filter((button) => button.hasAttribute("data-group-start")).map((button) => button.textContent)).toEqual(["角色", "应用更新"]);
   });
 
   it("preserves role and migration drafts while switching categories", async () => {
@@ -90,6 +113,23 @@ describe("SettingsPage", () => {
     expect(await screen.findByRole("heading", { name: "角色" })).toBeTruthy();
   });
 
+  it("names the Tavus category and jumps there from the role editor hint", async () => {
+    vi.mocked(commands.listTavusFaces).mockResolvedValue({
+      ok: false,
+      error: { code: "TAVUS_KEY_MISSING", message: "请先在设置里保存 Tavus 密钥", requestId: "r1", retryable: false },
+    });
+    render(<SettingsPage />);
+    const navigation = within(screen.getByRole("navigation", { name: "设置分类" }));
+    expect(navigation.getByRole("button", { name: "视频通话（Tavus）" })).toBeTruthy();
+    expect(commands.listTavusFaces).not.toHaveBeenCalled();
+
+    fireEvent.click(navigation.getByRole("button", { name: "角色" }));
+    fireEvent.click(await screen.findByRole("button", { name: "去「视频通话（Tavus）」保存密钥" }));
+    expect(document.getElementById("settings-panel-tavus")?.hidden).toBe(false);
+    expect(document.getElementById("settings-panel-roles")?.hidden).toBe(true);
+    expect(navigation.getByRole("button", { name: "视频通话（Tavus）" }).getAttribute("aria-current")).toBe("page");
+  });
+
   it("loads the latency summary only after the diagnostics category is opened", async () => {
     vi.mocked(commands.getDiagnosticsLatencySummary).mockResolvedValue({
       ok: true,
@@ -117,6 +157,18 @@ describe("SettingsPage", () => {
     render(<SettingsPage />);
     const banner = await screen.findByText("需要重新填写密钥");
     expect(banner.textContent).toContain("需要重新填写密钥");
+  });
+
+  it("opens model providers from the reenter banner without leaving the page", async () => {
+    vi.mocked(commands.getLegacyMigrationStatus).mockResolvedValue({
+      ok: true,
+      data: { applied: true, reenterSecrets: true, omitted: [] },
+    });
+    render(<SettingsPage />);
+    fireEvent.click(within(screen.getByRole("navigation", { name: "设置分类" })).getByRole("button", { name: "外观" }));
+    fireEvent.click(await screen.findByRole("button", { name: "去「模型供应商」填写" }));
+    expect(document.getElementById("settings-panel-providers")?.hidden).toBe(false);
+    expect(document.getElementById("settings-panel-appearance")?.hidden).toBe(true);
   });
 
   it("hides the reenter banner when secrets are already configured", async () => {

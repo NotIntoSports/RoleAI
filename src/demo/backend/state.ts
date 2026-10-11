@@ -215,6 +215,11 @@ function seedRoles(): RoleProfileConfig[] {
   }));
 }
 
+/** 演示角色里内置模板的判定：与前端列表过滤（visibleRoleProfiles）共用同一前缀约定。 */
+export function isPresetRoleId(id: string): boolean {
+  return id.startsWith("preset-");
+}
+
 /** 服务/线路/音色等演示资源的展示名（数据字段，语言随种子语言）。 */
 const RESOURCE_NAMES: Record<Language, {
   providerName: string;

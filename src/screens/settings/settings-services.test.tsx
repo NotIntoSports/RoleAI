@@ -3,10 +3,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as commands from "../../api/commands";
 import type { VoiceRouteConfig } from "../../generated/bindings";
-import { ServicesPage } from "./services-page";
+import { SettingsPage } from "./settings-page";
 
 vi.mock("../../api/commands", () => ({
   getConfigPublic: vi.fn(),
+  getLegacyMigrationStatus: vi.fn(),
+  importLegacySource: vi.fn(),
+  saveRoleProfile: vi.fn(),
+  copyRoleProfile: vi.fn(),
+  activateRoleProfile: vi.fn(),
+  deleteRoleProfile: vi.fn(),
+  getDiagnosticsLatencySummary: vi.fn(),
+  listTavusFaces: vi.fn(),
+  getTavusCredentialStatus: vi.fn(),
+  saveTavusCredential: vi.fn(),
   saveModelProvider: vi.fn(),
   testModelProvider: vi.fn(),
   discoverModelProvider: vi.fn(),
@@ -52,10 +62,19 @@ const emptyConfig = {
   diagnostics: { logRetentionDays: 14 },
 };
 
-describe("ServicesPage", () => {
+describe("SettingsPage service categories", () => {
   beforeEach(() => {
     vi.mocked(commands.getModelProviderDependencies).mockResolvedValue({ ok: true, data: [] });
     vi.mocked(commands.getConfigPublic).mockResolvedValue({ ok: true, data: emptyConfig });
+    vi.mocked(commands.getLegacyMigrationStatus).mockResolvedValue({
+      ok: true,
+      data: { applied: false, reenterSecrets: false, omitted: [] },
+    });
+    vi.mocked(commands.getTavusCredentialStatus).mockResolvedValue({
+      ok: true,
+      data: { reference: "tavus/api-key", configured: false },
+    });
+    vi.mocked(commands.listTavusFaces).mockResolvedValue({ ok: true, data: [] });
   });
   afterEach(() => {
     cleanup();
@@ -64,14 +83,14 @@ describe("ServicesPage", () => {
 
   it("toggles panel visibility and keeps inactive panels unfocusable across back-and-forth switches", async () => {
     vi.mocked(commands.listVoiceReferences).mockResolvedValue({ ok: true, data: [] });
-    render(<ServicesPage />);
+    render(<SettingsPage />);
     await screen.findByRole("heading", { name: "模型供应商" });
-    const navigation = within(screen.getByRole("navigation", { name: "服务分类" }));
+    const navigation = within(screen.getByRole("navigation", { name: "设置分类" }));
     const panels: Record<string, HTMLElement> = {
-      模型供应商: document.getElementById("services-panel-providers") as HTMLElement,
-      语音线路: document.getElementById("services-panel-routes") as HTMLElement,
-      音色克隆: document.getElementById("services-panel-voices") as HTMLElement,
-      Embedding: document.getElementById("services-panel-embedding") as HTMLElement,
+      模型供应商: document.getElementById("settings-panel-providers") as HTMLElement,
+      语音线路: document.getElementById("settings-panel-routes") as HTMLElement,
+      音色克隆: document.getElementById("settings-panel-voices") as HTMLElement,
+      Embedding: document.getElementById("settings-panel-embedding") as HTMLElement,
     };
     // 面板以 hidden 属性隐藏（HTML 标准规定 hidden 后代不可聚焦、不入无障碍树），
     // jsdom 不模拟真实焦点遍历，因此以 hidden 属性断言不可聚焦。
@@ -89,10 +108,10 @@ describe("ServicesPage", () => {
   });
 
   it("opens providers by default and exposes one category at a time", async () => {
-    render(<ServicesPage />);
-    expect(screen.getByRole("heading", { level: 1 }).textContent).toContain("服务");
+    render(<SettingsPage />);
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toContain("设置");
     expect(await screen.findByRole("heading", { name: "模型供应商" })).toBeTruthy();
-    const navigation = within(screen.getByRole("navigation", { name: "服务分类" }));
+    const navigation = within(screen.getByRole("navigation", { name: "设置分类" }));
     expect(navigation.getByRole("button", { name: "模型供应商" }).getAttribute("aria-current")).toBe("page");
     expect(screen.queryByRole("heading", { name: "语音线路" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "Embedding" })).toBeNull();
@@ -113,8 +132,8 @@ describe("ServicesPage", () => {
     };
     vi.mocked(commands.listVoiceReferences).mockResolvedValue({ ok: true, data: [reference] });
     vi.mocked(commands.saveVoiceReferenceAudio).mockResolvedValue({ ok: true, data: { ...reference, id: "ref-2", name: "新音色" } });
-    render(<ServicesPage />);
-    const navigation = within(screen.getByRole("navigation", { name: "服务分类" }));
+    render(<SettingsPage />);
+    const navigation = within(screen.getByRole("navigation", { name: "设置分类" }));
     fireEvent.click(navigation.getByRole("button", { name: "音色克隆" }));
     expect(await screen.findByRole("heading", { name: "音色克隆" })).toBeTruthy();
     expect(await screen.findByText("我的音色")).toBeTruthy();
@@ -138,11 +157,11 @@ describe("ServicesPage", () => {
       .mockResolvedValueOnce({ ok: true, data: single })
       .mockResolvedValue({ ok: true, data: updated });
     vi.mocked(commands.listVoiceReferences).mockResolvedValue({ ok: true, data: [] });
-    render(<ServicesPage />);
+    render(<SettingsPage />);
     await screen.findByRole("heading", { name: "模型供应商" });
     const callsAfterLoad = vi.mocked(commands.getConfigPublic).mock.calls.length;
-    fireEvent.click(within(screen.getByRole("navigation", { name: "服务分类" })).getByRole("button", { name: "音色克隆" }));
-    const voicesPanel = document.getElementById("services-panel-voices") as HTMLElement;
+    fireEvent.click(within(screen.getByRole("navigation", { name: "设置分类" })).getByRole("button", { name: "音色克隆" }));
+    const voicesPanel = document.getElementById("settings-panel-voices") as HTMLElement;
     await waitFor(() => expect(vi.mocked(commands.getConfigPublic).mock.calls.length).toBeGreaterThan(callsAfterLoad));
     const select = within(voicesPanel).getByLabelText("供应商") as HTMLSelectElement;
     expect(Array.from(select.options).some((option) => option.value === "p2")).toBe(true);
@@ -164,13 +183,13 @@ describe("ServicesPage", () => {
       ok: true,
       data: { ...reference, name: "我的音色", providerId: "zcode" },
     });
-    render(<ServicesPage />);
-    const navigation = within(screen.getByRole("navigation", { name: "服务分类" }));
+    render(<SettingsPage />);
+    const navigation = within(screen.getByRole("navigation", { name: "设置分类" }));
     fireEvent.click(navigation.getByRole("button", { name: "音色克隆" }));
     expect(await screen.findByText("我的音色")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "编辑 我的音色" }));
     expect(await screen.findByText(/正在编辑「我的音色」/)).toBeTruthy();
-    const voicesPanel = document.getElementById("services-panel-voices") as HTMLElement;
+    const voicesPanel = document.getElementById("settings-panel-voices") as HTMLElement;
     fireEvent.change(within(voicesPanel).getByLabelText("供应商"), { target: { value: "zcode" } });
     fireEvent.click(within(voicesPanel).getByRole("button", { name: "保存修改" }));
     expect(await screen.findByText("音色信息已更新，原音频与克隆状态保持不变")).toBeTruthy();
@@ -189,8 +208,8 @@ describe("ServicesPage", () => {
       .mockResolvedValueOnce({ ok: true, data: [] })
       .mockResolvedValue({ ok: true, data: [reference] });
     vi.mocked(commands.saveVoiceReferenceAudio).mockResolvedValue({ ok: true, data: reference });
-    render(<ServicesPage />);
-    const navigation = within(screen.getByRole("navigation", { name: "服务分类" }));
+    render(<SettingsPage />);
+    const navigation = within(screen.getByRole("navigation", { name: "设置分类" }));
     fireEvent.click(navigation.getByRole("button", { name: "音色克隆" }));
     expect(await screen.findByRole("heading", { name: "音色克隆" })).toBeTruthy();
     const wavBytes = new Uint8Array([82, 73, 70, 70, 0, 0, 0, 0, 87, 65, 86, 69]);
@@ -209,7 +228,7 @@ describe("ServicesPage", () => {
     }));
     // 保存后列表回显，再点编辑：目标模型输入框应带出已存值。
     fireEvent.click(screen.getByRole("button", { name: "编辑 omni 音色" }));
-    const voicesPanel = document.getElementById("services-panel-voices") as HTMLElement;
+    const voicesPanel = document.getElementById("settings-panel-voices") as HTMLElement;
     const targetInput = within(voicesPanel).getByLabelText(/目标模型/) as HTMLInputElement;
     expect(targetInput.value).toBe("qwen3.8-omni-flash-realtime");
   });
@@ -225,8 +244,8 @@ describe("ServicesPage", () => {
         createdAt: "2026-09-25T00:00:00Z", updatedAt: "2026-09-25T00:00:00Z",
       },
     });
-    render(<ServicesPage />);
-    const navigation = within(screen.getByRole("navigation", { name: "服务分类" }));
+    render(<SettingsPage />);
+    const navigation = within(screen.getByRole("navigation", { name: "设置分类" }));
     fireEvent.click(navigation.getByRole("button", { name: "音色克隆" }));
     fireEvent.click(await screen.findByRole("button", { name: "开始录音" }));
     fireEvent.click(await screen.findByRole("button", { name: /停止录音/ }));
@@ -238,14 +257,14 @@ describe("ServicesPage", () => {
   });
 
   it("preserves provider, route and embedding drafts across category switches", async () => {
-    render(<ServicesPage />);
+    render(<SettingsPage />);
     await screen.findByText("还没有供应商。");
     const providerPanel = within(screen.getByRole("region", { name: "模型供应商" }));
     fireEvent.change(providerPanel.getByLabelText("显示名称"), { target: { value: "草稿供应商" } });
     fireEvent.click(screen.getByRole("button", { name: "语音线路" }));
     fireEvent.change(screen.getByLabelText("线路名称"), { target: { value: "草稿线路" } });
     expect(screen.queryByRole("textbox", { name: "显示名称" })).toBeNull();
-    expect(document.getElementById("services-panel-providers")?.hidden).toBe(true);
+    expect(document.getElementById("settings-panel-providers")?.hidden).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "Embedding" }));
     fireEvent.change(screen.getByLabelText("模型"), { target: { value: "embedding-draft" } });
@@ -262,9 +281,10 @@ describe("ServicesPage", () => {
       ok: true,
       data: { id: "openai", name: "OpenAI", baseUrl: "https://example.test/v1", credential: { reference: "providers/openai/api-key", configured: true } },
     });
-    render(<ServicesPage />);
+    render(<SettingsPage />);
     await screen.findByRole("heading", { name: "模型供应商" });
-    fireEvent.change(screen.getByLabelText("显示名称"), { target: { value: "OpenAI" } });
+    const providerPanel = within(screen.getByRole("region", { name: "模型供应商" }));
+    fireEvent.change(providerPanel.getByLabelText("显示名称"), { target: { value: "OpenAI" } });
     fireEvent.change(screen.getAllByLabelText("接入地址")[0], { target: { value: "https://example.test/v1" } });
     const key = screen.getAllByLabelText(/API Key/)[0] as HTMLInputElement;
     fireEvent.change(key, { target: { value: "secret-marker" } });
@@ -278,7 +298,7 @@ describe("ServicesPage", () => {
 
   it("does not call fetch or contain old API paths", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
-    const { container } = render(<ServicesPage />);
+    const { container } = render(<SettingsPage />);
     await screen.findByRole("heading", { name: "模型供应商" });
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(container.innerHTML).not.toMatch(/\/api\//);
@@ -293,9 +313,10 @@ describe("ServicesPage", () => {
         models: { providers: [{ id: "openai", name: "OpenAI", baseUrl: "https://example.test/v1", credential: { reference: "providers/openai/api-key", configured: true } }], activeProviderId: null },
       },
     });
-    render(<ServicesPage />);
+    render(<SettingsPage />);
     fireEvent.click(await screen.findByRole("button", { name: "编辑 OpenAI" }));
-    expect((screen.getByLabelText("显示名称") as HTMLInputElement).value).toBe("OpenAI");
+    const providerPanel = within(screen.getByRole("region", { name: "模型供应商" }));
+    expect((providerPanel.getByLabelText("显示名称") as HTMLInputElement).value).toBe("OpenAI");
     expect((screen.getAllByLabelText(/API Key/)[0] as HTMLInputElement).value).toBe("");
   });
 
@@ -313,7 +334,7 @@ describe("ServicesPage", () => {
         finishTest = resolve;
       }),
     );
-    render(<ServicesPage />);
+    render(<SettingsPage />);
     fireEvent.click(await screen.findByRole("button", { name: "测试 OpenAI" }));
     expect(await screen.findAllByText("正在测试连接…")).not.toHaveLength(0);
     finishTest({ ok: true, data: { providerId: "openai", reachable: true, modelCount: 3, webStatus: "disabled", webSourceCount: 0 } });
@@ -322,7 +343,7 @@ describe("ServicesPage", () => {
   it("shows provider references instead of deleting and navigates to the route", async () => {
     vi.mocked(commands.getConfigPublic).mockResolvedValue({ ok: true, data: { ...emptyConfig, models: { providers: [{ id: "p1", name: "千问", baseUrl: "https://example.test", credential: null }], activeProviderId: null } } });
     vi.mocked(commands.getModelProviderDependencies).mockResolvedValue({ ok: true, data: [{ kind: "voiceRoute", id: "r1", name: "面试线路" }] });
-    render(<ServicesPage />);
+    render(<SettingsPage />);
     fireEvent.click(await screen.findByRole("button", { name: "删除" }));
     expect(await screen.findByText(/面试线路/)).toBeTruthy();
     expect(commands.deleteModelProvider).not.toHaveBeenCalled();
@@ -349,7 +370,7 @@ describe("ServicesPage", () => {
       ok: true,
       data: [{ kind: "embedding", id: "emb-9", name: "text-embedding-v3" }],
     });
-    render(<ServicesPage />);
+    render(<SettingsPage />);
     fireEvent.click(await screen.findByRole("button", { name: "删除" }));
     fireEvent.click(await screen.findByRole("button", { name: /处理.*text-embedding-v3/ }));
     expect(screen.getByRole("heading", { name: "Embedding" })).toBeTruthy();
@@ -360,7 +381,7 @@ describe("ServicesPage", () => {
   it("requires confirmation before deleting an unreferenced provider", async () => {
     vi.mocked(commands.getConfigPublic).mockResolvedValue({ ok: true, data: { ...emptyConfig, models: { providers: [{ id: "p1", name: "测试供应商", baseUrl: "https://example.test", credential: null }], activeProviderId: null } } });
     vi.mocked(commands.deleteModelProvider).mockResolvedValue({ ok: true, data: { ready: true } });
-    render(<ServicesPage />);
+    render(<SettingsPage />);
     fireEvent.click(await screen.findByRole("button", { name: "删除" }));
     const confirm = await screen.findByRole("button", { name: "确认删除供应商" });
     expect(commands.deleteModelProvider).not.toHaveBeenCalled();
@@ -371,7 +392,7 @@ describe("ServicesPage", () => {
   it("keeps a retry action when only credential cleanup fails", async () => {
     vi.mocked(commands.getConfigPublic).mockResolvedValue({ ok: true, data: { ...emptyConfig, models: { providers: [{ id: "p1", name: "测试供应商", baseUrl: "https://example.test", credential: null }], activeProviderId: null } } });
     vi.mocked(commands.deleteModelProvider).mockResolvedValueOnce({ ok: false, error: { code: "SECRET_CLEANUP_FAILED", message: "failed", retryable: false, requestId: "test" } }).mockResolvedValueOnce({ ok: true, data: { ready: true } });
-    render(<ServicesPage />);
+    render(<SettingsPage />);
     fireEvent.click(await screen.findByRole("button", { name: "删除" }));
     vi.mocked(commands.getConfigPublic).mockResolvedValue({ ok: true, data: emptyConfig });
     fireEvent.click(await screen.findByRole("button", { name: "确认删除供应商" }));
@@ -385,7 +406,7 @@ describe("ServicesPage", () => {
   it("does not hide a refresh failure behind a successful deletion message", async () => {
     vi.mocked(commands.getConfigPublic).mockResolvedValue({ ok: true, data: { ...emptyConfig, models: { providers: [{ id: "p1", name: "测试供应商", baseUrl: "https://example.test", credential: null }], activeProviderId: null } } });
     vi.mocked(commands.deleteModelProvider).mockResolvedValue({ ok: true, data: { ready: true } });
-    render(<ServicesPage />);
+    render(<SettingsPage />);
     fireEvent.click(await screen.findByRole("button", { name: "删除" }));
     vi.mocked(commands.getConfigPublic).mockResolvedValue({ ok: false, error: { code: "CONFIG_READ_FAILED", message: "read failed", retryable: false, requestId: "test" } });
     fireEvent.click(await screen.findByRole("button", { name: "确认删除供应商" }));
@@ -405,7 +426,7 @@ describe("ServicesPage", () => {
       ok: true,
       data: { providerId: "openai", reachable: true, modelCount: 1, webStatus: "available", webSourceCount: 2 },
     });
-    render(<ServicesPage />);
+    render(<SettingsPage />);
     fireEvent.click(await screen.findByRole("button", { name: "测试 OpenAI" }));
     expect(await screen.findAllByText("连接测试通过，发现 1 个模型；联网可用，返回 2 个来源")).not.toHaveLength(0);
   });
@@ -422,7 +443,7 @@ describe("ServicesPage", () => {
       ok: false,
       error: { code: "PROVIDER_TIMEOUT", message: "Provider operation failed", requestId: "test", retryable: true },
     });
-    render(<ServicesPage />);
+    render(<SettingsPage />);
     fireEvent.click(await screen.findByRole("button", { name: "测试 OpenAI" }));
     expect(await screen.findAllByText("连接超时，请检查接入地址或网络")).not.toHaveLength(0);
   });
@@ -436,7 +457,7 @@ describe("ServicesPage", () => {
       ok: true,
       data: { providerId: "openai", models: [{ id: "model-a" }] },
     });
-    const { container } = render(<ServicesPage />);
+    const { container } = render(<SettingsPage />);
     fireEvent.click(await screen.findByRole("button", { name: "发现模型" }));
     fireEvent.click(screen.getByRole("button", { name: "语音线路" }));
     fireEvent.change(screen.getByLabelText("ASR 供应商"), { target: { value: "openai" } });
@@ -453,7 +474,7 @@ describe("ServicesPage", () => {
       ok: true,
       data: { providerId: "openai", models: [{ id: "model-a" }, { id: "model-b" }] },
     });
-    const { container } = render(<ServicesPage />);
+    const { container } = render(<SettingsPage />);
     // 无需先到供应商页点"发现模型"：在线路表单选中供应商即自动发现。
     fireEvent.click(await screen.findByRole("button", { name: "语音线路" }));
     fireEvent.change(screen.getByLabelText("ASR 供应商"), { target: { value: "openai" } });
@@ -490,7 +511,7 @@ describe("ServicesPage", () => {
       return { ok: true, data: { routeId: "realtime", ready: true, checkedProviderIds: ["openai"] } };
     });
     vi.mocked(commands.activateSpeechRoute).mockResolvedValue({ ok: true, data: { ...saved, ready: true, active: true } });
-    render(<ServicesPage />);
+    render(<SettingsPage />);
     await screen.findByRole("button", { name: "编辑 OpenAI" });
     fireEvent.click(screen.getByRole("button", { name: "语音线路" }));
     fireEvent.change(screen.getByLabelText("线路名称"), { target: { value: "实时线路" } });

@@ -7,7 +7,7 @@
  * mock-openai-server.mjs（OpenAI 兼容最小子集），不连任何真实 AI 服务。
  *
  * 用例（对应 I03 卡片）：
- *   1. 首次启动 → 服务页配置 mock 供应商 → 连接测试通过；
+ *   1. 首次启动 → 设置页「模型供应商」配置 mock 供应商 → 连接测试通过；
  *   2. 新建角色 → 保存 → 落盘配置包含该角色（重启语义见下方“已知限制”），
  *      并断言隔离目录的单次性契约（同根重启被 startup.rs 拒绝，exit 2）；
  *   3. 导入一份 txt 资料 → FTS 搜索命中；
@@ -439,19 +439,20 @@ async function runMainFlow() {
     });
 
     // ── 用例 1：配置服务（指向 mock）→ 测试连接成功 ──
-    await step("服务页：添加 mock 供应商并保存", async () => {
-      await navigateTo(driver, "services", "服务");
-      await fillByXpath(driver, "//label[contains(., '显示名称')]/input", PROVIDER_NAME);
-      await fillByXpath(driver, "//label[contains(., '接入地址')]/input", mockServer.baseUrl);
+    await step("设置页：添加 mock 供应商并保存", async () => {
+      await navigateTo(driver, "settings", "设置");
+      await clickByCss(driver, "#settings-category-providers");
+      await fillByXpath(driver, "//section[@id='settings-panel-providers']//label[contains(., '显示名称')]/input", PROVIDER_NAME);
+      await fillByXpath(driver, "//section[@id='settings-panel-providers']//label[contains(., '接入地址')]/input", mockServer.baseUrl);
       await clickByXpath(driver, "//button[normalize-space()='保存供应商']");
       await waitTextContains(driver, "p.services-message[data-tone='success']", "供应商已保存");
     });
 
-    await step("服务页：连接测试通过（发现 mock 模型）", async () => {
+    await step("设置页：连接测试通过（发现 mock 模型）", async () => {
       await clickByXpath(driver, `//button[@aria-label='测试 ${PROVIDER_NAME}']`);
       await waitTextContains(
         driver,
-        "#services-panel-providers .service-test-result[data-tone='success']",
+        "#settings-panel-providers .service-test-result[data-tone='success']",
         "连接测试通过",
       );
       const requests = await mockRequestsWithRetries(mockServer);
@@ -460,8 +461,8 @@ async function runMainFlow() {
       }
     });
 
-    await step("服务页：配置级联语音线路并测试", async () => {
-      await clickByCss(driver, "#services-category-routes");
+    await step("设置页：配置级联语音线路并测试", async () => {
+      await clickByCss(driver, "#settings-category-routes");
       await fillByXpath(driver, "//label[contains(., '线路名称')]/input", ROUTE_NAME);
       for (const prefix of ["ASR", "LLM", "TTS"]) {
         const providerSelect = await driver.wait(
@@ -475,16 +476,16 @@ async function runMainFlow() {
       await waitTextContains(driver, "p.services-message[data-tone='success']", "语音线路已保存");
     });
 
-    await step("服务页：线路测试通过并启用", async () => {
+    await step("设置页：线路测试通过并启用", async () => {
       await clickByXpath(
         driver,
-        `//section[@id='services-panel-routes']//article[contains(., '${ROUTE_NAME}')]//button[normalize-space()='测试']`,
+        `//section[@id='settings-panel-routes']//article[contains(., '${ROUTE_NAME}')]//button[normalize-space()='测试']`,
       );
       await waitTextContains(driver, "p.services-message[data-tone='success']", "线路测试通过", STEP_TIMEOUT_MS);
       await assertMockCalled(mockServer, "tts");
       await clickByXpath(
         driver,
-        `//section[@id='services-panel-routes']//article[contains(., '${ROUTE_NAME}')]//button[normalize-space()='启用']`,
+        `//section[@id='settings-panel-routes']//article[contains(., '${ROUTE_NAME}')]//button[normalize-space()='启用']`,
       );
       await waitTextContains(driver, "p.services-message[data-tone='success']", "语音线路已启用");
     });

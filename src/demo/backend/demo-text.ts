@@ -12,6 +12,7 @@ export function demoLang(): Language {
 export interface DemoText {
   roles: {
     nameRequired: string;
+    nameTaken: (name: string) => string;
     copySourceMissing: string;
     copySuffix: string;
     notFound: string;
@@ -69,6 +70,7 @@ export interface DemoText {
     speakerName: string;
     virtualAudioReady: string;
     virtualAudioNoInstall: string;
+    tavusKeyMissing: string;
     notImplemented: (cmd: string) => string;
   };
   livestream: {
@@ -85,6 +87,7 @@ export interface DemoText {
 const ZH: DemoText = {
   roles: {
     nameRequired: "角色名称不能为空。",
+    nameTaken: (name) => `「${name}」已被另一个角色使用，请换一个名字再保存。`,
     copySourceMissing: "找不到要复制的角色。",
     copySuffix: " 副本",
     notFound: "找不到该角色。",
@@ -153,6 +156,7 @@ const ZH: DemoText = {
     speakerName: "扬声器（演示设备）",
     virtualAudioReady: "虚拟声卡就绪（演示环境，未安装任何驱动）。",
     virtualAudioNoInstall: "演示环境无需安装驱动，虚拟声卡保持就绪。",
+    tavusKeyMissing: "请先在设置里保存 Tavus 密钥",
     notImplemented: (cmd) => `在线演示尚未模拟该能力（${cmd}）`,
   },
   livestream: {
@@ -170,6 +174,7 @@ const ZH: DemoText = {
 const EN: DemoText = {
   roles: {
     nameRequired: "Role name cannot be empty.",
+    nameTaken: (name) => `"${name}" is already used by another role. Pick a different name.`,
     copySourceMissing: "Role to duplicate not found.",
     copySuffix: " (copy)",
     notFound: "Role not found.",
@@ -238,6 +243,7 @@ const EN: DemoText = {
     speakerName: "Speakers (demo device)",
     virtualAudioReady: "Virtual audio device ready (demo environment; no driver installed).",
     virtualAudioNoInstall: "The demo environment needs no driver; the virtual audio device stays ready.",
+    tavusKeyMissing: "Save a Tavus key in Settings first",
     notImplemented: (cmd) => `The online demo has not simulated this capability (${cmd})`,
   },
   livestream: {

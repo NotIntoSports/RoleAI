@@ -13,6 +13,8 @@ interface TranscriptPanelProps {
   historyTurns: SessionTurnView[];
   roleName: string;
   welcomeRoleName: string;
+  /** 空闲欢迎语；虚拟形象开启时改为指向「开始视频通话」。 */
+  idleHint?: string;
   active: boolean;
   pendingConfirmation: boolean;
   confirmationText: string;
@@ -35,6 +37,7 @@ export function TranscriptPanel({
   historyTurns,
   roleName,
   welcomeRoleName,
+  idleHint,
   active,
   pendingConfirmation,
   confirmationText,
@@ -65,7 +68,7 @@ export function TranscriptPanel({
           <span className="session-welcome-icon"><MessageSquare size={25} strokeWidth={1.5} aria-hidden="true" /></span>
           <span className="session-welcome-eyebrow">{t("session.transcript.eyebrow")}</span>
           <h3>{active ? t("session.transcript.waitingTitle") : t("session.transcript.newTitle")}</h3>
-          <p>{active ? t("session.transcript.waitingHint") : t("session.transcript.newHint")}</p>
+          <p>{active ? t("session.transcript.waitingHint") : idleHint ?? t("session.transcript.newHint")}</p>
           <p>{welcomeRoleName}</p>
           {!active && <button className="button-ghost" type="button" onClick={onAdjustConfiguration}>{t("session.transcript.adjustConfig")}</button>}
         </div>

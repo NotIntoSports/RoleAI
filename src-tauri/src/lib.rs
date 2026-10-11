@@ -168,6 +168,11 @@ pub fn run() {
             commands::obs_virtual_camera_stop,
             commands::obs_password_status,
             commands::obs_password_save,
+            commands::tavus_credential_status,
+            commands::tavus_credential_save,
+            commands::tavus_list_faces,
+            commands::tavus_conversation_start,
+            commands::tavus_conversation_end,
         ])
         .setup(move |app| {
             if let Some(isolated) = isolated.as_ref() {

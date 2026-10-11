@@ -12,8 +12,8 @@ describe("PageShell", () => {
   });
 
   it("gives a short, task-oriented introduction", () => {
-    render(<PageShell id="services" />);
-    expect(screen.getByText("连接模型与语音服务，配置你的 AI 能力。")).toBeTruthy();
+    render(<PageShell id="settings" />);
+    expect(screen.getByText("连接模型与语音服务，管理角色、外观与本地数据。")).toBeTruthy();
   });
 
   it("keeps design references and capability inventories out of the page", () => {

@@ -10,11 +10,28 @@ test("frontend and Rust foundation dependencies are locked", async () => {
   assert.equal(pkg.devDependencies["@tauri-apps/cli"], "2.12.1");
   assert.equal(pkg.devDependencies.vite, "8.3.2");
   assert.equal(pkg.dependencies.react, "19.3.0");
+  assert.equal(pkg.dependencies["@daily-co/daily-js"], "0.93.0");
   assert.equal(pkg.dependencies["react-dom"], "19.3.0");
   assert.match(cargo, /tauri\s*=\s*\{\s*version\s*=\s*"=?2/);
   assert.match(cargo, /keyring/);
   assert.match(cargo, /rusqlite/);
   assert.match(cargo, /ts-rs/);
+});
+
+test("Daily call engine loads under the CSP without unsafe-eval", async () => {
+  const tauri = JSON.parse(await readFile("src-tauri/tauri.conf.json", "utf8"));
+  const csp = tauri.app.security.csp;
+  const directives = Object.fromEntries(
+    csp
+      .split(";")
+      .map((part) => part.trim().split(/\s+/))
+      .filter(([name]) => name)
+      .map(([name, ...sources]) => [name, sources]),
+  );
+  assert.ok(directives["script-src"].includes("https://*.daily.co"), "script-src must allow the Daily call engine");
+  assert.doesNotMatch(csp, /'unsafe-eval'/);
+  const room = await readFile("src/features/tavus/daily-room.ts", "utf8");
+  assert.match(room, /avoidEval:\s*true/, "daily-js must load its engine without eval");
 });
 
 test("page-shell routing dependency is locked and forbidden libraries are absent", async () => {

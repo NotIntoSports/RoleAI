@@ -7,12 +7,12 @@
 ### 提示「本机未找到供应商密钥」（PROVIDER_CREDENTIAL_MISSING）
 
 - **原因**：密钥引用存在但凭据管理器里没有对应条目——常见于换了 Windows 用户、迁移了配置文件、或手动清理过凭据管理器。
-- **解决**：服务页 → 对应供应商 → 重新保存 API Key。
+- **解决**：设置页 → 模型供应商 → 对应供应商 → 重新保存 API Key。
 
 ### 提示余额不足（错误码 1113）或模型权限错误（downstream_reconnect_exceeded）
 
 - **原因**：透传自供应商。`1113` 是账号语音资源包耗尽；`downstream_reconnect_exceeded` 通常表示账号未开通对应实时语音模型权限。
-- **解决**：到供应商控制台充值或开通模型权限；或在服务页更换语音线路。
+- **解决**：到供应商控制台充值或开通模型权限；或在「设置 → 语音线路」更换线路。
 
 ### 短时间内反复失败
 
@@ -26,7 +26,7 @@
 | 无法解析服务地址 | `REALTIME_DNS_FAILED` | 检查网络与 Base URL 拼写 |
 | 无法建立 TCP 连接 | `REALTIME_TCP_FAILED` | 检查网络、代理与防火墙 |
 | 安全连接失败 | `REALTIME_TLS_FAILED` | 检查系统时间是否正确、证书或代理是否拦截 TLS |
-| 连接失败 | `REALTIME_CONNECT_FAILED` | 网络或供应商地址问题，检查服务页配置 |
+| 连接失败 | `REALTIME_CONNECT_FAILED` | 网络或供应商地址问题，检查设置页的供应商配置 |
 | 协议协商失败 | `REALTIME_PROTOCOL_FAILED` | 服务地址不支持 Realtime 协议，确认填的是 Realtime 端点而不是普通 Chat API |
 | 鉴权失败 | `REALTIME_UNAUTHORIZED` | 检查 API Key 是否为实时线路所用、套餐状态与模型权限 |
 | 服务已断开 / 读写失败 | `REALTIME_CONNECTION_CLOSED` `REALTIME_READ_FAILED` `REALTIME_WRITE_FAILED` | 网络波动。Realtime 线路会自动指数退避重连（500 ms 起、30 s 封顶）并回放上下文；输入已保留 |
@@ -90,7 +90,7 @@
 ### 更换 Embedding 服务后检索异常
 
 - **原因**：正常情况下向量表按嵌入空间指纹自动重建；若中途失败会停在旧状态。
-- **解决**：服务页重新测试并激活 Embedding 配置，触发重建。
+- **解决**：设置页 → Embedding，重新测试并激活配置，触发重建。
 
 ## 配置与诊断
 

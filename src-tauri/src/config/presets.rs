@@ -73,6 +73,9 @@ pub fn ensure_role_presets(config: &mut AppConfigV1) -> bool {
             opening_message: opening.into(),
             style_instructions: "使用自然、简洁的中文，每次只处理当前问题。".into(),
             scenario: RoleScenario::from_preset_id(id),
+            tavus_pal_id: None,
+            tavus_face_id: None,
+            tavus_synced_config_version: None,
             active: false,
             config_version: 1,
         });
@@ -91,6 +94,81 @@ pub fn ensure_role_presets(config: &mut AppConfigV1) -> bool {
         changed = true;
     }
     changed
+}
+
+/// 合并 trim 后同名的个人角色：保留 active（其次 config_version 最高、再次有
+/// tavus_face_id）的那一份，删除其余同名个人角色。内置模板（preset id）绝不删除。
+/// 若被删的是当前 active，把 active 指到保留的那份。
+pub fn merge_same_name_roles(config: &mut AppConfigV1) -> bool {
+    let mut groups: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::new();
+    for (index, profile) in config.role_profiles.iter().enumerate() {
+        if is_preset(&profile.id) {
+            continue;
+        }
+        groups
+            .entry(profile.name.trim().to_owned())
+            .or_default()
+            .push(index);
+    }
+    // index -> 该角色所属同名组的保留份下标。
+    let mut drop_to_keeper: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    for indices in groups.into_values() {
+        if indices.len() < 2 {
+            continue;
+        }
+        let mut keeper = indices[0];
+        for &index in &indices[1..] {
+            let candidate = &config.role_profiles[index];
+            let current = &config.role_profiles[keeper];
+            let better = (
+                candidate.active,
+                candidate.config_version,
+                candidate.tavus_face_id.is_some(),
+            ) > (
+                current.active,
+                current.config_version,
+                current.tavus_face_id.is_some(),
+            );
+            if better {
+                keeper = index;
+            }
+        }
+        for &index in &indices {
+            if index != keeper {
+                drop_to_keeper.insert(index, keeper);
+            }
+        }
+    }
+    if drop_to_keeper.is_empty() {
+        return false;
+    }
+    // 下标在重建后会变化，先记下被删 active 角色应指回的保留份 id。
+    let mut redirect_to: Option<String> = None;
+    for (index, profile) in config.role_profiles.iter().enumerate() {
+        if !drop_to_keeper.contains_key(&index) {
+            continue;
+        }
+        if profile.active
+            || config.active_role_profile_id.as_deref() == Some(profile.id.as_str())
+        {
+            redirect_to = Some(config.role_profiles[drop_to_keeper[&index]].id.clone());
+            break;
+        }
+    }
+    let mut next_profiles: Vec<RoleProfileConfig> = Vec::with_capacity(config.role_profiles.len());
+    for (index, profile) in config.role_profiles.drain(..).enumerate() {
+        if !drop_to_keeper.contains_key(&index) {
+            next_profiles.push(profile);
+        }
+    }
+    config.role_profiles = next_profiles;
+    if let Some(kept_id) = redirect_to {
+        for profile in &mut config.role_profiles {
+            profile.active = profile.id == kept_id;
+        }
+        config.active_role_profile_id = Some(kept_id);
+    }
+    true
 }
 
 #[cfg(test)]
@@ -118,6 +196,9 @@ mod tests {
             opening_message: String::new(),
             style_instructions: String::new(),
             scenario: None,
+            tavus_pal_id: None,
+            tavus_face_id: None,
+            tavus_synced_config_version: None,
             active: true,
             config_version: 1,
         });
@@ -145,6 +226,9 @@ mod tests {
             opening_message: String::new(),
             style_instructions: String::new(),
             scenario: None,
+            tavus_pal_id: None,
+            tavus_face_id: None,
+            tavus_synced_config_version: None,
             active: false,
             config_version: 3,
         });
@@ -175,19 +259,35 @@ mod tests {
                 system_prompt: "personal instructions".into(),
                 opening_message: String::new(),
                 style_instructions: String::new(),
+                tavus_face_id: None,
             })
             .unwrap();
         assert!(!is_preset(&saved.id));
+        assert!(saved.active);
+        assert_eq!(saved.system_prompt, "personal instructions");
         assert_eq!(saved.scenario, Some(super::RoleScenario::MeetingAssistant));
         assert!(roles.delete("preset-meeting").is_err());
         let next = store.load().unwrap();
         assert_eq!(next.role_profiles.len(), PRESET_IDS.len() + 1);
         assert_eq!(
-            next.role_profiles.iter().find(|r| r.id == "preset-meeting"),
-            original
-                .role_profiles
-                .iter()
-                .find(|r| r.id == "preset-meeting")
+            next.active_role_profile_id.as_deref(),
+            Some(saved.id.as_str())
         );
+        let preset = next
+            .role_profiles
+            .iter()
+            .find(|role| role.id == "preset-meeting")
+            .unwrap();
+        let before = original
+            .role_profiles
+            .iter()
+            .find(|role| role.id == "preset-meeting")
+            .unwrap();
+        assert_eq!(preset.name, before.name);
+        assert_eq!(preset.system_prompt, before.system_prompt);
+        assert_eq!(preset.opening_message, before.opening_message);
+        assert_eq!(preset.style_instructions, before.style_instructions);
+        assert_eq!(preset.scenario, before.scenario);
+        assert!(!preset.active);
     }
 }

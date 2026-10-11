@@ -20,7 +20,6 @@ export const zhCN = {
         livestream: "虚拟直播",
         materials: "资料",
         records: "记录",
-        services: "服务",
         settings: "设置",
       },
       descriptions: {
@@ -28,8 +27,7 @@ export const zhCN = {
         livestream: "根据产品资料准备讲稿，并通过 OBS 输出可控的虚拟直播。",
         materials: "整理参考资料，为每一次回答提供上下文。",
         records: "回顾对话，留存值得继续跟进的内容。",
-        services: "连接模型与语音服务，配置你的 AI 能力。",
-        settings: "调整工作空间，管理角色与本地数据。",
+        settings: "连接模型与语音服务，管理角色、外观与本地数据。",
       },
       capabilities: {
         workspace: [
@@ -58,13 +56,11 @@ export const zhCN = {
           "记录导出",
           "记录删除（两步确认）",
         ],
-        services: [
+        settings: [
           "模型提供方配置与状态",
           "语音路由配置与测试",
           "密钥管理（Windows Credential Manager）",
           "连接测试与健康检查",
-        ],
-        settings: [
           "系统诊断导出",
           "配置位置选择与显示",
           "会议画面输出模式",
@@ -153,7 +149,7 @@ export const zhCN = {
       PLATFORM_UNSUPPORTED: "当前平台不支持该音频功能，请改用本机麦克风。",
     },
     remoteHints: {
-      downstream_reconnect_exceeded: "语音模型不可用：当前供应商账号可能未开通实时语音模型权限。请在服务页更换语音线路，或到供应商控制台开通后重试。",
+      downstream_reconnect_exceeded: "语音模型不可用：当前供应商账号可能未开通实时语音模型权限。请在「设置 → 语音线路」更换线路，或到供应商控制台开通后重试。",
       "1113": "供应商余额不足：账号没有可用的语音资源包，请充值或更换语音线路。",
     },
     rateLimitHint: "若短时间内多次失败，可能是供应商限流，请等待 1–2 分钟后再说话重试。",
@@ -193,7 +189,7 @@ export const zhCN = {
       meetingAudioUnsupported: "会议音频（当前平台不支持）",
       localMic: "本机麦克风",
       noRouteSelected: "尚未选择语音线路",
-      noConfigLoaded: "尚未读取到会话配置，请到“服务”和“设置”检查线路与角色。",
+      noConfigLoaded: "尚未读取到会话配置，请到“设置”检查语音线路与角色。",
       configToggle: "会话配置",
       fieldsetLegend: "本场会话配置",
       inputSource: "输入来源",
@@ -415,7 +411,6 @@ export const zhCN = {
     cancel: "取消",
   },
   services: {
-    navAria: "服务分类",
     categories: {
       providers: "模型供应商",
       routes: "语音线路",
@@ -423,7 +418,7 @@ export const zhCN = {
       embedding: "Embedding",
     },
     reading: "正在读取本地配置…",
-    refreshedButStale: "操作已完成，但无法重新读取配置。请重新打开服务页核对。",
+    refreshedButStale: "操作已完成，但无法重新读取配置。请重新打开设置页核对。",
     discoveredModels: "已发现 {n} 个模型",
     cannotInspectReferences: "无法检查供应商引用，请重试。",
     ipc: {
@@ -654,7 +649,7 @@ export const zhCN = {
   },
   roles: {
     heading: "角色",
-    description: "用提示词、开场白和表达风格定义你的助手。编辑内置模板后保存会创建个人副本。",
+    description: "用提示词、开场白和表达风格定义你的助手。同名只保留一份：第一次保存内置模板会写成个人角色，之后再保存会写回这一份。",
     reading: "正在读取本地配置…",
     ipc: {
       statusUnavailable: "IPC_UNAVAILABLE：无法读取本地配置",
@@ -667,8 +662,17 @@ export const zhCN = {
     systemPromptLabel: "系统提示",
     openingLabel: "开场白",
     styleLabel: "风格说明",
+    faceLabel: "视频形象",
+    faceEmpty: "不使用视频形象",
+    faceHint: "选一张库存形象后，工作台可以和这个角色进行中文视频通话。",
+    faceNeedsKey: "还没有保存 Tavus 密钥，暂时没有形象可选。",
+    faceOpenTavus: "去「视频通话（Tavus）」保存密钥",
     save: "保存角色",
     saved: "角色已保存",
+    savedAndCurrent: "已保存，并设为当前角色",
+    savedAsCopyActive: "已另存为个人副本，并设为当前角色",
+    savedAsCopy: "已另存为个人副本，设为默认后工作台才会用它",
+    hasFace: "有视频形象",
     listHeading: "已有角色",
     empty: "还没有角色。",
     activeBadge: "当前启用",
@@ -772,7 +776,7 @@ export const zhCN = {
   migrate: {
     banner: {
       title: "需要重新填写密钥",
-      action: "去服务页填写",
+      action: "去「模型供应商」填写",
     },
     legacyImport: {
       heading: "导入旧会话",
@@ -796,6 +800,47 @@ export const zhCN = {
     importConfigTitle: "安全文件选择器将在权限收紧任务接入",
     openConfig: "打开配置文件",
   },
+  tavus: {
+    heading: "视频通话",
+    description: "密钥只保存在本机凭据管理器。列出形象不会开始通话，也不会扣通话时长。",
+    keyLabel: "Tavus API 密钥",
+    save: "保存密钥",
+    clear: "清除密钥",
+    saved: "密钥已保存",
+    cleared: "密钥已清除",
+    configured: "已配置",
+    missing: "未配置",
+    listFaces: "列出形象",
+    faceCount: "可用形象 {n} 个：{names}",
+    call: {
+      start: "开始视频通话",
+      hangup: "挂断",
+      joined: "已接通。请用中文对话。",
+      ended: "通话已结束",
+      voiceBusy: "请先结束语音对练，再开始视频通话。",
+      noRole: "请先选择一个已保存形象的角色。",
+      phaseLabel: "视频通话中",
+      modeLabel: "虚拟形象",
+      statusListening: "聆听中",
+      statusReplicaSpeaking: "对方说话中",
+      statusUserSpeaking: "你正在说话",
+      mic: "麦克风",
+      micFailed: "无法打开麦克风，通话未接通。请检查系统麦克风权限后重试。",
+      previewCaption1: "演示预览，不会连接 Tavus。",
+      previewCaption2: "这是本地预览，没有连接真实形象。",
+      stageAria: "视频通话舞台",
+    },
+    avatar: {
+      toggle: "虚拟形象",
+      toggleTitle: "开启后用 Tavus 视频通话，角色以虚拟形象出镜；关闭时用已配置的语音线路。",
+      hasFace: "有视频形象",
+      newHint: "点击「开始视频通话」，和角色的虚拟形象对话。",
+      needsKey: "开启虚拟形象需要先保存 Tavus 密钥。",
+      openKey: "去保存密钥",
+      needsFace: "当前角色还没有视频形象。",
+      openRoles: "去选择形象",
+    },
+  },
   settings: {
     page: {
       navAria: "设置分类",
@@ -805,6 +850,7 @@ export const zhCN = {
         updater: "应用更新",
         migration: "数据迁移",
         diagnostics: "诊断",
+        tavus: "视频通话（Tavus）",
       },
     },
     appearance: {

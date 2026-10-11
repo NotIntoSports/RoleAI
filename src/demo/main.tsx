@@ -16,6 +16,8 @@ import { DemoOverlay } from "./overlay";
 
 mockIPC(handleDemoInvoke, { shouldMockEvents: true });
 installDemoResetHook();
+// 演示没有 Tavus 密钥。工作台据此允许「开始视频通话」走 preview: 舞台，而不是去设置里存密钥。
+document.documentElement.dataset.roleaiDemo = "preview";
 
 const root = document.getElementById("root");
 if (!root) {

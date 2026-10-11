@@ -42,7 +42,7 @@ describe("PreflightIssues", () => {
       "/settings?category=roles",
     );
     expect(screen.getByRole("link", { name: "配置语音线路" }).getAttribute("href")).toBe(
-      "/services?category=routes",
+      "/settings?category=routes",
     );
   });
 
