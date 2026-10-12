@@ -825,9 +825,10 @@ export const en: Dictionary = {
       statusUserSpeaking: "You're speaking",
       mic: "Microphone",
       micFailed: "Could not open the microphone, so the call was not connected. Check the system microphone permission and try again.",
-      previewCaption1: "Demo preview — Tavus is not contacted.",
-      previewCaption2: "This is a local preview; no real avatar is connected.",
+      previewCaption1: "I'm here. Just talk — I'm looking at you and listening.",
+      previewCaption2: "I can ask the next question, or summarize what you just said.",
       stageAria: "Video call stage",
+      portraitAlt: "Digital human",
     },
     avatar: {
       toggle: "Avatar",

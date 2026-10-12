@@ -27,6 +27,8 @@ type TavusCallContextValue = {
   speakingStatus: TavusSpeakingStatus;
   micEnabled: boolean;
   setMicEnabled: (enabled: boolean) => void;
+  /** 演示舞台没有远端视频时，用虚拟形象静帧出镜。 */
+  portraitActive: boolean;
   startCall: (roleId: string) => Promise<TavusCallStartResult>;
   hangup: (announce?: boolean) => Promise<void>;
   videoRef: RefObject<HTMLVideoElement | null>;
@@ -44,6 +46,7 @@ const idleContext: TavusCallContextValue = {
   speakingStatus: "listening",
   micEnabled: false,
   setMicEnabled: () => undefined,
+  portraitActive: false,
   startCall: async () => ({ ok: false, message: "" }),
   hangup: async () => undefined,
   videoRef: { current: null },
@@ -62,6 +65,7 @@ export function TavusCallProvider({ children }: { children: ReactNode }) {
   const [captions, setCaptions] = useState<TavusCaption[]>([]);
   const [speakingStatus, setSpeakingStatus] = useState<TavusSpeakingStatus>("listening");
   const [micEnabled, setMicEnabledState] = useState(false);
+  const [portraitActive, setPortraitActive] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const roomRef = useRef<DailyRoom | null>(null);
@@ -88,6 +92,7 @@ export function TavusCallProvider({ children }: { children: ReactNode }) {
     roomRef.current = null;
     conversationRef.current = null;
     setVideoActive(false);
+    setPortraitActive(false);
     setCaptions([]);
     setSpeakingStatus("listening");
     setMicEnabledState(false);
@@ -135,13 +140,14 @@ export function TavusCallProvider({ children }: { children: ReactNode }) {
       }
       conversationRef.current = result.data.conversationId;
       if (result.data.conversationUrl.startsWith("preview:")) {
-        // 演示预览：不连接 Daily，舞台显示深色占位和固定演示字幕。
+        // 在线演示不进 Daily 房间，用虚拟形象静帧和一段对话字幕展示同一套数字人舞台。
         setCaptions([
           { text: t("tavus.call.previewCaption1"), role: "replica" },
           { text: t("tavus.call.previewCaption2"), role: "replica" },
         ]);
-        setSpeakingStatus("listening");
+        setSpeakingStatus("replica-speaking");
         setMicEnabledState(true);
+        setPortraitActive(true);
         setVideoActive(true);
         return { ok: true };
       }
@@ -164,6 +170,7 @@ export function TavusCallProvider({ children }: { children: ReactNode }) {
       setCaptions([]);
       setSpeakingStatus("listening");
       setMicEnabledState(true);
+      setPortraitActive(false);
       setVideoActive(true);
       setCallMessage(t("tavus.call.joined"));
       return { ok: true };
@@ -185,12 +192,13 @@ export function TavusCallProvider({ children }: { children: ReactNode }) {
       speakingStatus,
       micEnabled,
       setMicEnabled,
+      portraitActive,
       startCall,
       hangup,
       videoRef,
       audioRef,
     }),
-    [voiceActive, videoActive, callBusy, callMessage, captions, speakingStatus, micEnabled, setMicEnabled, startCall, hangup],
+    [voiceActive, videoActive, callBusy, callMessage, captions, speakingStatus, micEnabled, setMicEnabled, portraitActive, startCall, hangup],
   );
   return <CallContext.Provider value={value}>{children}</CallContext.Provider>;
 }

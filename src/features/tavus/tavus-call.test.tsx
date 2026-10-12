@@ -141,9 +141,10 @@ describe("TavusCall", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "发起通话" }));
-    expect(await screen.findByText("演示预览，不会连接 Tavus。")).toBeTruthy();
-    expect(screen.getByText("这是本地预览，没有连接真实形象。")).toBeTruthy();
-    expect(screen.getByText("聆听中")).toBeTruthy();
+    expect(await screen.findByText("你好，我在。你直接说就行，我看着你听。")).toBeTruthy();
+    expect(screen.getByText("需要的话，我可以接着问，也可以先把刚才的话总结给你。")).toBeTruthy();
+    expect(screen.getByRole("img", { name: "数字人" })).toBeTruthy();
+    expect(screen.getByText("对方说话中")).toBeTruthy();
     expect(joinDailyRoom).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "挂断" })).toBeTruthy();
 

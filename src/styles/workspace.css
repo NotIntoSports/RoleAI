@@ -25,7 +25,8 @@
   display: contents;
 }
 
-.tavus-call > video {
+.tavus-call > video,
+.tavus-call-portrait {
   position: absolute;
   inset: 0;
   width: 100%;

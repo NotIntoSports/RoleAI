@@ -2,6 +2,7 @@ import { Mic, MicOff, PhoneOff } from "lucide-react";
 
 import { t, useT } from "../../i18n";
 import { useTavusCall } from "./call-lock";
+import portraitUrl from "./digital-human-preview.jpg";
 
 function statusLabel(status: "listening" | "replica-speaking" | "user-speaking"): string {
   if (status === "replica-speaking") return t("tavus.call.statusReplicaSpeaking");
@@ -21,6 +22,7 @@ export function TavusCall() {
     speakingStatus,
     micEnabled,
     setMicEnabled,
+    portraitActive,
     hangup,
     videoRef,
     audioRef,
@@ -31,7 +33,10 @@ export function TavusCall() {
       aria-label={t("tavus.call.stageAria")}
       aria-hidden={!videoActive}
     >
-      <video ref={videoRef} autoPlay playsInline muted hidden={!videoActive} />
+      {portraitActive && (
+        <img className="tavus-call-portrait" src={portraitUrl} alt={t("tavus.call.portraitAlt")} />
+      )}
+      <video ref={videoRef} autoPlay playsInline muted hidden={!videoActive || portraitActive} />
       <audio ref={audioRef} autoPlay />
       {videoActive && (
         <div className="tavus-call-overlay">

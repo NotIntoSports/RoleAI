@@ -826,9 +826,10 @@ export const zhCN = {
       statusUserSpeaking: "你正在说话",
       mic: "麦克风",
       micFailed: "无法打开麦克风，通话未接通。请检查系统麦克风权限后重试。",
-      previewCaption1: "演示预览，不会连接 Tavus。",
-      previewCaption2: "这是本地预览，没有连接真实形象。",
+      previewCaption1: "你好，我在。你直接说就行，我看着你听。",
+      previewCaption2: "需要的话，我可以接着问，也可以先把刚才的话总结给你。",
       stageAria: "视频通话舞台",
+      portraitAlt: "数字人",
     },
     avatar: {
       toggle: "虚拟形象",

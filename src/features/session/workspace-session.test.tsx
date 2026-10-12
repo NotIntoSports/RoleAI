@@ -261,8 +261,8 @@ describe("WorkspaceSession", () => {
       expect(start).toBeEnabled();
       expect(screen.queryByRole("link", { name: "去保存密钥" })).toBeNull();
       fireEvent.click(start);
-      expect(await screen.findByText("演示预览，不会连接 Tavus。")).toBeTruthy();
-      expect(screen.getByText("这是本地预览，没有连接真实形象。")).toBeTruthy();
+      expect(await screen.findByText("你好，我在。你直接说就行，我看着你听。")).toBeTruthy();
+      expect(screen.getByRole("img", { name: "数字人" })).toBeTruthy();
       expect(screen.getByText("视频通话中")).toBeTruthy();
     });
 

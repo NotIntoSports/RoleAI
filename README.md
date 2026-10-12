@@ -14,7 +14,7 @@
   <img src="src-tauri/icons/128x128@2x.png" width="96" alt="RoleAI 图标" />
 </p>
 
-<p align="center"><strong>本地优先的 Windows 实时语音 AI 角色助手。Rust + Tauri 全双工语音管线，支持面试官角色语音对练、会议助手与直播讲解。</strong></p>
+<p align="center"><strong>本地优先的 Windows 实时互动数字人。角色以虚拟形象出镜，你说话，对方看着你回答。也可做语音对练、会议助手和直播讲解。</strong></p>
 
 <p align="center">
   <a href="https://github.com/NotIntoSports/RoleAI/actions/workflows/ci.yml"><img src="https://github.com/NotIntoSports/RoleAI/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
@@ -33,7 +33,7 @@
 
 实时语音是最自然的表达练习方式：说得完不完整、有没有答非所问，只有真的开口才知道。RoleAI 把语音识别、大模型和语音合成跑成一条全双工管线，让 AI 以你设定的角色（面试官、HR、表达教练、会议助手、直播讲解员）和你实时对话，说完就给反馈。所有角色、资料和会话记录都保存在本机，模型服务由你自己配置和付费，没有账号，也不上传数据到我们的服务器。
 
-它适合用来做面试官角色语音对练、会议发言辅助、直播产品讲解，也可以当作一个可定制角色的本地语音工作台。配好 Tavus 后，工作台可以和角色的虚拟形象做中文视频通话：麦克风交给通话房间，对方画面铺在会话卡片里。角色名全局唯一，保存内置角色不会再叠出多个同名副本。
+它适合用来做实时互动的数字人：配好形象后，工作台里的角色会出镜，你开口，对方看着你听、接着问或总结。同一套角色也能做语音对练、会议发言辅助和直播讲解。角色名全局唯一，保存内置角色不会再叠出多个同名副本。
 
 ## 功能特性
 
@@ -49,9 +49,9 @@
 | --- | --- |
 | ![工作台](.github/assets/screenshots/workspace-dark.png) | ![资料库](.github/assets/screenshots/materials.png) |
 
-### 视频通话
+### 实时互动数字人
 
-打开输入栏的「虚拟形象」，点「开始视频通话」。角色以选定形象出镜，你的麦克风会送进通话，对方的画面占满会话卡片，底部是字幕和挂断。在线演示不连接 Tavus，只展示同一套预览舞台。
+打开输入栏的「虚拟形象」，点「开始视频通话」。数字人以选定形象出镜，你的声音送进通话，对方看着你回答。画面占满会话卡片，底部是字幕、说话状态和挂断。在线演示用同一套舞台和虚拟形象展示这段互动；接通真人实时通话用 Windows 桌面版。
 
 ![视频通话预览舞台](.github/assets/screenshots/video-call.png)
 
