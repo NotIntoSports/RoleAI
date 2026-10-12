@@ -35,16 +35,16 @@ describe("demo backend: config/roles/providers/voice", () => {
   it("seeds 8 preset-style roles and a ready active route, never leaking key material", async () => {
     const config = expectOk(await invoke<PublicConfig>("config_get_public"));
     expect(config.roleProfiles.map((role) => role.id)).toEqual([
+      "preset-meeting",
       "preset-strict-interviewer",
       "preset-expression-coach",
-      "preset-meeting",
       "preset-presenter",
       "preset-debate-partner",
       "preset-english-partner",
       "preset-cs-drill",
       "preset-mock-candidate",
     ]);
-    expect(config.activeRoleProfileId).toBe("preset-strict-interviewer");
+    expect(config.activeRoleProfileId).toBe("preset-meeting");
     const route = config.speech.voiceRoutes[0];
     expect(route.ready).toBe(true);
     expect(config.speech.activeVoiceRouteId).toBe(route.id);

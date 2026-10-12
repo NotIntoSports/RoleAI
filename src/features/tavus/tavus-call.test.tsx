@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import * as commands from "../../api/commands";
 import { TavusCallProvider, useTavusCall, type TavusCallStartResult } from "./call-lock";
-import { PREVIEW_CAPTION2_AT, PREVIEW_LISTEN_AT } from "./preview-clip";
+import { PREVIEW_ASK_AT, PREVIEW_LISTEN_AT, PREVIEW_READY_AT, PREVIEW_SUMMARY_AT } from "./preview-clip";
 import { TavusCall } from "./tavus-call";
 
 const leave = vi.fn(async () => undefined);
@@ -142,23 +142,39 @@ describe("TavusCall", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "发起通话" }));
-    expect(await screen.findByText("你好，我在。你直接说就行，我看着你听。")).toBeTruthy();
-    expect(screen.queryByText("需要的话，我可以接着问，也可以先把刚才的话总结给你。")).toBeNull();
+    expect(await screen.findByText("聆听中")).toBeTruthy();
+    expect(screen.queryByText("我在。需要纪要的时候，点我的名字。")).toBeNull();
     const video = screen.getByLabelText("数字人");
     expect(video.tagName).toBe("VIDEO");
     expect(video).toHaveProperty("loop", true);
     expect((video as HTMLVideoElement).src).toContain("digital-human-preview");
     expect(screen.queryByRole("img", { name: "数字人" })).toBeNull();
-    expect(screen.getByText("对方说话中")).toBeTruthy();
     expect(joinDailyRoom).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "挂断" })).toBeTruthy();
 
     act(() => {
-      (video as HTMLVideoElement).currentTime = PREVIEW_CAPTION2_AT + 0.05;
+      (video as HTMLVideoElement).currentTime = PREVIEW_READY_AT + 0.05;
       video.dispatchEvent(new Event("timeupdate"));
     });
-    expect(screen.getByText("需要的话，我可以接着问，也可以先把刚才的话总结给你。")).toBeTruthy();
-    expect(screen.queryByText("你好，我在。你直接说就行，我看着你听。")).toBeNull();
+    const ready = screen.getByText("我在。需要纪要的时候，点我的名字。");
+    expect(ready.getAttribute("data-role")).toBe("replica");
+    expect(screen.getByText("对方说话中")).toBeTruthy();
+
+    act(() => {
+      (video as HTMLVideoElement).currentTime = PREVIEW_ASK_AT + 0.05;
+      video.dispatchEvent(new Event("timeupdate"));
+    });
+    const ask = screen.getByText("会议助手，把今天的会收成三句话。");
+    expect(ask.getAttribute("data-role")).toBe("user");
+    expect(screen.queryByText("我在。需要纪要的时候，点我的名字。")).toBeNull();
+    expect(screen.getByText("你正在说话")).toBeTruthy();
+
+    act(() => {
+      (video as HTMLVideoElement).currentTime = PREVIEW_SUMMARY_AT + 0.05;
+      video.dispatchEvent(new Event("timeupdate"));
+    });
+    const summary = screen.getByText(/三句话。一，v2\.3 按期上线/);
+    expect(summary.getAttribute("data-role")).toBe("replica");
     expect(screen.getByText("对方说话中")).toBeTruthy();
 
     act(() => {
@@ -166,6 +182,7 @@ describe("TavusCall", () => {
       video.dispatchEvent(new Event("timeupdate"));
     });
     expect(screen.getByText("聆听中")).toBeTruthy();
+    expect(screen.queryByText(/三句话。一，v2\.3 按期上线/)).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "挂断" }));
     await waitFor(() => expect(screen.queryByRole("button", { name: "挂断" })).toBeNull());

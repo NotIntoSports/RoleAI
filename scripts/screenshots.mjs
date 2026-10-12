@@ -4,7 +4,7 @@
 // `node scripts/screenshots.mjs --lang en`（lane-H H12 / B21）：界面切到 English，
 // 截图输出到 .github/assets/screenshots/en/；默认（无参数）中文行为保持不变。
 import { spawn, execSync } from "node:child_process";
-import { mkdirSync, statSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "@playwright/test";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const previewTiming = JSON.parse(readFileSync(path.join(repoRoot, "src", "features", "tavus", "preview-timing.json"), "utf8"));
 const OUT_DIR = path.join(repoRoot, ".github", "assets", "screenshots");
 const WEB_OUT_DIR = path.join(repoRoot, "website", "assets", "screenshots");
 const BASE = process.env.DEMO_URL ?? "http://127.0.0.1:1421/RoleAI/demo/";
@@ -63,7 +64,7 @@ const COPY = {
     stageLatencies: "分阶段延迟",
     avatar: "虚拟形象",
     startVideo: "开始视频通话",
-    previewCaption: "你好，我在",
+    previewCaption: "我在",
     hangup: "挂断",
     diagnostics: "诊断",
   },
@@ -188,7 +189,7 @@ async function captureAll(outDir, deviceScaleFactor) {
       await page.getByRole("switch", { name: copy.avatar }).click();
       await page.getByRole("button", { name: copy.startVideo }).click();
       await page.getByText(copy.previewCaption).waitFor({ timeout: 15_000 });
-      await page.locator(".tavus-call video").evaluate(async (node) => {
+      await page.locator(".tavus-call video").evaluate(async (node, frameAt) => {
         const video = node;
         if (video.readyState < 2) {
           await new Promise((resolve) => video.addEventListener("loadeddata", () => resolve(undefined), { once: true }));
@@ -200,9 +201,9 @@ async function captureAll(outDir, deviceScaleFactor) {
             clearTimeout(timer);
             resolve(undefined);
           }, { once: true });
-          video.currentTime = 0.32;
+          video.currentTime = frameAt;
         });
-      });
+      }, previewTiming.speakingFrameAt);
       await page.screenshot({ path: shotPath("video-call.png") });
       reportSize("video-call.png");
       await context.close();
@@ -280,7 +281,7 @@ async function captureAll(outDir, deviceScaleFactor) {
     await page.getByRole("switch", { name: copy.avatar }).click();
     await page.getByRole("button", { name: copy.startVideo }).click();
     await page.getByText(copy.previewCaption).waitFor({ timeout: 15_000 });
-    await page.locator(".tavus-call video").evaluate(async (node) => {
+    await page.locator(".tavus-call video").evaluate(async (node, frameAt) => {
       const video = node;
       if (video.readyState < 2) {
         await new Promise((resolve) => video.addEventListener("loadeddata", () => resolve(undefined), { once: true }));
@@ -292,9 +293,9 @@ async function captureAll(outDir, deviceScaleFactor) {
           clearTimeout(timer);
           resolve(undefined);
         }, { once: true });
-        video.currentTime = 0.32;
+        video.currentTime = frameAt;
       });
-    });
+    }, previewTiming.speakingFrameAt);
     await page.screenshot({ path: shotPath("video-call.png") });
     reportSize("video-call.png");
     await page.getByRole("button", { name: copy.hangup }).click();

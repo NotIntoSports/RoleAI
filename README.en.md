@@ -17,7 +17,7 @@
   <img src="src-tauri/icons/128x128@2x.png" width="96" alt="RoleAI icon" />
 </p>
 
-<p align="center"><strong>A local-first, real-time voice AI role assistant for Windows. A Rust + Tauri full-duplex voice pipeline built for interviewer role-play practice, meeting assistance, and live-stream presenting.</strong></p>
+<p align="center"><strong>A local-first AI digital human for Windows. The role appears on camera and talks with you in real time. The same roles also cover voice practice, meeting help, and live-stream narration.</strong></p>
 
 <p align="center">
   <a href="https://github.com/NotIntoSports/RoleAI/actions/workflows/ci.yml"><img src="https://github.com/NotIntoSports/RoleAI/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
@@ -28,15 +28,17 @@
   <img src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=61DAFB" alt="React 19" />
 </p>
 
-![RoleAI workspace, dark theme](.github/assets/screenshots/workspace-dark.png)
+## Real-time digital human
+
+RoleAI is an AI digital-human project. Turn on Avatar and press Start video call: the role appears with the face you picked, you talk, and they look at you while answering. The picture fills the conversation card, with captions, speaking state, and hang-up along the bottom. The online demo plays a conversation written ahead of time, so the digital human speaks on stage and the captions follow. A live call runs in the Windows app.
+
+![Real-time digital human speaking on camera](.github/assets/screenshots/video-call.png)
 
 > Screenshots are generated automatically from the built-in demo mode: scripted conversations with fictional data, no AI services connected.
 
 ## Why this project
 
-Real-time voice is the most natural way to practice speaking: whether you finish your thought, go off topic, or ramble — you only find out by actually talking. RoleAI wires speech recognition, an LLM, and speech synthesis into one full-duplex pipeline, so an AI in the role you define (interviewer, HR, speaking coach, meeting assistant, product presenter) talks with you live and responds the moment you finish. Roles, documents, and session records all stay on your machine; model services are configured and paid for by you. No accounts, no data sent to our servers.
-
-Use it as a real-time interactive digital human: once a face is configured, the role appears on camera, listens while you talk, and can ask the next question or summarize. The same roles also cover voice practice, meeting help, and live-stream narration. Role names stay unique, so saving a built-in role no longer creates another copy with the same name.
+Talking face to face shows whether the other side is listening and whether the answer actually follows. RoleAI joins a virtual face with a full-duplex voice pipeline so the digital human can interact in real time. The same roles also cover voice practice, meeting help, and live-stream narration. Roles, documents, and session records stay on your machine; model services are configured and paid for by you. No accounts, no data sent to our servers. Role names stay unique, so saving a built-in role no longer creates another copy with the same name.
 
 ## Features
 
@@ -49,12 +51,6 @@ Five interview-related role presets ship in addition — Interviewer, HR, Strict
 | Workspace | Knowledge base |
 | --- | --- |
 | ![Workspace](.github/assets/screenshots/workspace-dark.png) | ![Knowledge base](.github/assets/screenshots/materials.png) |
-
-### Real-time digital human
-
-Turn on Avatar and press Start video call. The digital human appears with the face you picked, your voice goes into the call, and they look at you while answering. The picture fills the conversation card, with captions, speaking state, and hang-up along the bottom. In the online demo the digital human speaks on that stage and the captions follow; a live call runs in the Windows app.
-
-![Video call preview stage](.github/assets/screenshots/video-call.png)
 
 ### Meeting assistant
 

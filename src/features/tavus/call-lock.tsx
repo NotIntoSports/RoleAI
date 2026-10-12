@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { flushSync } from "react-dom";
 
 import * as api from "../../api/commands";
 import { errorNoticeText as errorText } from "../../components/error-notice";
@@ -130,12 +131,11 @@ export function TavusCallProvider({ children }: { children: ReactNode }) {
     let lastKey = "";
     const sync = () => {
       const cue = previewCue(video.currentTime || 0);
-      const key = `${cue.caption}:${cue.speaking}`;
+      const key = `${cue.caption ?? ""}:${cue.status}`;
       if (key === lastKey) return;
       lastKey = key;
-      const text = t(cue.caption === "first" ? "tavus.call.previewCaption1" : "tavus.call.previewCaption2");
-      setCaptions([{ text, role: "replica" }]);
-      setSpeakingStatus(cue.speaking ? "replica-speaking" : "listening");
+      setCaptions(cue.caption ? [{ text: t(cue.caption), role: cue.role }] : []);
+      setSpeakingStatus(cue.status);
     };
     video.addEventListener("timeupdate", sync);
     video.addEventListener("seeked", sync);
@@ -160,12 +160,19 @@ export function TavusCallProvider({ children }: { children: ReactNode }) {
     }
     setCallBusy(true);
     const previewPage = document.documentElement.dataset.roleaiDemo === "preview";
-    // 先于网络请求播放，才能落在这次点击的用户激活窗口里。
-    if (previewPage) attachPreviewClip(video);
+    // 舞台先显示出来再播放。视频还带着 hidden 时浏览器不会画出画面，舞台会一直是黑的。
+    // flushSync 留在这次点击里，有声播放才不会被浏览器拦住。
+    if (previewPage) {
+      flushSync(() => setVideoActive(true));
+      attachPreviewClip(video);
+    }
     try {
       const result = await api.startTavusConversation(roleId);
       if (!result.ok) {
-        if (previewPage) detachPreviewClip(video);
+        if (previewPage) {
+          detachPreviewClip(video);
+          setVideoActive(false);
+        }
         return { ok: false, message: errorText(result.error) };
       }
       conversationRef.current = result.data.conversationId;
@@ -186,6 +193,7 @@ export function TavusCallProvider({ children }: { children: ReactNode }) {
       } catch (error) {
         // 麦克风打不开等原因：joinDailyRoom 已释放房间，这里结束已创建的 Tavus 会话，
         // 并把原因透传给调用方，状态保持「未接通」。
+        if (previewPage) setVideoActive(false);
         const conversationId = conversationRef.current;
         conversationRef.current = null;
         if (conversationId) void api.endTavusConversation(conversationId);
@@ -201,7 +209,10 @@ export function TavusCallProvider({ children }: { children: ReactNode }) {
       setCallMessage(t("tavus.call.joined"));
       return { ok: true };
     } catch {
-      if (previewPage) detachPreviewClip(video);
+      if (previewPage) {
+        detachPreviewClip(video);
+        setVideoActive(false);
+      }
       return { ok: false, message: t("roles.ipc.operateFailed") };
     } finally {
       setCallBusy(false);

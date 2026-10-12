@@ -18,8 +18,8 @@ import { demoMaterials, type DemoMaterialDoc } from "./materials-data";
 import { demoSessions, seedTurnLatency } from "./records-data";
 import { parseState, stringifyState } from "./util";
 
-// v2：新增 4 个演示专属角色；换版本号让已持久化旧种子的访客也能拿到新角色。
-const STORAGE_KEY = "roleai.demo.backend.v2";
+// v3：会议助手排到第一并作为默认角色。换版本号让已存过旧种子的访客重新拿到顺序。
+const STORAGE_KEY = "roleai.demo.backend.v3";
 
 export interface DemoState {
   configVersion: number;
@@ -57,6 +57,15 @@ interface RoleSeed {
 const ROLE_SEEDS: Record<Language, RoleSeed[]> = {
   "zh-CN": [
     {
+      id: "preset-meeting",
+      name: "会议助手",
+      systemPrompt:
+        "你是会议助手。根据会议上下文和指定资料回答点名提问，区分事实、推测和待确认事项。保持简洁，不主动打断讨论。",
+      openingMessage: "",
+      styleInstructions: "使用自然、简洁的中文，每次只处理当前问题。",
+      scenario: "meetingAssistant",
+    },
+    {
       id: "preset-strict-interviewer",
       name: "严苛面试官",
       systemPrompt:
@@ -71,15 +80,6 @@ const ROLE_SEEDS: Record<Language, RoleSeed[]> = {
         "你是表达教练。用户给出一段回答或陈述后，先指出最影响效果的少量问题（结构、重点、冗余、口头禅），再给出一条更清晰的改写示范，并说明改动理由。只依据用户提供的真实内容改写，不虚构经历或事实。每次聚焦一个改进点，避免一次性堆砌建议。",
       openingMessage: "",
       styleInstructions: "使用自然、简洁的中文，每次只处理当前问题。",
-    },
-    {
-      id: "preset-meeting",
-      name: "会议助手",
-      systemPrompt:
-        "你是会议助手。根据会议上下文和指定资料回答点名提问，区分事实、推测和待确认事项。保持简洁，不主动打断讨论。",
-      openingMessage: "",
-      styleInstructions: "使用自然、简洁的中文，每次只处理当前问题。",
-      scenario: "meetingAssistant",
     },
     {
       id: "preset-presenter",
@@ -126,6 +126,15 @@ const ROLE_SEEDS: Record<Language, RoleSeed[]> = {
   ],
   en: [
     {
+      id: "preset-meeting",
+      name: "Meeting assistant",
+      systemPrompt:
+        "You are a meeting assistant. Answer questions addressed to you based on meeting context and the designated materials, separating facts, speculation, and items to confirm. Stay concise; never interrupt the discussion on your own.",
+      openingMessage: "",
+      styleInstructions: "Use natural, concise English; handle only the current question each turn.",
+      scenario: "meetingAssistant",
+    },
+    {
       id: "preset-strict-interviewer",
       name: "Strict interviewer",
       systemPrompt:
@@ -140,15 +149,6 @@ const ROLE_SEEDS: Record<Language, RoleSeed[]> = {
         "You are an expression coach. After the user gives an answer or statement, point out the few issues that hurt it most (structure, emphasis, redundancy, filler words), then give one clearer rewrite with the reasoning. Rewrite only from the user's real content; never invent experience or facts. Focus on one improvement per turn instead of piling on advice.",
       openingMessage: "",
       styleInstructions: "Use natural, concise English; handle only the current question each turn.",
-    },
-    {
-      id: "preset-meeting",
-      name: "Meeting assistant",
-      systemPrompt:
-        "You are a meeting assistant. Answer questions addressed to you based on meeting context and the designated materials, separating facts, speculation, and items to confirm. Stay concise; never interrupt the discussion on your own.",
-      openingMessage: "",
-      styleInstructions: "Use natural, concise English; handle only the current question each turn.",
-      scenario: "meetingAssistant",
     },
     {
       id: "preset-presenter",
@@ -315,7 +315,7 @@ function seedState(): DemoState {
     embeddingConfigs: [embedding],
     activeEmbeddingConfigId: embedding.id,
     roleProfiles: seedRoles(),
-    activeRoleProfileId: "preset-strict-interviewer",
+    activeRoleProfileId: "preset-meeting",
     voiceReferences: [voiceReference],
     obsPasswordConfigured: false,
     ...seedLibrary(),

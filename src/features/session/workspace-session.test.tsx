@@ -261,7 +261,7 @@ describe("WorkspaceSession", () => {
       expect(start).toBeEnabled();
       expect(screen.queryByRole("link", { name: "去保存密钥" })).toBeNull();
       fireEvent.click(start);
-      expect(await screen.findByText("你好，我在。你直接说就行，我看着你听。")).toBeTruthy();
+      expect(await screen.findByText("聆听中")).toBeTruthy();
       const video = screen.getByLabelText("数字人");
       expect(video.tagName).toBe("VIDEO");
       expect((video as HTMLVideoElement).src).toContain("digital-human-preview");
