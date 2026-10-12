@@ -272,7 +272,10 @@ fn personal_role_priority(profile: &RoleProfileConfig) -> (bool, u32, bool) {
     )
 }
 
-fn select_same_name_personal_role(config: &crate::config::AppConfigV1, name: &str) -> Option<String> {
+fn select_same_name_personal_role(
+    config: &crate::config::AppConfigV1,
+    name: &str,
+) -> Option<String> {
     let mut best: Option<&RoleProfileConfig> = None;
     for profile in &config.role_profiles {
         if crate::config::presets::is_preset(&profile.id) || profile.name.trim() != name {

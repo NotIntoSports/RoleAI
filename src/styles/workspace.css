@@ -8,7 +8,8 @@
 }
 
 /* 视频通话大舞台：通话中占满会话卡片剩余高度；空闲时 display:contents 不占布局。
-   深色渐变底同时充当预览模式（没有真实视频流）时的人像占位。 */
+   深色渐变底同时充当预览模式（没有真实视频流）时的人像占位。
+   舞台与外层会话卡片同为 16px 圆角，保持同一套大表面语言。 */
 .tavus-call {
   position: relative;
   display: flex;
@@ -16,7 +17,7 @@
   flex-direction: column;
   min-height: 420px;
   overflow: hidden;
-  border-radius: 14px;
+  border-radius: var(--radius-xl);
   background: radial-gradient(120% 90% at 50% 18%, #2b2b34 0%, #17171d 55%, #0d0d11 100%);
 }
 
@@ -434,7 +435,7 @@
   height: 28px;
   border-radius: 50%;
   color: #fff;
-  background: linear-gradient(135deg, #4f7cff, #8f5bff);
+  background: linear-gradient(135deg, #2c6bef, #3fa7d6);
 }
 
 .bubble-time {
@@ -515,13 +516,15 @@
   50% { box-shadow: 0 0 0 4px var(--accent-strong-soft); }
 }
 
+/* 转写列与输入栏共用 800px 内容中轴：840 = 800 + 两侧 20px 卡片内距。 */
 .session-footer {
   display: flex;
   flex-direction: column;
   gap: 10px;
   flex-shrink: 0;
-  width: min(100%, 800px);
-  margin: 0 auto 8px;
+  width: min(100%, 840px);
+  margin: 0 auto 16px;
+  padding: 0 20px;
 }
 
 .session-footer-status {
@@ -581,9 +584,9 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 12px 12px 10px;
+  padding: 12px;
   border: 1px solid var(--border);
-  border-radius: 20px;
+  border-radius: var(--radius-xl);
   background: var(--surface);
   box-shadow: 0 6px 28px rgb(0 0 0 / 5%);
 }
@@ -651,7 +654,7 @@
   overflow-y: auto;
   padding: 12px 14px 14px;
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: var(--surface);
   box-shadow: 0 10px 36px rgb(0 0 0 / 12%);
 }
@@ -788,7 +791,7 @@
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #7dd3fc, #a78bfa);
+  background: linear-gradient(135deg, #7cc7e8, #3f8fe0);
 }
 
 .composer-role-menu {
@@ -914,7 +917,7 @@
   gap: 8px;
   padding: 6px;
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: var(--surface);
   box-shadow: 0 6px 28px rgb(0 0 0 / 10%);
 }
@@ -1153,6 +1156,14 @@
     padding: 12px;
   }
 
+  .workspace-page .session-toolbar {
+    padding: 14px 20px 12px;
+  }
+
+  .workspace-page .session-conversation {
+    padding: 16px 20px;
+  }
+
   .session-toolbar {
     gap: 9px;
     padding: 12px 16px;
@@ -1183,14 +1194,15 @@
   }
 }
 
-/* Conversation shell: controls stay reachable, the transcript owns its scroll. */
-.workspace-page { gap: 24px; }
-.workspace-page > .workspace-session { border: 0; border-radius: 0; overflow-x: hidden; overflow-y: auto; }
-.workspace-page .session-toolbar { padding: 0 0 16px; flex-shrink: 0; gap: 12px; }
+/* Conversation shell: controls stay reachable, the transcript owns its scroll.
+   会话区是一张与设置面板同语言的 1px 边框卡片：转写列与输入栏共用同一条 800px 中轴。 */
+.workspace-page { gap: var(--space-6); }
+.workspace-page > .workspace-session { border: 1px solid var(--border); border-radius: var(--radius-xl); overflow-x: hidden; overflow-y: auto; }
+.workspace-page .session-toolbar { padding: 20px 20px 16px; flex-shrink: 0; gap: 12px; }
 .session-toolbar-meta { gap: 12px; }
 .session-config-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.session-config-summary { font-size: 12px; color: var(--text-muted); overflow-wrap: anywhere; }
-.session-configuration { max-height: 28vh; overflow-y: auto; padding: 16px; background: var(--surface-muted); border-radius: 12px; }
+.session-config-summary { font-size: var(--text-sm); color: var(--text-muted); overflow-wrap: anywhere; }
+.session-configuration { max-height: 28vh; overflow-y: auto; padding: 16px; background: var(--surface-muted); border-radius: var(--radius-lg); }
 .session-configuration[hidden] { display: none; }
 .session-configuration .session-selection { gap: 16px; }
 .session-configuration .session-transport { margin-top: 16px; width: fit-content; background: var(--surface); }
@@ -1200,18 +1212,19 @@
 .workspace-page .session-controls { gap: 8px; }
 .workspace-page .session-controls button:not(.button-primary) { background: transparent; border-color: transparent; }
 .workspace-page .session-controls button:not(.button-primary):hover:enabled { background: var(--surface-hover); }
-.workspace-page .session-conversation { min-height: 80px; padding: 24px 8px; }
-.session-bubble p { font-size: 15px; line-height: 1.85; }
+.workspace-page .session-conversation { min-height: 80px; padding: 24px 20px; }
+.session-bubble p { font-size: var(--text-md); line-height: 1.9; }
 .session-bubble-user { padding: 16px 20px; border-radius: 16px 16px 4px 16px; }
 .session-welcome { gap: 16px; max-width: 440px; padding: 24px 16px; }
 .session-welcome-icon { border: 0; width: 56px; height: 56px; }
-.session-welcome-eyebrow { font-size: 11px; color: var(--text-muted); letter-spacing: 0.12em; }
-.session-welcome h3 { font-size: 26px; letter-spacing: -0.04em; font-weight: 600; }
+.session-welcome-eyebrow { font-size: var(--text-xs); color: var(--text-muted); letter-spacing: 0.12em; }
+.session-welcome h3 { font-size: var(--text-display); letter-spacing: -0.035em; font-weight: 600; }
 .workspace-page .session-tools { flex-shrink: 0; border: 0; }
 .workspace-page .session-tools-body { max-height: 25vh; overflow-y: auto; }
-.workspace-page .session-tools summary { justify-content: center; padding: 8px 12px; border-radius: 10px; }
-.workspace-page .session-tools[open] summary { border-radius: 10px 10px 0 0; }
-.workspace-page .services-message { flex-shrink: 0; margin: 8px 0; max-height: 16vh; overflow-y: auto; }
+.workspace-page .session-tools summary { justify-content: center; padding: 8px 12px; border-radius: var(--radius-md); }
+.workspace-page .session-tools[open] summary { border-radius: var(--radius-md) var(--radius-md) 0 0; }
+/* 卡片内的消息行与工具条共用 20px 卡片内距。 */
+.workspace-page .services-message { flex-shrink: 0; margin: 0; padding-inline: 20px; max-height: 16vh; overflow-y: auto; }
 .livestream-studio { border: 0; background: transparent; }
 .livestream-studio .session-toolbar { padding: 0 0 24px; }
 .livestream-configuration { margin-top: 16px; border-radius: 12px; background: var(--surface-muted); }

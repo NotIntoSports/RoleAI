@@ -36,7 +36,7 @@
 
 Real-time voice is the most natural way to practice speaking: whether you finish your thought, go off topic, or ramble — you only find out by actually talking. RoleAI wires speech recognition, an LLM, and speech synthesis into one full-duplex pipeline, so an AI in the role you define (interviewer, HR, speaking coach, meeting assistant, product presenter) talks with you live and responds the moment you finish. Roles, documents, and session records all stay on your machine; model services are configured and paid for by you. No accounts, no data sent to our servers.
 
-Typical uses: interviewer role-play practice, live meeting assistance, live-stream product presenting — or simply a local voice workstation with a role you can fully customize.
+Typical uses: interviewer role-play practice, live meeting assistance, live-stream product presenting — or simply a local voice workstation with a role you can fully customize. With Tavus configured, the workspace can hold a Chinese video call: your microphone is published into the room, and the other person fills the conversation card. Role names stay unique, so saving a built-in role no longer creates another copy with the same name.
 
 ## Features
 
@@ -49,6 +49,12 @@ Five interview-related role presets ship in addition — Interviewer, HR, Strict
 | Workspace | Knowledge base |
 | --- | --- |
 | ![Workspace](.github/assets/screenshots/workspace-dark.png) | ![Knowledge base](.github/assets/screenshots/materials.png) |
+
+### Video call
+
+Turn on Avatar in the composer and press Start video call. The role appears with the face you picked, your microphone goes into the call, and the other person fills the conversation card, with captions and hang-up along the bottom. The online demo does not contact Tavus; it shows the same preview stage.
+
+![Video call preview stage](.github/assets/screenshots/video-call.png)
 
 ### Meeting assistant
 

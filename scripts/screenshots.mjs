@@ -59,6 +59,11 @@ const COPY = {
     performancePanel: "性能面板",
     demoRouteName: "演示实时线路（端到端）",
     stageLatencies: "分阶段延迟",
+    avatar: "虚拟形象",
+    startVideo: "开始视频通话",
+    previewCaption: "演示预览，不会连接 Tavus",
+    hangup: "挂断",
+    diagnostics: "诊断",
   },
   en: {
     nav: "Primary navigation",
@@ -92,6 +97,11 @@ const COPY = {
     performancePanel: "Performance panel",
     demoRouteName: "Demo realtime route (end-to-end)",
     stageLatencies: "Stage latencies",
+    avatar: "Avatar",
+    startVideo: "Start video call",
+    previewCaption: "Demo preview",
+    hangup: "Hang up",
+    diagnostics: "Diagnostics",
   },
 };
 const copy = COPY[LANG];
@@ -231,6 +241,16 @@ async function captureAll(outDir, deviceScaleFactor) {
     if (LANGUAGE_INIT) await context.addInitScript(LANGUAGE_INIT, LANG);
     const page = await context.newPage();
 
+    // 视频通话预览舞台（演示不连接 Tavus）。
+    await gotoApp(page, "#/workspace");
+    await page.getByRole("switch", { name: copy.avatar }).click();
+    await page.getByRole("button", { name: copy.startVideo }).click();
+    await page.getByText(copy.previewCaption).waitFor({ timeout: 15_000 });
+    await page.waitForTimeout(400);
+    await page.screenshot({ path: shotPath("video-call.png") });
+    reportSize("video-call.png");
+    await page.getByRole("button", { name: copy.hangup }).click();
+
     // 角色编辑。
     await gotoApp(page, "&category=roles#/settings");
     await page.getByText(copy.strictInterviewer).first().waitFor();
@@ -302,9 +322,10 @@ async function captureAll(outDir, deviceScaleFactor) {
 
     // 延迟诊断（lane-F F05：诊断区升级为性能面板）。
     await gotoApp(page, "&category=diagnostics#/settings");
+    await page.getByRole("button", { name: copy.diagnostics }).click();
     await page.getByText(copy.performancePanel).waitFor();
     // 性能面板上线路名会出现多次（线路区/分阶段区/最近轮区），取首个即可。
-    await page.getByText(copy.demoRouteName).first().waitFor({ timeout: 15_000 });
+    await page.locator("#settings-panel-diagnostics").getByText(copy.demoRouteName).first().waitFor({ timeout: 15_000 });
     await page.waitForTimeout(400);
     await page.screenshot({ path: shotPath("diagnostics.png") });
     reportSize("diagnostics.png");

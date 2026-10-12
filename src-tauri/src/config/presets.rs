@@ -100,7 +100,8 @@ pub fn ensure_role_presets(config: &mut AppConfigV1) -> bool {
 /// tavus_face_id）的那一份，删除其余同名个人角色。内置模板（preset id）绝不删除。
 /// 若被删的是当前 active，把 active 指到保留的那份。
 pub fn merge_same_name_roles(config: &mut AppConfigV1) -> bool {
-    let mut groups: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::new();
+    let mut groups: std::collections::HashMap<String, Vec<usize>> =
+        std::collections::HashMap::new();
     for (index, profile) in config.role_profiles.iter().enumerate() {
         if is_preset(&profile.id) {
             continue;
@@ -111,7 +112,8 @@ pub fn merge_same_name_roles(config: &mut AppConfigV1) -> bool {
             .push(index);
     }
     // index -> 该角色所属同名组的保留份下标。
-    let mut drop_to_keeper: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    let mut drop_to_keeper: std::collections::HashMap<usize, usize> =
+        std::collections::HashMap::new();
     for indices in groups.into_values() {
         if indices.len() < 2 {
             continue;
@@ -148,9 +150,7 @@ pub fn merge_same_name_roles(config: &mut AppConfigV1) -> bool {
         if !drop_to_keeper.contains_key(&index) {
             continue;
         }
-        if profile.active
-            || config.active_role_profile_id.as_deref() == Some(profile.id.as_str())
-        {
+        if profile.active || config.active_role_profile_id.as_deref() == Some(profile.id.as_str()) {
             redirect_to = Some(config.role_profiles[drop_to_keeper[&index]].id.clone());
             break;
         }

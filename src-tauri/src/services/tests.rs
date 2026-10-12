@@ -143,7 +143,8 @@ fn saving_the_active_preset_forks_a_copy_that_takes_over_as_default() {
         loaded
             .role_profiles
             .iter()
-            .filter(|profile| profile.name.trim() == "面试官" && !crate::config::presets::is_preset(&profile.id))
+            .filter(|profile| profile.name.trim() == "面试官"
+                && !crate::config::presets::is_preset(&profile.id))
             .count(),
         1
     );
@@ -243,13 +244,22 @@ fn role_copy_deduplicates_the_copy_suffix() {
     let source = service.save(role_input("interviewer")).unwrap();
 
     let first = service
-        .copy(RoleProfileCopyInput { source_id: "interviewer".into(), id: None })
+        .copy(RoleProfileCopyInput {
+            source_id: "interviewer".into(),
+            id: None,
+        })
         .unwrap();
     let second = service
-        .copy(RoleProfileCopyInput { source_id: "interviewer".into(), id: None })
+        .copy(RoleProfileCopyInput {
+            source_id: "interviewer".into(),
+            id: None,
+        })
         .unwrap();
     let third = service
-        .copy(RoleProfileCopyInput { source_id: first.id.as_str().into(), id: None })
+        .copy(RoleProfileCopyInput {
+            source_id: first.id.as_str().into(),
+            id: None,
+        })
         .unwrap();
 
     assert_eq!(first.name, format!("{} 副本", source.name));
