@@ -39,8 +39,13 @@ describe("previewCue", () => {
     expect(PREVIEW_SPEAKING_FRAME_AT).toBeLessThan(PREVIEW_ASK_AT);
   });
 
-  it("speaks the same chinese words as the captions", () => {
+  it("speaks the chinese captions for each beat", () => {
     const call = zhCN.tavus.call;
+    expect(PREVIEW_BEATS.map((beat) => beat.captionKey)).toEqual([
+      "tavus.call.previewCaption1",
+      "tavus.call.previewCaption2",
+      "tavus.call.previewCaption3",
+    ]);
     expect(previewBeatSpeech(PREVIEW_BEATS[0]!)).toBe(call.previewCaption1);
     expect(previewBeatSpeech(PREVIEW_BEATS[1]!)).toBe(call.previewCaption2);
     expect(previewBeatSpeech(PREVIEW_BEATS[2]!)).toBe(call.previewCaption3);

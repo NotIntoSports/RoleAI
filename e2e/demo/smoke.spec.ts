@@ -56,19 +56,15 @@ test("runs one full scripted session, then sees it in records", async ({ page })
   await page.getByRole("button", { name: "开始语音会话" }).click();
   await expect(page.getByRole("button", { name: "结束通话" })).toBeVisible();
 
-  // 第 1 轮用户发言逐字上屏。
-  await expect(page.getByText("面试官您好，我最有代表性的项目", { exact: false }).first()).toBeVisible();
-  // 回答流式上屏并落库（出现在历史气泡里）。
+  // 默认角色是会议助手，播的是事先写好的会议纪要剧本。
+  await expect(page.getByText("今天的会议结论有哪些", { exact: false }).first()).toBeVisible();
   await expect(
-    page.getByText("已读回执你们是怎么存储的", { exact: false }).first(),
+    page.getByText("v2.3 新增跨部门项目空间", { exact: false }).first(),
   ).toBeVisible({ timeout: 30_000 });
-  // 第 3 轮打断后的追问也播出来，证明打断演示完成。
-  // 配音后前两轮就要 ~55 秒，该行出现在 ~75 秒，宽放到 150 秒。
-  await expect(page.getByText("不好意思打断一下", { exact: false }).first()).toBeVisible({
-    timeout: 150_000,
+  await expect(page.getByText("线上崩溃率现在是多少", { exact: false }).first()).toBeVisible({
+    timeout: 90_000,
   });
-  // 收尾轮（脚本第 4 轮回答）播完。
-  await expect(page.getByText("主动打断并给出自己的论据", { exact: false }).first()).toBeVisible({
+  await expect(page.getByText("今日结论三句话", { exact: false }).first()).toBeVisible({
     timeout: 90_000,
   });
 
