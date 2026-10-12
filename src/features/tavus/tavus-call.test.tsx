@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import * as commands from "../../api/commands";
 import { TavusCallProvider, useTavusCall, type TavusCallStartResult } from "./call-lock";
+import { PREVIEW_CAPTION2_AT, PREVIEW_LISTEN_AT } from "./preview-clip";
 import { TavusCall } from "./tavus-call";
 
 const leave = vi.fn(async () => undefined);
@@ -142,14 +143,34 @@ describe("TavusCall", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "发起通话" }));
     expect(await screen.findByText("你好，我在。你直接说就行，我看着你听。")).toBeTruthy();
-    expect(screen.getByText("需要的话，我可以接着问，也可以先把刚才的话总结给你。")).toBeTruthy();
-    expect(screen.getByRole("img", { name: "数字人" })).toBeTruthy();
+    expect(screen.queryByText("需要的话，我可以接着问，也可以先把刚才的话总结给你。")).toBeNull();
+    const video = screen.getByLabelText("数字人");
+    expect(video.tagName).toBe("VIDEO");
+    expect(video).toHaveProperty("loop", true);
+    expect((video as HTMLVideoElement).src).toContain("digital-human-preview");
+    expect(screen.queryByRole("img", { name: "数字人" })).toBeNull();
     expect(screen.getByText("对方说话中")).toBeTruthy();
     expect(joinDailyRoom).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "挂断" })).toBeTruthy();
 
+    act(() => {
+      (video as HTMLVideoElement).currentTime = PREVIEW_CAPTION2_AT + 0.05;
+      video.dispatchEvent(new Event("timeupdate"));
+    });
+    expect(screen.getByText("需要的话，我可以接着问，也可以先把刚才的话总结给你。")).toBeTruthy();
+    expect(screen.queryByText("你好，我在。你直接说就行，我看着你听。")).toBeNull();
+    expect(screen.getByText("对方说话中")).toBeTruthy();
+
+    act(() => {
+      (video as HTMLVideoElement).currentTime = PREVIEW_LISTEN_AT + 0.05;
+      video.dispatchEvent(new Event("timeupdate"));
+    });
+    expect(screen.getByText("聆听中")).toBeTruthy();
+
     fireEvent.click(screen.getByRole("button", { name: "挂断" }));
     await waitFor(() => expect(screen.queryByRole("button", { name: "挂断" })).toBeNull());
+    expect(video.getAttribute("src")).toBeNull();
+    expect((video as HTMLVideoElement).loop).toBe(false);
     // 预览会话不打结束接口，也不进房间。
     expect(commands.endTavusConversation).not.toHaveBeenCalled();
     expect(leave).not.toHaveBeenCalled();

@@ -21,6 +21,8 @@ const WARN_BYTES = 1.5 * 1024 * 1024;
 // —— 界面语言（B21）：选择器随语言切换；键名与下方用法一一对应。 ——
 const langIndex = process.argv.indexOf("--lang");
 const LANG = langIndex !== -1 ? (process.argv[langIndex + 1] ?? "zh-CN") : "zh-CN";
+const onlyIndex = process.argv.indexOf("--only");
+const ONLY = onlyIndex === -1 ? null : (process.argv[onlyIndex + 1] ?? null);
 if (LANG !== "zh-CN" && LANG !== "en") {
   console.error(`不支持的语言：${LANG}（可选 zh-CN / en）`);
   process.exitCode = 1;
@@ -175,6 +177,38 @@ async function captureAll(outDir, deviceScaleFactor) {
   });
 
   try {
+    if (ONLY === "video-call") {
+      const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor, locale: "zh-CN" });
+      await context.addInitScript(() => {
+        window.localStorage.setItem("ai-assistant.theme", "dark");
+      });
+      if (LANGUAGE_INIT) await context.addInitScript(LANGUAGE_INIT, LANG);
+      const page = await context.newPage();
+      await gotoApp(page, "#/workspace");
+      await page.getByRole("switch", { name: copy.avatar }).click();
+      await page.getByRole("button", { name: copy.startVideo }).click();
+      await page.getByText(copy.previewCaption).waitFor({ timeout: 15_000 });
+      await page.locator(".tavus-call video").evaluate(async (node) => {
+        const video = node;
+        if (video.readyState < 2) {
+          await new Promise((resolve) => video.addEventListener("loadeddata", () => resolve(undefined), { once: true }));
+        }
+        video.pause();
+        await new Promise((resolve) => {
+          const timer = setTimeout(() => resolve(undefined), 1500);
+          video.addEventListener("seeked", () => {
+            clearTimeout(timer);
+            resolve(undefined);
+          }, { once: true });
+          video.currentTime = 0.32;
+        });
+      });
+      await page.screenshot({ path: shotPath("video-call.png") });
+      reportSize("video-call.png");
+      await context.close();
+      return;
+    }
+
     // —— 会话进行中的截图（深色 / 浅色）——
     for (const theme of ["dark", "light"]) {
       const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor, locale: "zh-CN" });
@@ -246,7 +280,21 @@ async function captureAll(outDir, deviceScaleFactor) {
     await page.getByRole("switch", { name: copy.avatar }).click();
     await page.getByRole("button", { name: copy.startVideo }).click();
     await page.getByText(copy.previewCaption).waitFor({ timeout: 15_000 });
-    await page.waitForTimeout(400);
+    await page.locator(".tavus-call video").evaluate(async (node) => {
+      const video = node;
+      if (video.readyState < 2) {
+        await new Promise((resolve) => video.addEventListener("loadeddata", () => resolve(undefined), { once: true }));
+      }
+      video.pause();
+      await new Promise((resolve) => {
+        const timer = setTimeout(() => resolve(undefined), 1500);
+        video.addEventListener("seeked", () => {
+          clearTimeout(timer);
+          resolve(undefined);
+        }, { once: true });
+        video.currentTime = 0.32;
+      });
+    });
     await page.screenshot({ path: shotPath("video-call.png") });
     reportSize("video-call.png");
     await page.getByRole("button", { name: copy.hangup }).click();

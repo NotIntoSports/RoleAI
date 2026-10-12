@@ -8,8 +8,7 @@
 }
 
 /* 视频通话大舞台：通话中占满会话卡片剩余高度；空闲时 display:contents 不占布局。
-   深色渐变底同时充当预览模式（没有真实视频流）时的人像占位。
-   舞台与外层会话卡片同为 16px 圆角，保持同一套大表面语言。 */
+   深色渐变在画面出来之前垫底。舞台与外层会话卡片同为 16px 圆角。 */
 .tavus-call {
   position: relative;
   display: flex;
@@ -25,8 +24,7 @@
   display: contents;
 }
 
-.tavus-call > video,
-.tavus-call-portrait {
+.tavus-call > video {
   position: absolute;
   inset: 0;
   width: 100%;

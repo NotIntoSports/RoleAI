@@ -52,7 +52,7 @@ Five interview-related role presets ship in addition — Interviewer, HR, Strict
 
 ### Real-time digital human
 
-Turn on Avatar and press Start video call. The digital human appears with the face you picked, your voice goes into the call, and they look at you while answering. The picture fills the conversation card, with captions, speaking state, and hang-up along the bottom. The online demo shows that same stage and character; a live call runs in the Windows app.
+Turn on Avatar and press Start video call. The digital human appears with the face you picked, your voice goes into the call, and they look at you while answering. The picture fills the conversation card, with captions, speaking state, and hang-up along the bottom. In the online demo the digital human speaks on that stage and the captions follow; a live call runs in the Windows app.
 
 ![Video call preview stage](.github/assets/screenshots/video-call.png)
 

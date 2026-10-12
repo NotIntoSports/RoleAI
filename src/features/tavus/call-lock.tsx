@@ -9,6 +9,7 @@ import {
   type TavusCaptionRole,
   type TavusSpeakingStatus,
 } from "./daily-room";
+import { attachPreviewClip, detachPreviewClip, previewCue } from "./preview-clip";
 
 export type TavusCallStartResult = { ok: true } | { ok: false; message: string };
 export type TavusCaption = { text: string; role: TavusCaptionRole };
@@ -27,8 +28,6 @@ type TavusCallContextValue = {
   speakingStatus: TavusSpeakingStatus;
   micEnabled: boolean;
   setMicEnabled: (enabled: boolean) => void;
-  /** 演示舞台没有远端视频时，用虚拟形象静帧出镜。 */
-  portraitActive: boolean;
   startCall: (roleId: string) => Promise<TavusCallStartResult>;
   hangup: (announce?: boolean) => Promise<void>;
   videoRef: RefObject<HTMLVideoElement | null>;
@@ -46,7 +45,6 @@ const idleContext: TavusCallContextValue = {
   speakingStatus: "listening",
   micEnabled: false,
   setMicEnabled: () => undefined,
-  portraitActive: false,
   startCall: async () => ({ ok: false, message: "" }),
   hangup: async () => undefined,
   videoRef: { current: null },
@@ -65,11 +63,11 @@ export function TavusCallProvider({ children }: { children: ReactNode }) {
   const [captions, setCaptions] = useState<TavusCaption[]>([]);
   const [speakingStatus, setSpeakingStatus] = useState<TavusSpeakingStatus>("listening");
   const [micEnabled, setMicEnabledState] = useState(false);
-  const [portraitActive, setPortraitActive] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const roomRef = useRef<DailyRoom | null>(null);
   const conversationRef = useRef<string | null>(null);
+  const previewCueUnlisten = useRef<(() => void) | null>(null);
 
   const pushCaption = useCallback((text: string, role: TavusCaptionRole) => {
     setCaptions((current) => [...current, { text, role }].slice(-2));
@@ -80,6 +78,9 @@ export function TavusCallProvider({ children }: { children: ReactNode }) {
     const room = roomRef.current;
     roomRef.current = null;
     conversationRef.current = null;
+    previewCueUnlisten.current?.();
+    previewCueUnlisten.current = null;
+    detachPreviewClip(videoRef.current);
     void room?.leave();
     if (conversationId && conversationId !== PREVIEW_CONVERSATION_ID) {
       void api.endTavusConversation(conversationId);
@@ -92,10 +93,14 @@ export function TavusCallProvider({ children }: { children: ReactNode }) {
     roomRef.current = null;
     conversationRef.current = null;
     setVideoActive(false);
-    setPortraitActive(false);
     setCaptions([]);
     setSpeakingStatus("listening");
     setMicEnabledState(false);
+    if (conversationId === PREVIEW_CONVERSATION_ID) {
+      previewCueUnlisten.current?.();
+      previewCueUnlisten.current = null;
+      detachPreviewClip(videoRef.current);
+    }
     if (room) {
       try {
         await room.leave();
@@ -120,6 +125,27 @@ export function TavusCallProvider({ children }: { children: ReactNode }) {
     roomRef.current?.setLocalAudio(enabled);
   }, []);
 
+  const bindPreviewCues = useCallback((video: HTMLVideoElement) => {
+    previewCueUnlisten.current?.();
+    let lastKey = "";
+    const sync = () => {
+      const cue = previewCue(video.currentTime || 0);
+      const key = `${cue.caption}:${cue.speaking}`;
+      if (key === lastKey) return;
+      lastKey = key;
+      const text = t(cue.caption === "first" ? "tavus.call.previewCaption1" : "tavus.call.previewCaption2");
+      setCaptions([{ text, role: "replica" }]);
+      setSpeakingStatus(cue.speaking ? "replica-speaking" : "listening");
+    };
+    video.addEventListener("timeupdate", sync);
+    video.addEventListener("seeked", sync);
+    previewCueUnlisten.current = () => {
+      video.removeEventListener("timeupdate", sync);
+      video.removeEventListener("seeked", sync);
+    };
+    sync();
+  }, []);
+
   const startCall = useCallback(async (roleId: string): Promise<TavusCallStartResult> => {
     if (voiceActive) {
       return { ok: false, message: t("tavus.call.voiceBusy") };
@@ -133,24 +159,25 @@ export function TavusCallProvider({ children }: { children: ReactNode }) {
       return { ok: false, message: t("roles.ipc.operateFailed") };
     }
     setCallBusy(true);
+    const previewPage = document.documentElement.dataset.roleaiDemo === "preview";
+    // 先于网络请求播放，才能落在这次点击的用户激活窗口里。
+    if (previewPage) attachPreviewClip(video);
     try {
       const result = await api.startTavusConversation(roleId);
       if (!result.ok) {
+        if (previewPage) detachPreviewClip(video);
         return { ok: false, message: errorText(result.error) };
       }
       conversationRef.current = result.data.conversationId;
       if (result.data.conversationUrl.startsWith("preview:")) {
-        // 在线演示不进 Daily 房间，用虚拟形象静帧和一段对话字幕展示同一套数字人舞台。
-        setCaptions([
-          { text: t("tavus.call.previewCaption1"), role: "replica" },
-          { text: t("tavus.call.previewCaption2"), role: "replica" },
-        ]);
-        setSpeakingStatus("replica-speaking");
+        // 在线演示不进 Daily 房间，循环播放同一人物的说话片段，字幕随进度切换。
+        if (!previewPage) attachPreviewClip(video);
+        bindPreviewCues(video);
         setMicEnabledState(true);
-        setPortraitActive(true);
         setVideoActive(true);
         return { ok: true };
       }
+      if (previewPage) detachPreviewClip(video);
       try {
         roomRef.current = await joinDailyRoom(result.data.conversationUrl, video, audio, {
           onUtterance: pushCaption,
@@ -170,16 +197,16 @@ export function TavusCallProvider({ children }: { children: ReactNode }) {
       setCaptions([]);
       setSpeakingStatus("listening");
       setMicEnabledState(true);
-      setPortraitActive(false);
       setVideoActive(true);
       setCallMessage(t("tavus.call.joined"));
       return { ok: true };
     } catch {
+      if (previewPage) detachPreviewClip(video);
       return { ok: false, message: t("roles.ipc.operateFailed") };
     } finally {
       setCallBusy(false);
     }
-  }, [voiceActive, pushCaption]);
+  }, [voiceActive, pushCaption, bindPreviewCues]);
 
   const value = useMemo(
     () => ({
@@ -192,13 +219,12 @@ export function TavusCallProvider({ children }: { children: ReactNode }) {
       speakingStatus,
       micEnabled,
       setMicEnabled,
-      portraitActive,
       startCall,
       hangup,
       videoRef,
       audioRef,
     }),
-    [voiceActive, videoActive, callBusy, callMessage, captions, speakingStatus, micEnabled, setMicEnabled, portraitActive, startCall, hangup],
+    [voiceActive, videoActive, callBusy, callMessage, captions, speakingStatus, micEnabled, setMicEnabled, startCall, hangup],
   );
   return <CallContext.Provider value={value}>{children}</CallContext.Provider>;
 }
