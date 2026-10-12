@@ -29,7 +29,8 @@ const ffmpeg = resolveFfmpeg();
 
 function resolveFfmpeg(): string {
   if (process.env.FFMPEG) return process.env.FFMPEG;
-  const bundled = path.join(repoRoot, ".tools", "ffmpeg", "bin", "ffmpeg.exe");
+  const toolsRoot = process.env.ROLEAI_TOOLS_DIR ?? path.join(repoRoot, ".tools");
+  const bundled = path.join(toolsRoot, "ffmpeg", "bin", "ffmpeg.exe");
   if (existsSync(bundled)) return bundled;
   return "ffmpeg";
 }

@@ -15,7 +15,8 @@
  *   1. debug 产物：npm run build:tauri-ui && npx tauri build --debug --no-bundle
  *      产物 src-tauri/target/debug/role-ai-desktop.exe（可用 TAURI_E2E_EXECUTABLE 覆盖）。
  *   2. tauri-driver：cargo install tauri-driver --locked（~/.cargo/bin）。
- *   3. msedgedriver：.tools/msedgedriver/msedgedriver.exe（可用 TAURI_E2E_MSEDGEDRIVER 覆盖），
+ *   3. msedgedriver：$ROLEAI_TOOLS_DIR/msedgedriver/msedgedriver.exe（默认 .tools/msedgedriver/，
+ *      可用 TAURI_E2E_MSEDGEDRIVER 直接指定 exe），
  *      版本与本机 WebView2 Runtime 一致（查询见 docs/dependency-decisions.md I02 条目）。
  *
  * 断言：主窗口渲染出工作台页头 → 导航到全部 5 个页面且各自页头 h1 渲染
@@ -228,9 +229,10 @@ async function runSmoke() {
     process.env.TAURI_E2E_TAURI_DRIVER ?? join(homedir(), ".cargo", "bin", "tauri-driver.exe"),
     "先跑 cargo install tauri-driver --locked",
   );
+  const toolsRoot = process.env.ROLEAI_TOOLS_DIR ?? join(REPOSITORY_ROOT, ".tools");
   const msedgedriverBinary = await requireFile(
-    process.env.TAURI_E2E_MSEDGEDRIVER ?? join(REPOSITORY_ROOT, ".tools", "msedgedriver", "msedgedriver.exe"),
-    "下载与本机 WebView2 Runtime 版本一致的 edgedriver_win64.zip 并解压到 .tools/msedgedriver/",
+    process.env.TAURI_E2E_MSEDGEDRIVER ?? join(toolsRoot, "msedgedriver", "msedgedriver.exe"),
+    "下载与本机 WebView2 Runtime 版本一致的 edgedriver_win64.zip 并解压到 $ROLEAI_TOOLS_DIR/msedgedriver/（默认 .tools/）",
   );
 
   let driver = null;

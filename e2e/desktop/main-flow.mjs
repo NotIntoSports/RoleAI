@@ -397,9 +397,10 @@ async function runMainFlow() {
     process.env.TAURI_E2E_TAURI_DRIVER ?? join(homedir(), ".cargo", "bin", "tauri-driver.exe"),
     "先跑 cargo install tauri-driver --locked",
   );
+  const toolsRoot = process.env.ROLEAI_TOOLS_DIR ?? join(REPOSITORY_ROOT, ".tools");
   const msedgedriverBinary = await requireFile(
-    process.env.TAURI_E2E_MSEDGEDRIVER ?? join(REPOSITORY_ROOT, ".tools", "msedgedriver", "msedgedriver.exe"),
-    "下载与本机 WebView2 Runtime 版本一致的 edgedriver_win64.zip 并解压到 .tools/msedgedriver/",
+    process.env.TAURI_E2E_MSEDGEDRIVER ?? join(toolsRoot, "msedgedriver", "msedgedriver.exe"),
+    "下载与本机 WebView2 Runtime 版本一致的 edgedriver_win64.zip 并解压到 $ROLEAI_TOOLS_DIR/msedgedriver/（默认 .tools/）",
   );
 
   const mockServer = await startMockOpenAiServer();
