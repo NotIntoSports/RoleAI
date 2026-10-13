@@ -11,6 +11,7 @@
 - Node.js 24
 - Microsoft Edge WebView2 Runtime
 - .NET 10 SDK（仅构建 AudioBridge 子进程需要；见 [native/AudioBridge/README.md](native/AudioBridge/README.md)）
+- ffmpeg、msedgedriver 等本机工具不入库，按 `ROLEAI_TOOLS_DIR` 环境变量 → 仓库内 `.tools/` → `PATH` 的顺序解析（CI 会自行下载到 `.tools/`）
 
 ```powershell
 npm install
