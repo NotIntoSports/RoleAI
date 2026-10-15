@@ -2,19 +2,17 @@
 
 <p align="center">
   <a href="README.en.md">English</a> ·
-  <a href="https://notintosports.github.io/RoleAI/">在线演示</a> ·
-  <a href="https://github.com/NotIntoSports/RoleAI/releases">下载</a> ·
+  <a href="https://notintosports.github.io/RoleAI/demo/">在线演示</a> ·
   <a href="guide/README.md">文档</a> ·
-  <a href="guide/benchmarks.md">基准与评测</a>
+  <a href="guide/benchmarks.md">基准与评测</a> ·
+  <a href="guide/adr/README.md">架构决策</a>
 </p>
-
-<p align="center"><sub>在线演示与下载链接在仓库首次发布后生效（GitHub Pages 部署 + Release 工作流出包）。</sub></p>
 
 <p align="center">
   <img src="src-tauri/icons/128x128@2x.png" width="96" alt="RoleAI 图标" />
 </p>
 
-<p align="center"><strong>本地优先的 Windows 实时互动数字人。角色以虚拟形象出镜，你说话，对方看着你回答。也可做语音对练、会议助手和直播讲解。</strong></p>
+<p align="center"><strong>Windows 上本地优先的全双工实时语音智能体。Rust + Tauri 单一桌面应用：你说话，角色听、接话、能被打断；配上形象，角色就以数字人出镜。</strong></p>
 
 <p align="center">
   <a href="https://github.com/NotIntoSports/RoleAI/actions/workflows/ci.yml"><img src="https://github.com/NotIntoSports/RoleAI/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
@@ -25,131 +23,214 @@
   <img src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=61DAFB" alt="React 19" />
 </p>
 
-## 实时互动数字人
+## 30 秒看懂
 
-RoleAI 是一个 AI 数字人项目。打开输入栏的「虚拟形象」，点「开始视频通话」，角色以选定形象出镜，你说话，对方看着你听、接着回答。画面占满会话卡片，底部是字幕、说话状态和挂断。在线演示里这段对话事先写好，数字人会出镜说话，字幕跟着走；接通真实实时通话用 Windows 桌面版。
+RoleAI 是一个跑在本机的实时语音对话系统。难点不在"把 ASR、LLM、TTS 串起来"，而在**轮流说话**：用户句中停顿时不能抢答，用户插话时 AI 要立刻停下，AI 自己的声音被麦克风收回去时不能当成用户在说话。这些都在 Rust 音频管线里解决，并用可复现的基准和离线评测量化。
 
-![实时互动数字人出镜说话](.github/assets/screenshots/video-call.png)
+技术栈：Rust（Tauri 2 主进程，音频管线、会话编排、模型适配、本地检索）、React 19（WebView 界面）、C#（会议音频子进程）、SQLite + sqlite-vec（本地数据与向量检索）。代码约 5.3 万行 Rust、2 万行 TypeScript，725 个 Rust 测试。
 
-> 本文截图由内置演示模式自动生成：脚本化对话与虚构数据，未连接任何 AI 服务。
+| 指标 | 结果 | 出处 |
+| --- | --- | --- |
+| 音频热路径（摄入、VAD、分段、打断） | 实时因子 370 倍以上，Silero 单窗推理中位约 80 µs（每窗 32 ms 音频） | [Criterion 基准](guide/reports/benchmarks.md) |
+| 打断（barge-in）首次触发延迟 | 中位 217 ms，真实打断 4/4 检出（合成语料） | [音频离线评测](guide/reports/audio-eval.md) |
+| 两级断句的价值 | 句中犹豫场景过早截断率 50% 降到 25%（合成语料） | [音频离线评测](guide/reports/audio-eval.md) |
+| 本地混合检索 | 4904 个分块规模下中位 0.48 ms | [Criterion 基准](guide/reports/benchmarks.md) |
 
-## 为什么做这个项目
+所有数字由仓库里的脚本在一台 Intel Core Ultra 7 255H 笔记本上跑出，测试环境和局限见[基准与评测报告](guide/benchmarks.md)。
 
-面对面说话比打字更自然：对方有没有在听、回答有没有接上，只有真的开口才知道。RoleAI 把虚拟形象和全双工语音接在一起，做成可以实时互动的数字人。同一套角色也能做语音对练、会议发言辅助和直播讲解。所有角色、资料和会话记录都保存在本机，模型服务由你自己配置和付费，没有账号，也不上传数据到我们的服务器。角色名全局唯一，保存内置角色不会再叠出多个同名副本。
+![数字人出镜实时对话](.github/assets/screenshots/video-call.png)
 
-## 功能特性
+> 截图由内置演示模式自动生成：脚本化对话与虚构数据，未连接任何 AI 服务。[在线演示](https://notintosports.github.io/RoleAI/demo/)在浏览器里运行真实界面和模拟后端，免安装。
 
-### 面试官角色语音对练
+## 核心工程问题
 
-用面试官 / 严苛面试官 / 表达教练角色进行语音对练，结合资料库中的 JD 与简历追问：全双工对话里你说到一半 AI 能被打断、AI 说到一半你也能插话，接近真实面试的节奏。
+### 1. 什么时候算"说完了"：两级断句
 
-内置面试官、HR、严苛面试官、求职者陪练、表达教练五种面试相关角色，预设提示词要求 AI 只依据你提供的真实经历提问与反馈，不编造履历、不作录用决定。
+**问题**：只靠静音判断回合结束，用户想词时停顿半秒就会被抢答。
 
-本机麦克风模式在会话开始时逐个候选设备试绑并实测电平，自动绑定有信号的真实麦克风：系统默认输入被虚拟声卡（如会议模式残留的 CABLE Output）占用时无需手动处理；设备证据会交给当前线路的大模型复核并给出具体诊断（仅诊断建议，设备名与电平只发往你自己配置的模型服务）。若所有候选都无信号（如 Fn 静音键未关），会直接提示原因，详见 [troubleshooting](guide/troubleshooting.md)。
+**做法**：第一级用 Silero VAD（16 kHz、32 ms 窗）判断"有没有在说话"；静音出现后，第二级用 Smart Turn 回合完成度模型（ONNX int8，随包分发）判断"这句话在语义和语调上是否完整"，不完整就继续等。
 
-| 工作台 | 资料库 |
-| --- | --- |
-| ![工作台](.github/assets/screenshots/workspace-dark.png) | ![资料库](.github/assets/screenshots/materials.png) |
+**证据**：离线评测中，句中犹豫场景的过早截断率从 50%（只用 VAD）降到 25%（VAD + Smart Turn）。Smart Turn 对 4 秒语音段的判定中位 68.2 ms，每轮只触发一次。
 
-### 会议助手
+**代码**：[audio/vad.rs](src-tauri/src/audio/vad.rs)、[audio/smart_turn.rs](src-tauri/src/audio/smart_turn.rs)
 
-- 通过 C# AudioBridge 子进程对指定会议进程做本机回环音频采集，不需要把麦克风让给别的软件。
-- 会话期间自动把系统默认麦克风接管到虚拟声卡（结束自动还原）：会议软件保持“系统默认设备”即可收到 AI 语音，无需手动选择。
-- 根据会议上下文和指定资料回答点名提问，区分事实、推测和待确认事项，不主动打断讨论。
-- 人工接管模式：一键切回自己的麦克风，AI 退到幕后。
+### 2. 打断与"自问自答"：回声闸门
 
-### 直播讲解
+**问题**：AI 说话时，扬声器的声音会被麦克风收回去。处理不好，AI 要么听不见用户插话，要么把自己的话当成用户提问，陷入自问自答。
 
-- 从本地产品资料生成分段讲稿，逐段确认后按段讲解，不编造价格、库存或效果承诺。
-- 舞台支持图片或循环视频；讲稿生成、修改、插问都在「虚拟直播」页完成。
+**做法**：播报期间用滑动窗统计有声帧并辅以能量判定来识别真实插话，触发后立刻清空播放队列。文本层再把转写结果和 AI 刚说过的话做 bigram Dice 相似度比较，达到 0.85 就判为回声并整轮丢弃。
 
-### 知识库
+**证据**：合成语料中真实打断 4/4 检出，首次触发延迟中位 217 ms。
 
-- 导入 PDF、DOCX、纯文本资料，按章节语义分块，FTS 全文检索 + sqlite-vec 向量检索做混合召回（倒数排序融合）。
-- 资料库、索引、会话记录全部存本机 SQLite，支持备份与恢复。
+**代码**：[audio/barge_in.rs](src-tauri/src/audio/barge_in.rs)、[services/echo_guard.rs](src-tauri/src/services/echo_guard.rs)
 
-| 虚拟直播 | 会话记录 |
-| --- | --- |
-| ![虚拟直播](.github/assets/screenshots/livestream.png) | ![会话记录](.github/assets/screenshots/records.png) |
+### 3. 两条语音线路与断线恢复
 
-### 延迟可观测性
+**问题**：端到端 Realtime 模型延迟低但供应商少、协议各不相同；级联方案灵活但多一跳延迟。长连接还会断。
 
-- 每轮 AI 回复下方有延迟瀑布条：断句、资料检索、LLM 首 token、TTS 合成各阶段耗时一目了然，可在设置中关闭。
-- 「设置 → 性能面板」按线路与模式汇总首响 p50/p95 和最近轮次的延迟趋势。
-- 会话可导出延迟 CSV（Excel / pandas 直接分析）或 Chrome Trace JSON（拖进 [Perfetto](https://ui.perfetto.dev) 看每轮时间线）；导出只含时间线与轮次文本，不含提示词、凭据或音频。
+**做法**：
+- 级联模式把 ASR、LLM、TTS 三个阶段分别接到任意 OpenAI 兼容服务，对连接错误和 429/502/503/504 做有界重试。
+- Realtime 模式走 WebSocket 全双工长连接，适配了 OpenAI、阿里云 DashScope、智谱三种协议方言。
+- 断线按指数退避重连（500 ms 起、30 s 封顶），重连后逐条确认回放上下文并跳过 AI 自己的轮次。这修复了 qwen 断连后反复重连的死循环。
+
+**代码**：[providers/cascade.rs](src-tauri/src/providers/cascade.rs)、[providers/realtime_protocol.rs](src-tauri/src/providers/realtime_protocol.rs)、[providers/realtime_session.rs](src-tauri/src/providers/realtime_session.rs)
+
+### 4. 延迟看得见：每轮时间线
+
+**问题**：用户只会说"反应慢"，不会说慢在断句、检索、LLM 首 token 还是 TTS。
+
+**做法**：两条线路都按阶段打点（`TurnTimeline`），随会话事件持久化。同一份数据驱动每轮回复下方的延迟瀑布条、按线路汇总 p50/p95 的性能面板，以及 CSV 和 Chrome Trace 导出（可拖进 [Perfetto](https://ui.perfetto.dev) 看时间线）。导出不含提示词、凭据和音频。
 
 | 延迟瀑布 | 性能面板 |
 | --- | --- |
 | ![延迟瀑布](.github/assets/screenshots/latency-waterfall.png) | ![性能面板](.github/assets/screenshots/performance-panel.png) |
 
-详细说明见[延迟可观测性指南](guide/latency.md)。
+**代码**：[services/realtime_pump/shared.rs](src-tauri/src/services/realtime_pump/shared.rs)，说明见[延迟可观测性指南](guide/latency.md)。
 
-### 会话记录与安全
+### 5. 不装向量数据库的本地 RAG
 
-- 每轮对话自动生成带证据引用的纪要，支持导出与两步确认删除。
-- API Key 存 Windows 凭据管理器（Credential Manager），内存中零化清零；界面与配置文件里只有密钥引用，没有明文。
+**问题**：桌面应用不能要求用户再装一个向量数据库。
 
-## 技术亮点
+**做法**：PDF、DOCX、纯文本按章节语义分块，SQLite FTS5 全文检索和 sqlite-vec 向量检索两路召回，用倒数排序融合（RRF）合并。Embedding 维度变化时自动重建向量表。
 
-- **两级语义断句**：Silero VAD（16 kHz / 32 ms 窗）判断「在说话」，Smart Turn 回合完成度模型（ONNX int8，随包分发）判断「说完了」，解决「一句话停顿就被抢答」的问题。见 [audio/vad.rs](src-tauri/src/audio/vad.rs)、[audio/smart_turn.rs](src-tauri/src/audio/smart_turn.rs)。
-- **静态链接 onnxruntime**：ort 构建期静态链接 onnxruntime 1.22，避免运行时误加载系统目录里的旧版 DLL——这是真踩过的坑。见 [Cargo.toml](src-tauri/Cargo.toml)。
-- **回声闸门与打断（barge-in）**：播报期间用滑动窗人声计数 + 能量辅助判定识别插话；文本层再用 bigram Dice 系数把「AI 自己的声音被麦克风回收」的转写整轮丢弃，杜绝自问自答。离线评测中真实打断 4/4 检出、首次触发延迟中位 217 ms（合成语料，见[评测报告](guide/reports/audio-eval.md)）。见 [audio/barge_in.rs](src-tauri/src/audio/barge_in.rs)、[services/echo_guard.rs](src-tauri/src/services/echo_guard.rs)。
-- **可复现的基准与评测**：Criterion 基准显示音频热路径实时因子约 370× 以上（Silero 单窗推理约 80 µs，帧长 32 ms）、混合检索 4900 块中位 0.48 ms；离线评测显示两级断句把句中犹豫场景的过早截断率从 50% 降到 25%。一键复现，环境与全部数字见[基准与评测报告](guide/benchmarks.md)。
-- **每轮延迟时间线**：Realtime 与级联两条线路分别按阶段打点（`TurnTimeline`），随会话事件持久化；前端瀑布条、性能面板与 CSV / Chrome Trace 导出同源。见 [services/realtime_pump/shared.rs](src-tauri/src/services/realtime_pump/shared.rs)。
-- **本地模型预设**：Ollama、LM Studio、本地 Whisper（speaches）、本地 TTS（Kokoro-FastAPI）四套预设，全链路可以不出本机，见[本地模型指南](guide/local-models.md)。
-- **级联与端到端两种模式**：级联模式 ASR → LLM → TTS 三阶段自由组合任意 OpenAI 兼容服务（带连接错误与 429/502/503/504 的有界重试）；Realtime 模式走 WebSocket 全双工长连接，对 OpenAI、阿里云 DashScope、智谱三种协议方言做了适配。见 [providers/cascade.rs](src-tauri/src/providers/cascade.rs)、[providers/realtime_protocol.rs](src-tauri/src/providers/realtime_protocol.rs)。
-- **断线重连与上下文回放**：Realtime 断线按指数退避重连（500 ms 起、30 s 封顶），重连后上下文逐条确认回放并跳过 AI 自己的轮次，修复过 qwen 断连死循环。见 [providers/realtime_session.rs](src-tauri/src/providers/realtime_session.rs)。
-- **混合检索**：SQLite FTS5 全文检索与 sqlite-vec 向量检索两路召回，倒数排序融合（RRF）打分；嵌入维度变化自动重建向量表。见 [materials/hybrid.rs](src-tauri/src/materials/hybrid.rs)。
-- **凭据管理器保管密钥**：`keyring` crate 读写 Windows Credential Manager，`zeroize` 清零内存副本，非 Windows 平台回退内存实现便于测试。见 [secrets/](src-tauri/src/secrets/mod.rs)。
-- **ts-rs 类型契约**：Rust DTO 自动生成 [src/generated/bindings.ts](src/generated/bindings.ts)，前端与后端字段改一边就会编译失败；另有契约测试锁定 IPC 面不可膨胀。见 [contracts.rs](src-tauri/src/contracts.rs)。
-- **安全面基线测试**：能力白名单、IPC 命令面等关键文件哈希固定在 [tests/tauri/security-surface-baseline.json](tests/tauri/security-surface-baseline.json)，任何漂移直接红测。
-- **C# AudioBridge 子进程**：复用 MIT 许可的 NAudio.Wasapi 做会议进程回环采集与指定设备流式播放，帧协议支持打断清空、播净回执，发布产物自带 .NET 运行时。见 [native/AudioBridge](native/AudioBridge/README.md)。
-- **跨平台 CI 与发布流水线**：Windows 全量测试之外，Linux / macOS 每次提交跑 `cargo check --all-targets` 与单元测试；打 `v*` 标签自动构建 Windows 安装包上传 draft Release 并附 SHA256SUMS；另有 CodeQL、Scorecard、Dependabot 常规守护。见 [.github/workflows/](.github/workflows/ci.yml)。
+**证据**：4904 个分块规模下检索中位 0.48 ms；50 题离线题集验证检索机制（[RAG 评测](guide/reports/rag-eval.md)）。
+
+**代码**：[materials/hybrid.rs](src-tauri/src/materials/hybrid.rs)
+
+### 6. 从五个进程到一个 exe，并用测试守住
+
+**问题**：项目最早是 Electron + Next.js + Go + Python 的多进程系统，用户要跑四五个进程才能得到一次语音回答。
+
+**做法**：收敛为单一 Tauri 应用，只保留一个职责单一的 C# AudioBridge 子进程做会议音频采集。然后把架构承诺写成测试：
+- 打包冒烟测试启动安装后的 exe，断言进程树里没有 Node、Go、Python、PostgreSQL 或 Nginx。
+- ts-rs 从 Rust DTO 生成前端类型（[src/generated/bindings.ts](src/generated/bindings.ts)），字段改一边就编译失败。
+- 能力白名单和 IPC 命令面的文件哈希锁定在[安全面基线](tests/tauri/security-surface-baseline.json)里，漂移即红测。
+- onnxruntime 构建期静态链接，避免运行时误加载系统目录里的旧版 DLL（真实踩过的坑）。
+- API Key 只存 Windows 凭据管理器，内存副本用 `zeroize` 清零，界面和配置文件里只有密钥引用。
+
+过程复盘见[《从五个进程到一个 exe》](guide/blog/2026-09-30-five-processes-to-one-exe.md)。
 
 ## 架构
 
 ```mermaid
 flowchart LR
-    subgraph UI["React UI（WebView）"]
+    subgraph UI["React UI（WebView2）"]
         P["工作台 / 虚拟直播 / 资料 / 记录 / 服务 / 设置"]
     end
     P <-->|"Tauri IPC（ts-rs 类型契约）"| C
     subgraph Core["Rust 核心（Tauri 主进程）"]
         C["会话编排与状态机"]
         A["音频管线：VAD / Smart Turn / 打断 / 回声闸门"]
-        PV["Provider 适配层：级联 / Realtime / 声音复刻 / Embedding / 联网搜索"]
+        PV["Provider 适配层：级联 / Realtime / 声音复刻 / Embedding / 联网搜索 / Tavus"]
         M["资料库：解析 / 分块 / 混合检索"]
         S["凭据与配置"]
     end
-    A --> AB["AudioBridge（C# 子进程）"]
     P -->|"WebAudio 麦克风采集"| A
+    A --> AB["AudioBridge（C# 子进程）"]
     AB --> DEV["虚拟声卡 / 扬声器 / 会议软件"]
-    PV --> API["你配置的模型服务（ASR / LLM / TTS / Realtime）"]
+    PV --> API["你配置的模型服务（云端或本机）"]
     M --> DB[("SQLite + sqlite-vec")]
     S --> CM[("Windows 凭据管理器")]
 ```
 
-## 支持的服务
+一轮对话（级联模式）的时序，包括打断路径：
 
-| 能力 | 协议 / 服务 | 说明 |
-| --- | --- | --- |
-| 语音识别 / 大模型 / 语音合成（级联） | 任意 OpenAI 兼容 API | 三个阶段分别配置，可混搭不同供应商 |
-| 端到端实时语音（Realtime） | OpenAI 兼容 Realtime WebSocket | 已适配 OpenAI、阿里云 DashScope、智谱三种方言 |
-| 声音复刻 | 智谱（上传→克隆两步）、阿里云 DashScope（含 qwen 单调用复刻） | 上传参考音频生成音色，用于 TTS / Realtime |
-| Embedding | OpenAI 兼容 | 可选供应商或自定义 URL |
-| 联网搜索 | 供应商原生联网能力 | 注入级联 LLM 阶段，可选 |
-| 本地模型 | Ollama / LM Studio（LLM）、speaches（本地 Whisper ASR）、Kokoro-FastAPI（TTS） | 本机 OpenAI 兼容端点，断网可用，见[本地模型指南](guide/local-models.md) |
-| 会议音频 | 本机虚拟声卡（如 VB-CABLE） | AudioBridge 采集 / 播放；会话期间临时接管默认麦克风（结束还原） |
+```mermaid
+sequenceDiagram
+    participant Mic as 麦克风
+    participant Turn as VAD和SmartTurn
+    participant ASR
+    participant RAG as 本地检索
+    participant LLM
+    participant TTS
+    participant Out as 播放
+    Mic->>Turn: 32 ms 音频窗
+    Turn->>Turn: 静音后判定回合是否完整
+    Turn->>ASR: 一整句语音
+    ASR->>RAG: 转写文本
+    RAG->>LLM: 文本和检索片段
+    LLM-->>TTS: 完整回复（流式文本同时推给界面）
+    TTS-->>Out: 合成音频
+    Mic->>Turn: 播报中用户插话
+    Turn->>Out: 打断，清空播放队列并取消本轮
+```
 
-服务商列表、密钥与连通性测试都在应用内「设置」页完成，不需要手改配置文件。
+Realtime 模式下，识别、生成和合成由同一条 WebSocket 长连接上的端到端模型完成。
+
+更多细节见[架构说明](guide/architecture.md)和[实时语音管线](guide/realtime-voice-pipeline.md)。
+
+## 设计决策
+
+关键取舍都记录在[架构决策记录（ADR）](guide/adr/README.md)里，每篇写明背景、备选方案、决策和代价。例如为什么[从多进程收敛为单一 Tauri 应用](guide/adr/0001-single-tauri-app.md)、为什么[用 SQLite + sqlite-vec 而不是独立向量数据库](guide/adr/0003-sqlite-sqlite-vec.md)、为什么[级联和 Realtime 两种模式并存](guide/adr/0004-cascade-and-realtime-dual-mode.md)。
+
+实现背后的踩坑见三篇[技术文章](guide/blog/README.md)。
+
+## 角色：能说话、能出镜的数字人
+
+RoleAI 里的数字人就是**角色**。一个角色由名称、系统提示词、开场白、说话风格和可选的视频形象组成：没配形象时它是语音对话伙伴，配了形象就以数字人出镜，看着你听、接着回答。内置角色可以直接用，也可以另存一份改成自己的。
+
+### 内置角色与场景
+
+- **面试对练**：面试官、严苛面试官、HR、求职者陪练、表达教练，结合资料库里的 JD 和简历追问。提示词要求只依据你提供的真实经历提问，不编造履历、不作录用决定。
+- **客服前台**：接待来访或来电客户，依据指定的产品、服务、营业时间、地址和办理流程资料回答；资料不足时明确说明并转人工，不编造价格、库存、政策或承诺。
+- **会议助手**：AudioBridge 对指定会议进程做本机回环采集，角色根据会议上下文和指定资料回答点名提问，区分事实、推测和待确认事项。会话期间临时把系统默认麦克风（三个默认角色）切到虚拟声卡，会议软件保持"默认设备"就能收到 AI 语音，会话结束按角色还原；默认播放设备不动。可一键切回自己的麦克风。
+- **直播讲解员**：从本地产品资料生成分段讲稿，逐段确认后讲解，不编造价格、库存或效果承诺。舞台可用图片或循环视频。
+- **自定义角色**：自己写提示词和开场白，角色名全局唯一。
+
+所有角色共用同一条语音管线和本地数据：资料、索引、会话记录都存本机 SQLite，每次会话生成带证据引用的纪要；语音链路可以接云端服务，也可以用 Ollama、LM Studio、speaches（本地 Whisper）、Kokoro-FastAPI（本地 TTS）四套预设完全留在本机，见[本地模型指南](guide/local-models.md)。
+
+| 工作台 | 虚拟直播 |
+| --- | --- |
+| ![工作台](.github/assets/screenshots/workspace-dark.png) | ![虚拟直播](.github/assets/screenshots/livestream.png) |
+
+### 克隆声音与形象
+
+- **声音**：在「设置 → 音色克隆」上传一段参考音频，通过智谱（上传后克隆两步）或阿里云 DashScope（含 qwen 单次调用复刻）生成音色，再把音色配到语音线路上，角色就用这个声音说话。
+- **形象**：RoleAI 会列出你 Tavus 账户里的全部形象供角色选用。在 Tavus 平台用自己录制的视频训练出个人形象后，它同样会出现在列表里，可以分配给任意角色。
+
+克隆的声音和形象必须来自本人或已获授权的人，使用时请告知对话对象这是 AI。
+
+### 让角色出镜：两种形象来源
+
+**云端：Tavus（已支持）**
+
+在「设置 → 视频通话（Tavus）」保存密钥，在「设置 → 角色」里给角色选一个形象，然后在工作台打开输入栏的「虚拟形象」开关，点「开始视频通话」。不需要本地 GPU，费用按你的 Tavus 账户结算。通话时角色人设会发给 Tavus，音视频经 Daily 房间传输。配置步骤见[配置指南](guide/configuration.md)，数据去向见[安全设计](guide/security.md)。
+
+**本地：[SoulX-LiveAct](https://github.com/Soul-AILab/SoulX-LiveAct)（规划中，不调用任何云 API）**
+
+SoulX-LiveAct 是 Soul AILab 开源的实时数字人视频生成模型（18B 参数，基于 Wan2.1 14B 加 4B 音频模块），适合不想把角色人设和音视频交给第三方的场景。RoleAI 目前**还没有内置接入**，下面是独立部署所需的条件，数据来自它的官方 README 和 issue，不是 RoleAI 的实测结果。
+
+硬件需求：
+
+| 配置 | 官方给出的表现 |
+| --- | --- |
+| 2 张 H100 或 H200 | 实时流式，720×416 或 512×512 下 20 FPS |
+| 1 张 RTX 4090 或 RTX 5090 | 需开 `--fp8_kv_cache --block_offload --t5_cpu`；5090 单卡约 6 FPS，达不到实时 |
+| 2 张 RTX 5090 + FP4 | 作者表示可能实时，仍在验证（[issue #2](https://github.com/Soul-AILab/SoulX-LiveAct/issues/2)） |
+
+另外需要约 110 GB 磁盘放模型权重（[Hugging Face 仓库](https://huggingface.co/Soul-AILab/LiveAct)占用量）。
+
+部署步骤（官方流程，命令为 Linux/bash 写法，vllm 不支持原生 Windows，Windows 用户需用 WSL2 或单独的 Linux GPU 服务器）：
+
+```bash
+conda create -n liveact python=3.10 && conda activate liveact
+pip install -r requirements.txt
+conda install conda-forge::sox -y
+# FP8 注意力内核
+git clone https://github.com/thu-ml/SageAttention.git && cd SageAttention && git checkout v2.2.0 && python setup.py install && cd ..
+# FP8 GEMM 内核
+pip install vllm==0.11.0
+# LightVAE
+git clone https://github.com/ModelTC/LightX2V && cd LightX2V && python setup_vae.py install && cd ..
+```
+
+然后下载 [Soul-AILab/LiveAct](https://huggingface.co/Soul-AILab/LiveAct) 和 [chinese-wav2vec2-base](https://huggingface.co/TencentGameMate/chinese-wav2vec2-base) 权重，按官方 README 用 `generate.py`（命令行）或 `demo.py`（GUI 演示）启动。
+
+许可证：模型权重为 Apache-2.0；代码仓库在 GitHub 上没有标注许可证，商用前请自行向作者确认。
 
 ## 快速开始
 
-### 方式一：下载安装包
-
-到 [Releases](https://github.com/NotIntoSports/RoleAI/releases) 下载最新的 Windows x64 安装包：打 `v*` 标签时 Release 工作流会自动构建并附 SHA256 校验文件，也可以用 Scoop 安装（清单见 [scoop/roleai.json](scoop/roleai.json)，指向 Release 产物）。安装包未做代码签名，首次运行 SmartScreen 可能提示「已保护你的电脑」，点击「更多信息 → 仍要运行」即可；介意的话可以按下面的方式从源码构建。
-
-### 方式二：从源码构建
+目前还没有发布安装包（打 `v*` 标签后 Release 工作流会自动构建 Windows 安装包并附 SHA256 校验），请从源码构建。
 
 环境要求：Windows x64、[Rust 1.96](https://www.rust-lang.org/)、[Node.js 24](https://nodejs.org/)、[Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)、.NET 10 SDK（构建 AudioBridge 用）。
 
@@ -159,38 +240,13 @@ npm run tauri:dev      # 开发调试
 npm run tauri:build    # 产出安装包
 ```
 
-### 首次配置（3 步）
+首次配置：
 
-1. **配服务**：打开「设置 → 模型供应商」，选一个预设供应商或填自定义 URL，保存 API Key（进凭据管理器），点「测试」确认连通。
-2. **选角色**：在工作台选一个内置角色（面试官 / 会议助手 / 直播讲解员……），或自定义提示词与开场白。
-3. **开会话**：回到工作台启动会话，授权麦克风后开口说话；要用面试官角色对练，先把简历和岗位资料导入「资料」页。
+1. **配服务**：「设置 → 模型供应商」选预设或填自定义 URL，保存 API Key（进凭据管理器），点「测试」确认连通。也可以选本地模型预设。
+2. **选角色**：在工作台选内置角色，或自定义提示词与开场白。
+3. **开会话**：启动会话、授权麦克风后开口说话。用面试官角色对练前，先把简历和岗位资料导入「资料」页。
 
-### 在线演示（免安装）
-
-main 分支推送后 Pages 工作流会自动把演示版发布到 <https://notintosports.github.io/RoleAI/demo/>：浏览器里跑真实界面 + 模拟后端（全部数据虚构，未连接任何 AI 服务）。演示会话由写死的脚本驱动，**台词配音为构建期预生成的神经音色 mp3**（`npm run demo:voice:gen`，走微软 Edge 朗读接口，仅生成时联网；运行时零请求），提交在 `src/demo/assets/voice/`——修改 `src/demo/backend/{scripts,scripts-en,demo-text}.ts` 的台词后需要重跑该命令并提交新音频。演示语音默认开启，顶部横幅可关。
-
-## 项目结构
-
-```
-├── src/                    # React 前端（页面、功能模块、Tauri IPC 封装）
-│   ├── app/                # 路由与页面壳
-│   ├── screens/            # 六个页面（工作台、虚拟直播等）
-│   ├── features/           # 会话、训练、资料、直播、延迟观测等功能模块
-│   ├── api/                # 唯一的 Tauri IPC 入口（commands.ts）
-│   └── generated/          # ts-rs 自动生成的类型（勿手改）
-├── src-tauri/              # Rust 核心
-│   ├── src/audio/          # 采集、VAD、Smart Turn、分段、打断监听
-│   ├── src/providers/      # 级联 / Realtime / 复刻 / Embedding / 搜索适配
-│   ├── src/services/       # 会话编排、回声闸门、资料库、角色、语音线路
-│   ├── src/materials/      # 资料解析、分块、混合检索、备份
-│   ├── src/secrets/        # 凭据管理器封装
-│   ├── src/commands/       # Tauri 命令（IPC 面）
-│   └── capabilities/       # Tauri 能力白名单（安全面基线锁定）
-├── native/AudioBridge/     # C# 会议音频子进程（NAudio.Wasapi）
-├── tests/tauri/            # Node 契约测试（前端契约、安全面基线、README 契约等）
-├── guide/                  # 公开文档（架构、语音管线、安全、配置）
-└── resources/              # 随包资源（Smart Turn 模型等）
-```
+更多配置见[配置指南](guide/configuration.md)，遇到问题见[故障排查](guide/troubleshooting.md)。
 
 ## 测试与质量
 
@@ -199,38 +255,67 @@ npm run test:tauri          # 全量门禁
 npm run test:tauri-package  # 打包冒烟
 ```
 
-`test:tauri` 依次运行 700+ 个 Rust 单元测试、前端 vitest 测试、Node 契约测试，并构建前端产物。`test:tauri-package` 在隔离的临时配置目录中启动已打包的可执行文件，等待主窗口可见，并断言进程树里没有 Node、Go、Python、PostgreSQL 或 Nginx，安装包目录也没有混入本地配置、数据库、日志或凭据测试文件。
+- `test:tauri` 依次运行 Rust 单元测试（约 725 个，含 proptest 属性测试）、前端 vitest、Node 契约测试，最后构建前端产物。
+- `test:tauri-package` 在隔离的临时配置目录里启动打包后的 exe，等主窗口可见，并断言进程树和安装目录都干净。
+- 契约测试钉住几类回归：前端只有 `src/api/commands.ts` 能调用 Tauri IPC；能力白名单和关键文件哈希漂移即失败；README 与 CI 只描述单一 Tauri 产品路径。
+- 性能与质量：Criterion 基准（`powershell -File scripts/run-benchmarks.ps1`）、断句/打断/RAG 离线评测、[覆盖率](guide/reports/coverage.md)和[变异测试](guide/reports/mutation.md)报告。
+- CI：Windows 全量测试，Linux 和 macOS 每次提交跑 `cargo check --all-targets` 与单元测试；另有 CodeQL、OpenSSF Scorecard、Dependabot。见 [.github/workflows/](.github/workflows/ci.yml)。
 
-性能与质量数字有专门的可复现入口：Criterion 基准（`powershell -File scripts/run-benchmarks.ps1`）与离线评测（断句 / 打断 / RAG 检索），报告与测试环境见[基准与评测报告](guide/benchmarks.md)。
+## 已知局限
 
-契约测试把几类回归钉死：前端只有 `src/api/commands.ts` 能碰 Tauri IPC；Tauri 能力白名单与关键文件哈希漂移即失败；README 与 CI 只描述 Tauri 单一产品路径。
+- 音频评测语料由 Windows SAPI 合成，比真人录音干净；回声场景没有建模 AEC，误触发数字代表 AEC 失效时的下界。
+- RAG 评测用的是字符 bigram 哈希替身向量，只验证检索机制，不代表真实 Embedding 的语义召回。
+- 句尾提交延迟中位 2340 ms，高于 700 ms 的静音判定设计值，主要由分段器的保持态预算造成，是评测暴露出来的待调参项。
+- AudioBridge、凭据管理器、默认麦克风接管都是 Windows 实现；macOS 和 Linux 目前只保证编译和单元测试通过。
+- 默认麦克风接管用的是未公开的 `IPolicyConfig` COM 接口，Windows 大版本更新后需要回归验证。
+- 安装包尚未做代码签名。
 
 ## 路线图
 
 - [x] 全双工实时语音会话（级联 + Realtime 双模式）
 - [x] Silero VAD + Smart Turn 两级断句、回声闸门、打断
 - [x] 本地知识库（PDF / DOCX / 文本，混合检索）
-- [x] 会话纪要与导出、声音复刻、直播讲稿
-- [x] Windows 凭据管理器保管密钥、安全面基线测试
-- [x] 每轮延迟瀑布、性能面板与延迟数据导出（CSV / Chrome Trace）
-- [x] 基准测试与离线评测报告（Criterion、断句 / 打断、RAG 检索）
-- [x] 在线演示版（浏览器里跑真实界面 + 模拟后端）
-- [x] Release 工作流（`v*` 标签自动出 Windows 安装包）与跨平台 CI（Linux / macOS 编译与单测）
+- [x] 每轮延迟瀑布、性能面板与延迟导出（CSV / Chrome Trace）
+- [x] 基准测试与离线评测报告
 - [x] 本地模型预设（Ollama / LM Studio / 本地 Whisper / 本地 TTS）
-- [ ] 自动更新（设置页手动检查更新已就绪，配置发布签名公钥后启用）
+- [x] Tavus 云端数字人视频通话
+- [ ] 本地数字人后端：接入 SoulX-LiveAct（不调用云 API）
+- [ ] 首个正式 Release 与自动更新（设置页手动检查更新已就绪，配置发布签名公钥后启用）
 - [ ] 托管 OBS、虚拟摄像头一键启停与快捷键 UI —— 已延期；当前客户端只做本机 OBS / AudioBridge 路径解析和前置探测，不会创建场景、浏览器源或启动 Virtual Camera
-- [ ] macOS / Linux 完整支持（CI 已覆盖两平台的编译与单元测试；AudioBridge、凭据管理器等平台相关件仍为 Windows 实现）
+- [ ] macOS / Linux 完整支持
+
+## 项目结构
+
+```
+├── src/                    # React 前端
+│   ├── screens/            # 六个页面（工作台、虚拟直播、资料、记录、服务、设置）
+│   ├── features/           # 会话、角色、资料、直播、Tavus、诊断等功能模块
+│   ├── api/                # 唯一的 Tauri IPC 入口（commands.ts）
+│   ├── demo/               # 在线演示用的模拟后端
+│   └── generated/          # ts-rs 自动生成的类型（勿手改）
+├── src-tauri/              # Rust 核心
+│   ├── src/audio/          # 采集、VAD、Smart Turn、分段、打断
+│   ├── src/providers/      # 级联 / Realtime / 复刻 / Embedding / 搜索 / Tavus 适配
+│   ├── src/services/       # 会话编排、回声闸门、角色、语音线路
+│   ├── src/materials/      # 资料解析、分块、混合检索、备份
+│   ├── src/secrets/        # 凭据管理器封装
+│   ├── benches/ examples/  # Criterion 基准与离线评测
+│   └── capabilities/       # Tauri 能力白名单（安全面基线锁定）
+├── native/AudioBridge/     # C# 会议音频子进程（NAudio.Wasapi）
+├── tests/tauri/            # Node 契约测试
+└── guide/                  # 文档、ADR、技术文章、评测报告
+```
 
 ## 负责任使用
 
-RoleAI 用于练习、辅助和内容创作；在会议或直播中使用时，请告知参与者 AI 参与和记录方式，并由人工复核输出。预设角色的提示词都写入了事实边界（不编造履历、不作自动录用决定、不承诺价格与效果），请在自定义角色时保持同样的约束。
+RoleAI 用于练习、辅助和内容创作。在会议或直播中使用时，请告知参与者 AI 参与和记录方式，并由人工复核输出。数字人形象和声音请确保已获得本人授权。
 
 ## 名称与兼容性
 
-应用名称为 **RoleAI**，Windows 可执行文件为 `role-ai-desktop.exe`。为继续读取已有配置与数据，保留原有应用标识、`%APPDATA%\AI Virtual Assistant` 配置目录及 `AI_VIRTUAL_ASSISTANT_CONFIG` 环境变量。GitHub 仓库名与本地目录名不影响应用名称。
+应用名称为 **RoleAI**，Windows 可执行文件为 `role-ai-desktop.exe`。为继续读取已有配置与数据，保留原有应用标识、`%APPDATA%\AI Virtual Assistant` 配置目录及 `AI_VIRTUAL_ASSISTANT_CONFIG` 环境变量。
 
 ## 致谢与许可证
 
-本项目站在这些开源项目的肩膀上：[Tauri](https://github.com/tauri-apps/tauri)、[React](https://github.com/facebook/react)、[Vite](https://github.com/vitejs/vite)、[rusqlite](https://github.com/rusqlite/rusqlite)、[sqlite-vec](https://github.com/asg017/sqlite-vec)、[Silero VAD](https://github.com/snakers4/silero-vad)（经 [silero-vad-rust](https://github.com/sheldonix/silero-vad-rust) 与 [ort](https://github.com/pykeio/ort)）、[smart-turn](https://huggingface.co/pipecat-ai)（pipecat-ai）、[NAudio.Wasapi](https://github.com/naudio/NAudio）、[pdf-extract](https://github.com/jrmuizel/pdf-extract)、[docx-rs](https://github.com/bokuweb/docx-rs)、[keyring](https://github.com/hwchen/keyring-rs)、[lucide](https://github.com/lucide-icons/lucide) 等，完整清单见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+本项目基于 [Tauri](https://github.com/tauri-apps/tauri)、[React](https://github.com/facebook/react)、[Vite](https://github.com/vitejs/vite)、[rusqlite](https://github.com/rusqlite/rusqlite)、[sqlite-vec](https://github.com/asg017/sqlite-vec)、[Silero VAD](https://github.com/snakers4/silero-vad)（经 [silero-vad-rust](https://github.com/sheldonix/silero-vad-rust) 与 [ort](https://github.com/pykeio/ort)）、[smart-turn](https://huggingface.co/pipecat-ai)（pipecat-ai）、[NAudio.Wasapi](https://github.com/naudio/NAudio)、[pdf-extract](https://github.com/jrmuizel/pdf-extract)、[docx-rs](https://github.com/bokuweb/docx-rs)、[keyring](https://github.com/hwchen/keyring-rs)、[lucide](https://github.com/lucide-icons/lucide) 等开源项目，完整清单见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 代码以 [MIT](LICENSE) 许可证发布。

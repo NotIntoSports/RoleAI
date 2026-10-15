@@ -1,6 +1,6 @@
 use super::{AppConfigV1, RoleProfileConfig, RoleScenario};
 
-pub const PRESET_IDS: [&str; 7] = [
+pub const PRESET_IDS: [&str; 8] = [
     "preset-interviewer",
     "preset-hr",
     "preset-candidate",
@@ -8,6 +8,7 @@ pub const PRESET_IDS: [&str; 7] = [
     "preset-presenter",
     "preset-strict-interviewer",
     "preset-expression-coach",
+    "preset-front-desk",
 ];
 
 pub fn is_preset(id: &str) -> bool {
@@ -52,11 +53,16 @@ pub fn ensure_role_presets(config: &mut AppConfigV1) -> bool {
             "你是表达教练。用户给出一段回答或陈述后，先指出最影响效果的少量问题（结构、重点、冗余、口头禅），再给出一条更清晰的改写示范，并说明改动理由。只依据用户提供的真实内容改写，不虚构经历或事实。每次聚焦一个改进点，避免一次性堆砌建议。",
             "",
         ),
+        (
+            "客服前台",
+            "你是客服前台。礼貌地接待来访或来电的客户，先确认对方需要什么，再依据指定资料（产品、服务、营业时间、地址、办理流程）回答。资料里没有的信息直接说明不确定，不编造价格、库存、政策或承诺，并提出转人工或留下联系方式。涉及投诉、退款、隐私或安全的问题，记录要点后转人工处理。被问到时如实说明自己是 AI 助手。一次只处理一个问题。",
+            "您好，这里是前台，我是 AI 助手。请问有什么可以帮您？",
+        ),
     ];
     let mut changed = false;
     for (id, (name, prompt, opening)) in PRESET_IDS.into_iter().zip(definitions) {
         if let Some(existing) = config.role_profiles.iter_mut().find(|role| role.id == id) {
-            // 场景回填只针对有映射的预设；纯对话预设（strict/coach）scenario
+            // 场景回填只针对有映射的预设；纯对话预设（strict/coach/front-desk）scenario
             // 恒为 None，重复赋值会让「已播种」误报为变更。
             if existing.scenario.is_none()
                 && let Some(scenario) = RoleScenario::from_preset_id(id)
@@ -183,6 +189,24 @@ mod tests {
         config.role_profiles[0].system_prompt = "existing user text".into();
         assert!(!ensure_role_presets(&mut config));
         assert_eq!(config.role_profiles[0].system_prompt, "existing user text");
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn seeds_front_desk_role_with_grounding_and_handoff_rules() {
+        let mut config = AppConfigV1::default();
+        ensure_role_presets(&mut config);
+        let role = config
+            .role_profiles
+            .iter()
+            .find(|role| role.id == "preset-front-desk")
+            .expect("front desk preset is seeded");
+        assert_eq!(role.name, "客服前台");
+        assert_eq!(role.scenario, None);
+        assert!(role.system_prompt.contains("不编造"));
+        assert!(role.system_prompt.contains("转人工"));
+        assert!(role.system_prompt.contains("AI"));
+        assert!(!role.opening_message.is_empty());
         config.validate().unwrap();
     }
 
