@@ -262,7 +262,7 @@ npm run test:tauri-package  # packaged smoke test
 - `test:tauri-package` launches the packaged exe in an isolated temporary config directory, waits for the main window, and asserts that the process tree and install directory are clean.
 - Contract tests pin several regressions: only `src/api/commands.ts` may call the Tauri IPC; drift in the capability whitelist or hash-pinned files fails the suite; the README and CI may only describe the single Tauri product path.
 - Performance and quality: Criterion benchmarks (`powershell -File scripts/run-benchmarks.ps1`), offline evaluations for turn detection, barge-in, and RAG, plus [coverage](guide/reports/coverage.md) and [mutation testing](guide/reports/mutation.md) reports.
-- CI: the full suite on Windows, and `cargo check --all-targets` plus unit tests on Linux and macOS for every commit; CodeQL, OpenSSF Scorecard, and Dependabot also run. See [.github/workflows/](.github/workflows/ci.yml).
+- CI: the full suite on Windows, and `cargo check --all-targets` plus unit tests on Linux and macOS for every commit; CodeQL and OpenSSF Scorecard also run. See [.github/workflows/](.github/workflows/ci.yml).
 
 ## Known limitations
 

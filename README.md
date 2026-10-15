@@ -259,7 +259,7 @@ npm run test:tauri-package  # 打包冒烟
 - `test:tauri-package` 在隔离的临时配置目录里启动打包后的 exe，等主窗口可见，并断言进程树和安装目录都干净。
 - 契约测试钉住几类回归：前端只有 `src/api/commands.ts` 能调用 Tauri IPC；能力白名单和关键文件哈希漂移即失败；README 与 CI 只描述单一 Tauri 产品路径。
 - 性能与质量：Criterion 基准（`powershell -File scripts/run-benchmarks.ps1`）、断句/打断/RAG 离线评测、[覆盖率](guide/reports/coverage.md)和[变异测试](guide/reports/mutation.md)报告。
-- CI：Windows 全量测试，Linux 和 macOS 每次提交跑 `cargo check --all-targets` 与单元测试；另有 CodeQL、OpenSSF Scorecard、Dependabot。见 [.github/workflows/](.github/workflows/ci.yml)。
+- CI：Windows 全量测试，Linux 和 macOS 每次提交跑 `cargo check --all-targets` 与单元测试；另有 CodeQL、OpenSSF Scorecard。见 [.github/workflows/](.github/workflows/ci.yml)。
 
 ## 已知局限
 
