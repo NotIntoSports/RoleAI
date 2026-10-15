@@ -12,4 +12,3 @@
 | [0006](0006-csharp-audiobridge.md) | 用 C# AudioBridge 子进程采集会议音频 | 已采纳 |
 | [0007](0007-ts-rs-type-contracts.md) | ts-rs 生成前端类型契约 | 已采纳 |
 | [0008](0008-hand-written-retry.md) | 自写有界重试，不引入重试库 | 已采纳 |
-| [0009](0009-meeting-default-capture-takeover.md) | 会议会话期间临时接管系统默认麦克风 | 已采纳 |
