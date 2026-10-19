@@ -45,6 +45,12 @@ native/**/publish/
 # Local-only notes / agent ledgers — never publish.
 .superpowers/
 docs/
+# Local AI rules, internal notes, and editor/agent state — never publish.
+AGENTS.md
+guide/
+.zcodeignore
+.cursor/
+.claude/
 resources/prerequisites/*
 !resources/prerequisites/.gitkeep
 .codex-tmp/
