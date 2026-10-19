@@ -130,73 +130,157 @@ fn invoke(
         .unwrap()
 }
 
+/// 测试在连上 mock 之前失败时，连一次端口把阻塞在 `accept` 上的服务器线程解开。
+/// 模型请求到达后必须 `disarm`：否则函数结束时的额外连接会被当成 TTS 请求。
+struct AcceptUnblocker {
+    addr: std::net::SocketAddr,
+    armed: bool,
+}
+
+impl AcceptUnblocker {
+    fn arm(addr: std::net::SocketAddr) -> Self {
+        Self { addr, armed: true }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for AcceptUnblocker {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = std::net::TcpStream::connect_timeout(&self.addr, Duration::from_secs(2));
+        }
+    }
+}
+
+/// 阻塞等到模型客户端连上。
+///
+/// 先前的非阻塞 accept 把 15s 死线从服务器线程启动就开始计时，这段时间包含
+/// mock app 搭建和 `session_start`。coverage（llvm-cov）满载时搭建本身会超过
+/// 15s，死线在客户端发出请求前耗尽，线程带着 WSAEWOULDBLOCK（os error 10035）
+/// 退出，测试侧只能看到 `Disconnected`。阻塞 accept 不猜测搭建要多久。
+fn accept_model_socket(listener: &std::net::TcpListener) -> std::io::Result<std::net::TcpStream> {
+    let socket = loop {
+        match listener.accept() {
+            Ok((socket, _)) => break socket,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        }
+    };
+    // Windows 上从非阻塞 listener accept 出的套接字会继承非阻塞。listener 这里
+    // 是阻塞的，仍显式恢复，避免以后有人先 `set_nonblocking(true)`。
+    socket.set_nonblocking(false)?;
+    socket.set_read_timeout(Some(Duration::from_secs(15)))?;
+    Ok(socket)
+}
+
+fn read_http_message(socket: &std::net::TcpStream) -> std::io::Result<(String, Vec<u8>)> {
+    use std::io::{BufRead, BufReader, Read};
+    let mut reader = BufReader::new(socket.try_clone()?);
+    let mut headers = String::new();
+    loop {
+        let mut line = String::new();
+        let read = reader.read_line(&mut line)?;
+        if read == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "model connection closed before the request arrived",
+            ));
+        }
+        if line == "\r\n" {
+            break;
+        }
+        headers.push_str(&line);
+        if headers.len() >= 16_384 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "model request headers too large",
+            ));
+        }
+    }
+    let length: usize = headers
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse::<usize>().ok())?
+        })
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "model request missing content-length",
+            )
+        })?;
+    if length >= 65_536 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "model request body too large",
+        ));
+    }
+    let mut body = vec![0; length];
+    reader.read_exact(&mut body)?;
+    Ok((headers, body))
+}
+
+fn finish_mock_listener(listener: std::net::TcpListener) -> std::net::TcpListener {
+    listener.set_nonblocking(true).unwrap();
+    listener
+}
+
+#[test]
+fn accept_unblocker_releases_a_server_blocked_before_the_client_connects() {
+    use std::net::TcpListener;
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (done_tx, done_rx) = mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let socket = accept_model_socket(&listener).expect("accept model connection");
+        let error = read_http_message(&socket).expect_err("closed unblock connection");
+        let _ = done_tx.send(error.kind());
+    });
+    drop(AcceptUnblocker::arm(addr));
+    let kind = done_rx
+        .recv_timeout(Duration::from_secs(3))
+        .unwrap_or_else(|_| {
+            panic!("blocking accept stayed blocked after the test dropped its unblocker")
+        });
+    assert_eq!(kind, std::io::ErrorKind::UnexpectedEof);
+    server.join().unwrap();
+}
+
 #[test]
 fn slow_model_ipc_allows_takeover_and_stop_before_the_model_returns() {
-    use std::{
-        io::{BufRead, BufReader, Read, Write},
-        net::TcpListener,
-        time::Instant,
-    };
+    use std::{io::Write, net::TcpListener, time::Instant};
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
-    listener.set_nonblocking(true).unwrap();
+    let addr = listener.local_addr().unwrap();
+    let endpoint = format!("http://{addr}/v1");
+    let mut unblock_accept = AcceptUnblocker::arm(addr);
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
     let server = std::thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(15);
-        let mut socket = loop {
-            match listener.accept() {
-                Ok((socket, _)) => break socket,
-                Err(error)
-                    if error.kind() == std::io::ErrorKind::WouldBlock
-                        && Instant::now() < deadline =>
-                {
-                    std::thread::sleep(Duration::from_millis(5));
-                }
-                Err(error) => panic!("model request did not arrive: {error}"),
+        let mut socket = accept_model_socket(&listener).expect("accept model connection");
+        let (headers, body) = match read_http_message(&socket) {
+            Ok(message) => message,
+            Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
+                return finish_mock_listener(listener);
             }
+            Err(error) => panic!("model request did not arrive: {error}"),
         };
-        // Windows 上 accept 出的套接字继承 listener 的非阻塞模式；恢复阻塞，
-        // 数据未到时由 read_timeout 负责等待，否则 read_line 立即 WouldBlock。
-        socket.set_nonblocking(false).unwrap();
-        socket
-            .set_read_timeout(Some(Duration::from_secs(15)))
-            .unwrap();
-        let mut reader = BufReader::new(socket.try_clone().unwrap());
-        let mut headers = String::new();
-        loop {
-            let mut line = String::new();
-            assert!(reader.read_line(&mut line).unwrap() > 0);
-            if line == "\r\n" {
-                break;
-            }
-            headers.push_str(&line);
-            assert!(headers.len() < 16_384);
-        }
-        let length: usize = headers
-            .lines()
-            .find_map(|line| {
-                let (name, value) = line.split_once(':')?;
-                name.eq_ignore_ascii_case("content-length")
-                    .then(|| value.trim().parse().unwrap())
-            })
-            .unwrap();
-        assert!(length < 65_536);
-        let mut body = vec![0; length];
-        reader.read_exact(&mut body).unwrap();
         entered_tx
             .send((
                 headers,
                 serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
             ))
             .unwrap();
-        // Bounded even if a test assertion fails, so the client and test runtime can exit.
-        let _ = release_rx.recv_timeout(Duration::from_secs(3));
+        // 挂死保险丝，不是验收线。必须盖过下面 4s 的控制面预算，否则满载时
+        // takeover/stop 还没返回，mock 已经把模型回复发出去了。
+        let _ = release_rx.recv_timeout(Duration::from_secs(15));
         let body = r#"{"choices":[{"message":{"content":"controlled reply"}}]}"#;
         write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
         socket.flush().unwrap();
-        listener.set_nonblocking(true).unwrap();
-        listener
+        finish_mock_listener(listener)
     });
     let directory = tempfile::tempdir().unwrap();
     let mut config: serde_json::Value =
@@ -242,7 +326,10 @@ fn slow_model_ipc_allows_takeover_and_stop_before_the_model_returns() {
             ))
             .unwrap();
     });
-    let (headers, request_body) = entered_rx.recv_timeout(Duration::from_secs(15)).unwrap();
+    let (headers, request_body) = entered_rx
+        .recv_timeout(Duration::from_secs(15))
+        .expect("LLM request must arrive");
+    unblock_accept.disarm();
     assert!(headers.starts_with("POST /v1/chat/completions HTTP/1.1"));
     assert_eq!(request_body["model"], "gpt");
     assert!(request_body["messages"].to_string().contains("PROMPT-BODY"));
@@ -283,69 +370,29 @@ fn slow_model_ipc_allows_takeover_and_stop_before_the_model_returns() {
 
 #[test]
 fn slow_model_ipc_allows_stop_and_read_commands_while_finalize_is_inflight() {
-    use std::{
-        io::{BufRead, BufReader, Read, Write},
-        net::TcpListener,
-        time::Instant,
-    };
+    use std::{io::Write, net::TcpListener, time::Instant};
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
-    listener.set_nonblocking(true).unwrap();
+    let addr = listener.local_addr().unwrap();
+    let endpoint = format!("http://{addr}/v1");
+    let mut unblock_accept = AcceptUnblocker::arm(addr);
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
     let server = std::thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(15);
-        let mut socket = loop {
-            match listener.accept() {
-                Ok((socket, _)) => {
-                    break socket;
-                }
-                Err(error)
-                    if error.kind() == std::io::ErrorKind::WouldBlock
-                        && Instant::now() < deadline =>
-                {
-                    std::thread::sleep(Duration::from_millis(5));
-                }
-                Err(error) => panic!("model request did not arrive: {error}"),
+        let mut socket = accept_model_socket(&listener).expect("accept model connection");
+        let (_headers, _body) = match read_http_message(&socket) {
+            Ok(message) => message,
+            Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
+                return finish_mock_listener(listener);
             }
+            Err(error) => panic!("model request did not arrive: {error}"),
         };
-        // Windows 上 accept 出的套接字继承 listener 的非阻塞模式；恢复阻塞，
-        // 数据未到时由 read_timeout 负责等待，否则 read_line 立即 WouldBlock。
-        socket.set_nonblocking(false).unwrap();
-        socket
-            .set_read_timeout(Some(Duration::from_secs(15)))
-            .unwrap();
-        let mut reader = BufReader::new(socket.try_clone().unwrap());
-        let mut headers = String::new();
-        loop {
-            let mut line = String::new();
-            assert!(reader.read_line(&mut line).unwrap() > 0);
-            if line == "\r\n" {
-                break;
-            }
-            headers.push_str(&line);
-            assert!(headers.len() < 16_384);
-        }
-        let length: usize = headers
-            .lines()
-            .find_map(|line| {
-                let (name, value) = line.split_once(':')?;
-                name.eq_ignore_ascii_case("content-length")
-                    .then(|| value.trim().parse().unwrap())
-            })
-            .unwrap();
-        assert!(length < 65_536);
-        let mut body = vec![0; length];
-        reader.read_exact(&mut body).unwrap();
         entered_tx.send(()).unwrap();
-        // Bounded even if a test assertion fails, so the client and test runtime can exit.
-        // 15s：红灯状态下 session_list 会被收尾阻塞数秒，释放窗口必须盖过它。
+        // 挂死保险丝。红灯状态下 session_list 会被收尾阻塞数秒，释放窗口必须盖过它。
         let _ = release_rx.recv_timeout(Duration::from_secs(15));
         let body = r#"{"choices":[{"message":{"content":"controlled reply"}}]}"#;
         write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
         socket.flush().unwrap();
-        listener.set_nonblocking(true).unwrap();
-        listener
+        finish_mock_listener(listener)
     });
     let directory = tempfile::tempdir().unwrap();
     let mut config: serde_json::Value =
@@ -391,7 +438,10 @@ fn slow_model_ipc_allows_stop_and_read_commands_while_finalize_is_inflight() {
             ))
             .unwrap();
     });
-    entered_rx.recv_timeout(Duration::from_secs(15)).unwrap();
+    entered_rx
+        .recv_timeout(Duration::from_secs(15))
+        .expect("LLM request must arrive");
+    unblock_accept.disarm();
     // 收尾（LLM 网络调用）进行中：停止与只读命令都必须在 500ms 内返回，
     // 不得排队到本轮回答结束（P2：三把全局锁全程持有）。
     let measure = |command: &'static str, body: serde_json::Value| {
@@ -493,65 +543,34 @@ fn diagnostics_export_rejects_destinations_outside_the_data_directory() {
 
 /// C12 锁拆分测试的共享脚手架：一次性 mock LLM 服务器。
 /// 等首个 /v1/chat/completions 请求（entered 通知），收到 release（或超时）后
-/// 返回受控回复。返回 (endpoint, entered, release, 服务器线程)。
+/// 返回受控回复。返回 (endpoint, entered, release, 服务器线程, accept 解阻塞器)。
+/// 调用方在请求到达后必须 `disarm`，测试失败时解阻塞器负责解开阻塞 accept。
 fn slow_llm_server() -> (
     String,
     mpsc::Receiver<()>,
     mpsc::Sender<()>,
     std::thread::JoinHandle<std::net::TcpListener>,
+    AcceptUnblocker,
 ) {
     use std::{
-        io::{BufRead, BufReader, Read, Write},
+        io::{BufRead, BufReader, Write},
         net::TcpListener,
-        time::Instant,
     };
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
-    listener.set_nonblocking(true).unwrap();
+    let addr = listener.local_addr().unwrap();
+    let endpoint = format!("http://{addr}/v1");
+    let unblock_accept = AcceptUnblocker::arm(addr);
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
     let server = std::thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(15);
-        let mut socket = loop {
-            match listener.accept() {
-                Ok((socket, _)) => break socket,
-                Err(error)
-                    if error.kind() == std::io::ErrorKind::WouldBlock
-                        && Instant::now() < deadline =>
-                {
-                    std::thread::sleep(Duration::from_millis(5));
-                }
-                Err(error) => panic!("model request did not arrive: {error}"),
+        let mut socket = accept_model_socket(&listener).expect("accept model connection");
+        let (_headers, _body) = match read_http_message(&socket) {
+            Ok(message) => message,
+            Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
+                return finish_mock_listener(listener);
             }
+            Err(error) => panic!("model request did not arrive: {error}"),
         };
-        // Windows 上 accept 出的套接字继承 listener 的非阻塞模式；恢复阻塞，
-        // 数据未到时由 read_timeout 负责等待，否则 read_line 立即 WouldBlock。
-        socket.set_nonblocking(false).unwrap();
-        socket
-            .set_read_timeout(Some(Duration::from_secs(15)))
-            .unwrap();
-        let mut reader = BufReader::new(socket.try_clone().unwrap());
-        let mut headers = String::new();
-        loop {
-            let mut line = String::new();
-            assert!(reader.read_line(&mut line).unwrap() > 0);
-            if line == "\r\n" {
-                break;
-            }
-            headers.push_str(&line);
-            assert!(headers.len() < 16_384);
-        }
-        let length: usize = headers
-            .lines()
-            .find_map(|line| {
-                let (name, value) = line.split_once(':')?;
-                name.eq_ignore_ascii_case("content-length")
-                    .then(|| value.trim().parse().unwrap())
-            })
-            .unwrap();
-        assert!(length < 65_536);
-        let mut body = vec![0; length];
-        reader.read_exact(&mut body).unwrap();
         entered_tx.send(()).unwrap();
         // 排水线程：LLM 请求挂起期间，preflight 等会向同一 mock 地址发探测请求；
         // 读掉并回 200，避免探测方等满自身超时。收到 stop 信号即退出。
@@ -624,10 +643,9 @@ fn slow_llm_server() -> (
         )
         .unwrap();
         socket.flush().unwrap();
-        listener.set_nonblocking(true).unwrap();
-        listener
+        finish_mock_listener(listener)
     });
-    (endpoint, entered_rx, release_tx, server)
+    (endpoint, entered_rx, release_tx, server, unblock_accept)
 }
 
 /// C12 共享脚手架：把 ready_session_config 的全部供应商指向 mock endpoint，
@@ -670,7 +688,7 @@ fn finalize_test_app(
 #[test]
 fn stop_during_finalize_discards_the_turn_and_marks_the_session_finished() {
     let directory = tempfile::tempdir().unwrap();
-    let (endpoint, entered_rx, release_tx, server) = slow_llm_server();
+    let (endpoint, entered_rx, release_tx, server, mut unblock_accept) = slow_llm_server();
     let app = finalize_test_app(directory.path(), &endpoint);
     let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
         .build()
@@ -690,6 +708,7 @@ fn stop_during_finalize_discards_the_turn_and_marks_the_session_finished() {
     entered_rx
         .recv_timeout(Duration::from_secs(15))
         .expect("LLM request must arrive");
+    unblock_accept.disarm();
     // 收尾网络阶段（不持锁）中停止：stop 立即完成、本轮作废、绝不请求 TTS。
     let stopped = invoke(&window, "session_stop", serde_json::json!({}));
     assert_eq!(stopped["ok"], true, "{stopped}");
@@ -721,7 +740,7 @@ fn stop_during_finalize_discards_the_turn_and_marks_the_session_finished() {
 #[test]
 fn stop_then_start_during_finalize_drops_the_inflight_turn() {
     let directory = tempfile::tempdir().unwrap();
-    let (endpoint, entered_rx, release_tx, server) = slow_llm_server();
+    let (endpoint, entered_rx, release_tx, server, mut unblock_accept) = slow_llm_server();
     let app = finalize_test_app(directory.path(), &endpoint);
     let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
         .build()
@@ -741,6 +760,7 @@ fn stop_then_start_during_finalize_drops_the_inflight_turn() {
     entered_rx
         .recv_timeout(Duration::from_secs(15))
         .expect("LLM request must arrive");
+    unblock_accept.disarm();
     // 收尾网络阶段：先停止旧会话，再开新会话。两者都不被收尾阻塞。
     let stopped = invoke(&window, "session_stop", serde_json::json!({}));
     assert_eq!(stopped["ok"], true, "{stopped}");
@@ -780,7 +800,7 @@ fn stop_then_start_during_finalize_drops_the_inflight_turn() {
 fn config_reads_stay_responsive_and_the_turn_uses_the_phase1_snapshot() {
     use std::time::Instant;
     let directory = tempfile::tempdir().unwrap();
-    let (endpoint, entered_rx, release_tx, server) = slow_llm_server();
+    let (endpoint, entered_rx, release_tx, server, mut unblock_accept) = slow_llm_server();
     let app = finalize_test_app(directory.path(), &endpoint);
     let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
         .build()
@@ -800,6 +820,7 @@ fn config_reads_stay_responsive_and_the_turn_uses_the_phase1_snapshot() {
     entered_rx
         .recv_timeout(Duration::from_secs(15))
         .expect("LLM request must arrive");
+    unblock_accept.disarm();
     // 收尾网络阶段读配置：立即返回；本轮按阶段一快照执行。
     let start = Instant::now();
     let public = invoke(&window, "config_get_public", serde_json::json!({}));
