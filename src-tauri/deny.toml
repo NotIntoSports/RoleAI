@@ -35,13 +35,16 @@ ignore = [
     # RUSTSEC-2026-0192：ttf-parser 失修（非漏洞）。传递链 lopdf → pdf-extract（PDF
     # 文本提取直接依赖），pdf-extract 无替代后端，仅解析本地用户自己导入的 PDF。
     "RUSTSEC-2026-0192",
-    # RUSTSEC-2025-0075/0080/0081/0098/0100：unic-* 全家失修（非漏洞）。传递链
-    # urlpattern → tauri-utils → tauri，等 tauri-utils 更换 URL 匹配实现后删除。
-    "RUSTSEC-2025-0075",
-    "RUSTSEC-2025-0080",
-    "RUSTSEC-2025-0081",
-    "RUSTSEC-2025-0098",
-    "RUSTSEC-2025-0100",
+    # RUSTSEC-2026-0371：zbus_names 失修（非漏洞，已并入 zbus 6 的 names 模块）。
+    # 传递链 keyring → zbus-secret-service-keyring-store → secret-service → zbus 5.x，
+    # 以及 tauri-plugin-single-instance → zbus 5.x。公告写明 No safe upgrade is available。
+    "RUSTSEC-2026-0371",
+    # RUSTSEC-2026-0370：zvariant 失修（非漏洞，已并入 zbus 6 的 wire 模块）。
+    # 传递链同上（zbus 5.x）。上游无安全升级。
+    "RUSTSEC-2026-0370",
+    # RUSTSEC-2026-0372：zvariant_derive 失修（非漏洞，派生宏已并入 zbus 6）。
+    # 传递链 zvariant → zbus 5.x（keyring / tauri-plugin-single-instance）。上游无安全升级。
+    "RUSTSEC-2026-0372",
 ]
 
 [bans]
@@ -54,3 +57,8 @@ allow-wildcard-paths = true
 unknown-registry = "warn"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# 仅放行把 zip 升到 >=9 的上游提交（crates.io 上的对应版本仍依赖有漏洞的 zip）。
+allow-git = [
+    "https://github.com/bokuweb/docx-rs",
+    "https://github.com/tauri-apps/plugins-workspace",
+]

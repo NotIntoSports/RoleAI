@@ -20,7 +20,10 @@ tauri-build = { version = "=2.7.1", features = [] }
 
 [dependencies]
 chrono = { version = "=0.4.45", default-features = false, features = ["clock", "serde", "std"] }
-docx-rs = { version = "=0.4.22", default-features = false }
+# crates.io 0.4.22 把 zip 钉在 8.6.0（RUSTSEC-2026-0367/0368/0369，修复版本 >=9）。
+# 上游尚未发布含 zip 9 的版本。ad7fede 是 main 上已合入的 zip 9.0.4 升级，
+# 包版本号仍是 0.4.22，因此也包含该 crates.io 发布之后的 reader 修复。
+docx-rs = { git = "https://github.com/bokuweb/docx-rs", rev = "ad7fede6a7f3b61a097c28d0c39dd04626e44701", version = "=0.4.22", default-features = false }
 obws = { version = "=0.15.0", default-features = false }
 pdf-extract = "=0.12.1"
 rusqlite = { version = "=0.40.2", features = ["bundled", "backup"] }
@@ -40,9 +43,10 @@ tauri = { version = "=2.12.1", default-features = false, features = ["common-con
 tauri-plugin-single-instance = "=2.5.2"
 # 应用内手动检查更新（G07）：官方插件，更新源指向 GitHub Release 的 latest.json；
 # 无签名公钥时前端显示「未配置更新源」，不影响启动。
-# updater 2.13.x 是与 tauri 2.12 配套的插件线（要求 tauri ^2.12）；JS 侧
-# @tauri-apps/plugin-updater 保持同一 2.13 线对齐。
-tauri-plugin-updater = "=2.13.2"
+# updater 与 tauri 2.12 配套（要求 tauri ^2.12）。crates.io 2.14.0 仍依赖 zip ^4
+# （RUSTSEC-2026-0367/0368/0369）。ba98bfad 是 v2 上已合入、尚未发版的 zip 9 升级。
+# JS 侧 @tauri-apps/plugin-updater 仍为 2.13.2：命令名未变。
+tauri-plugin-updater = { git = "https://github.com/tauri-apps/plugins-workspace", rev = "ba98bfadc4c868c9a7e1a226c83af528e1f11b89", version = "=2.14.0" }
 thiserror = "=2.0.21"
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", features = ["env-filter", "fmt"] }
