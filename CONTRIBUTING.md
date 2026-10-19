@@ -1,6 +1,6 @@
 # Contributing
 
-感谢关注 RoleAI。提交前请先阅读根目录的 [AGENTS.md](AGENTS.md)（项目开发规则）与 [README.md](README.md)。
+感谢关注 RoleAI。提交前请先阅读 [README.md](README.md)。
 
 **红线**：任何 PR 中不得出现 API Key、RTC Token、候选人数据、本机配置、日志原文或构建产物。安全漏洞走 [Security Advisory](https://github.com/NotIntoSports/RoleAI/security/advisories/new)，不要开公开 Issue。
 
@@ -55,17 +55,15 @@ npm run test:tauri-package  # 打包冒烟（需要已构建的 exe；CI 不跑�
 
 ## 引入新依赖
 
-遵循 [AGENTS.md](AGENTS.md) 的开源优先流程：
+开源优先：
 
 1. 先找现有能力、官方 SDK 或活跃维护的成熟依赖，不从零手写；
 2. 评估许可证、维护活跃度、Windows 兼容性、体积与成本、安全与数据去向、接入与维护成本，并在工作记录中写清结论；
 3. 同一类能力只引入一个库；版本钉死（Cargo 用 `=x.y.z`，npm 用精确版本）；
 4. 如果决定自研（比如某个十行的小工具函数），说明为什么现有方案不可用。
 
-近期案例见 [guide/adr/](guide/adr/README.md)（如 ADR-0008：为什么不引入重试库）。
-
 ## 文档
 
-- 文档分两层：`guide/` 随仓库发布，是面向使用者的公开文档站（架构、语音管线、知识库、安全、配置、故障排查、ADR）；`docs/` 是本地私有文档（依赖决策 `docs/dependency-decisions.md`、修复与长跑记录、商业方案等），整体被 `.gitignore` 忽略，**不入库、不出现在 PR 中**，换机器需要手动备份；
+- 面向使用者的说明写在根目录 `README.md` 与 `README.en.md`。`docs/` 是本地私有文档（依赖决策、修复与长跑记录、商业方案等），整体被 `.gitignore` 忽略，**不入库、不出现在 PR 中**，换机器需要手动备份；
 - README、文档里的每条能力、每个数字都要能在代码、测试输出或基准报告里找到出处——**不编造**；
 - 测试数量等统计数字用保守表述，并注明测量环境。

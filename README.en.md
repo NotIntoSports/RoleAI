@@ -5,10 +5,7 @@
 </p>
 
 <p align="center">
-  <a href="https://notintosports.github.io/RoleAI/demo/">Live demo</a> ·
-  <a href="guide/README.md">Docs</a> ·
-  <a href="guide/benchmarks.md">Benchmarks</a> ·
-  <a href="guide/adr/README.md">Design decisions</a>
+  <a href="https://notintosports.github.io/RoleAI/demo/">Live demo</a>
 </p>
 
 <p align="center">
@@ -34,12 +31,12 @@ Stack: Rust (Tauri 2 main process: audio pipeline, session orchestration, provid
 
 | Metric | Result | Source |
 | --- | --- | --- |
-| Audio hot path (ingest, VAD, segmentation, barge-in) | Over 370x real time; Silero inference median ≈80 µs per 32 ms window | [Criterion benchmarks](guide/reports/benchmarks.md) |
-| Barge-in first-trigger latency | Median 217 ms, 4/4 real interruptions detected (synthetic corpus) | [Audio evaluation](guide/reports/audio-eval.md) |
-| Value of two-stage turn detection | Premature cutoffs on mid-sentence hesitation: 50% down to 25% (synthetic corpus) | [Audio evaluation](guide/reports/audio-eval.md) |
-| Local hybrid retrieval | Median 0.48 ms over 4,904 chunks | [Criterion benchmarks](guide/reports/benchmarks.md) |
+| Audio hot path (ingest, VAD, segmentation, barge-in) | Over 370x real time; Silero inference median ≈80 µs per 32 ms window | [Criterion benchmarks](src-tauri/benches/audio_hotpath.rs) |
+| Barge-in first-trigger latency | Median 217 ms, 4/4 real interruptions detected (synthetic corpus) | [Offline evaluation](src-tauri/examples/eval_turns.rs) |
+| Value of two-stage turn detection | Premature cutoffs on mid-sentence hesitation: 50% down to 25% (synthetic corpus) | [Offline evaluation](src-tauri/examples/eval_turns.rs) |
+| Local hybrid retrieval | Median 0.48 ms over 4,904 chunks | [Criterion benchmarks](src-tauri/benches/materials.rs) |
 
-Every number comes from scripts in this repository, run on an Intel Core Ultra 7 255H laptop. See [Benchmarks](guide/benchmarks.md) for the environment and limitations.
+Every number comes from scripts in this repository, run on an Intel Core Ultra 7 255H laptop. Reproduce them with [scripts/run-benchmarks.ps1](scripts/run-benchmarks.ps1), [eval_turns](src-tauri/examples/eval_turns.rs), and [eval_rag](src-tauri/examples/eval_rag.rs). Environment limits are in [Known limitations](#known-limitations) below.
 
 ![Digital human speaking on camera](.github/assets/screenshots/video-call.png)
 
@@ -88,7 +85,7 @@ Every number comes from scripts in this repository, run on an Intel Core Ultra 7
 | --- | --- |
 | ![Latency waterfall](.github/assets/screenshots/en/latency-waterfall.png) | ![Performance panel](.github/assets/screenshots/en/performance-panel.png) |
 
-**Code**: [services/realtime_pump/shared.rs](src-tauri/src/services/realtime_pump/shared.rs); see the [latency observability guide](guide/latency.md).
+**Code**: [services/realtime_pump/shared.rs](src-tauri/src/services/realtime_pump/shared.rs).
 
 ### 5. Local RAG without a vector database
 
@@ -96,7 +93,7 @@ Every number comes from scripts in this repository, run on an Intel Core Ultra 7
 
 **Approach**: PDF, DOCX, and plain text are chunked by section; SQLite FTS5 full-text search and sqlite-vec vector search run side by side and are merged with reciprocal rank fusion (RRF). The vector table is rebuilt automatically when the embedding dimensions change.
 
-**Evidence**: median 0.48 ms per query over 4,904 chunks; a 50-question offline set validates the retrieval mechanics ([RAG evaluation](guide/reports/rag-eval.md)).
+**Evidence**: median 0.48 ms per query over 4,904 chunks; a 50-question offline set validates the retrieval mechanics ([eval_rag](src-tauri/examples/eval_rag.rs)).
 
 **Code**: [materials/hybrid.rs](src-tauri/src/materials/hybrid.rs)
 
@@ -110,8 +107,6 @@ Every number comes from scripts in this repository, run on an Intel Core Ultra 7
 - The capability whitelist and IPC command surface are hash-pinned in a [security surface baseline](tests/tauri/security-surface-baseline.json); any drift fails the suite.
 - onnxruntime is statically linked at build time so the app never loads a stale DLL from the system directory, a bug we actually hit.
 - API keys live only in Windows Credential Manager, in-memory copies are wiped with `zeroize`, and the UI and config files only hold key references.
-
-The full retrospective: [From five processes to one exe](guide/blog/2026-09-30-five-processes-to-one-exe.md) (Chinese).
 
 ## Architecture
 
@@ -158,15 +153,11 @@ sequenceDiagram
     Turn->>Out: barge-in, clear the queue and cancel the turn
 ```
 
-In Realtime mode, recognition, generation, and synthesis are handled by an end-to-end model over one WebSocket connection.
-
-More detail: [architecture](guide/architecture.md) and [real-time voice pipeline](guide/realtime-voice-pipeline.md) (Chinese).
+In Realtime mode, recognition, generation, and synthesis are handled by an end-to-end model over one WebSocket connection. The implementation is in [src-tauri/src/audio/](src-tauri/src/audio/) and [src-tauri/src/providers/](src-tauri/src/providers/).
 
 ## Design decisions
 
-The key trade-offs are recorded as [architecture decision records (ADRs, in Chinese)](guide/adr/README.md), each with context, alternatives, the decision, and its costs. For example: why the project [consolidated multiple processes into one Tauri app](guide/adr/0001-single-tauri-app.md), why it [uses SQLite + sqlite-vec instead of a standalone vector database](guide/adr/0003-sqlite-sqlite-vec.md), and why [cascade and Realtime modes coexist](guide/adr/0004-cascade-and-realtime-dual-mode.md).
-
-Three [technical posts](guide/blog/README.md) (in Chinese) cover the pitfalls behind the implementation.
+A few trade-offs are visible directly in the code: the multi-process system was consolidated into one Tauri app; local retrieval uses SQLite + sqlite-vec instead of a separate vector database ([materials/hybrid.rs](src-tauri/src/materials/hybrid.rs)); cascade and Realtime voice modes coexist ([providers/cascade.rs](src-tauri/src/providers/cascade.rs), [providers/realtime_session.rs](src-tauri/src/providers/realtime_session.rs)).
 
 ## Roles: digital humans that talk and appear on camera
 
@@ -180,7 +171,7 @@ In RoleAI, the digital human is the **role**. A role consists of a name, a syste
 - **Live-stream presenter**: generates a segmented script from local product materials and presents it segment by segment after you confirm; no invented prices, stock, or promises. The stage shows an image or a looping video.
 - **Custom roles**: write your own prompt and opening line; role names are globally unique.
 
-All roles share the same voice pipeline and local data: documents, indexes, and session records stay in a local SQLite database, and every session produces an evidence-cited summary. The voice chain can use cloud services, or stay entirely on your machine with the Ollama, LM Studio, speaches (local Whisper), and Kokoro-FastAPI (local TTS) presets. See the [local models guide](guide/local-models.md).
+All roles share the same voice pipeline and local data: documents, indexes, and session records stay in a local SQLite database, and every session produces an evidence-cited summary. The voice chain can use cloud services, or stay entirely on your machine with the Ollama, LM Studio, speaches (local Whisper), and Kokoro-FastAPI (local TTS) presets (defined in [config/presets_local.rs](src-tauri/src/config/presets_local.rs)).
 
 | Workspace | Live-stream |
 | --- | --- |
@@ -197,7 +188,7 @@ Cloned voices and faces must belong to you or to someone who has given consent, 
 
 **Cloud: Tavus (supported)**
 
-Save your key under Settings → Video call (Tavus), pick a face for the role under Settings → Roles, then turn on Avatar in the Workspace input bar and press Start video call. No local GPU is needed; usage is billed to your Tavus account. During a call the role persona is sent to Tavus and audio/video go through a Daily room. See the [configuration guide](guide/configuration.md) for setup and [security](guide/security.md) for data flows.
+Save your key under Settings → Video call (Tavus), pick a face for the role under Settings → Roles, then turn on Avatar in the Workspace input bar and press Start video call. No local GPU is needed; usage is billed to your Tavus account. During a call the role persona is sent to Tavus and audio/video go through a Daily room.
 
 **Local: [SoulX-LiveAct](https://github.com/Soul-AILab/SoulX-LiveAct) (planned, no cloud API calls)**
 
@@ -249,8 +240,6 @@ First run:
 2. **Pick a role**: choose a built-in role on the Workspace, or write your own prompt and opening line.
 3. **Start a session**: start it, allow microphone access, and speak. Before rehearsing with an interviewer role, import your résumé and the job description on the Materials page.
 
-See the [configuration guide](guide/configuration.md) for more and [troubleshooting](guide/troubleshooting.md) if something goes wrong.
-
 ## Tests and quality
 
 ```powershell
@@ -261,7 +250,7 @@ npm run test:tauri-package  # packaged smoke test
 - `test:tauri` runs the Rust unit tests (about 725, including proptest property tests), the frontend vitest suite, and the Node contract tests, then builds the frontend.
 - `test:tauri-package` launches the packaged exe in an isolated temporary config directory, waits for the main window, and asserts that the process tree and install directory are clean.
 - Contract tests pin several regressions: only `src/api/commands.ts` may call the Tauri IPC; drift in the capability whitelist or hash-pinned files fails the suite; the README and CI may only describe the single Tauri product path.
-- Performance and quality: Criterion benchmarks (`powershell -File scripts/run-benchmarks.ps1`), offline evaluations for turn detection, barge-in, and RAG, plus [coverage](guide/reports/coverage.md) and [mutation testing](guide/reports/mutation.md) reports.
+- Performance and quality: Criterion benchmarks (`powershell -File scripts/run-benchmarks.ps1`) and offline evaluations for turn detection, barge-in, and RAG ([eval_turns](src-tauri/examples/eval_turns.rs), [eval_rag](src-tauri/examples/eval_rag.rs)). Coverage is collected by the CI coverage job ([.github/workflows/ci.yml](.github/workflows/ci.yml)); mutation testing uses [scripts/run-mutants.ps1](scripts/run-mutants.ps1).
 - CI: the full suite on Windows, and `cargo check --all-targets` plus unit tests on Linux and macOS for every commit; CodeQL and OpenSSF Scorecard also run. See [.github/workflows/](.github/workflows/ci.yml).
 
 ## Known limitations
@@ -305,8 +294,8 @@ npm run test:tauri-package  # packaged smoke test
 │   ├── benches/ examples/  # Criterion benchmarks and offline evaluations
 │   └── capabilities/       # Tauri capability whitelist (pinned by the security baseline)
 ├── native/AudioBridge/     # C# meeting-audio child process (NAudio.Wasapi)
-├── tests/tauri/            # Node contract tests
-└── guide/                  # Docs, ADRs, technical posts, evaluation reports
+├── scripts/                # Benchmark, offline-evaluation, and packaging scripts
+└── tests/tauri/            # Node contract tests
 ```
 
 ## Responsible use
