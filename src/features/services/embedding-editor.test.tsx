@@ -67,8 +67,12 @@ describe("EmbeddingEditor", () => {
     vi.mocked(commands.activateEmbeddingConfig).mockResolvedValue({ ok: true, data: { ...ready, active: true } });
 
     render(<EmbeddingEditor />);
-    expect(await screen.findByText(/可以选用已保存的供应商，或自行填写/)).toBeTruthy();
+    // The description is on the first paint. The provider option arrives only
+    // after getConfigPublic. Changing the select before that option exists
+    // is dropped, and the required endpoint field then blocks submit.
+    expect(await screen.findByRole("option", { name: "OpenAI" })).toBeTruthy();
     fireEvent.change(screen.getByLabelText("供应商"), { target: { value: "openai" } });
+    expect(screen.queryByLabelText("接入地址")).toBeNull();
     fireEvent.change(screen.getByLabelText("模型"), { target: { value: "embed-3" } });
     fireEvent.change(screen.getByLabelText("维度"), { target: { value: "8" } });
     expect(screen.getByLabelText("维度").getAttribute("min")).toBe("1");
