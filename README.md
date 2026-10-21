@@ -2,10 +2,7 @@
 
 <p align="center">
   <a href="README.en.md">English</a> ·
-  <a href="https://notintosports.github.io/RoleAI/demo/">在线演示</a> ·
-  <a href="guide/README.md">文档</a> ·
-  <a href="guide/benchmarks.md">基准与评测</a> ·
-  <a href="guide/adr/README.md">架构决策</a>
+  <a href="https://notintosports.github.io/RoleAI/demo/">在线演示</a>
 </p>
 
 <p align="center">
@@ -31,12 +28,12 @@ RoleAI 是一个跑在本机的实时语音对话系统。难点不在"把 ASR�
 
 | 指标 | 结果 | 出处 |
 | --- | --- | --- |
-| 音频热路径（摄入、VAD、分段、打断） | 实时因子 370 倍以上，Silero 单窗推理中位约 80 µs（每窗 32 ms 音频） | [Criterion 基准](guide/reports/benchmarks.md) |
-| 打断（barge-in）首次触发延迟 | 中位 217 ms，真实打断 4/4 检出（合成语料） | [音频离线评测](guide/reports/audio-eval.md) |
-| 两级断句的价值 | 句中犹豫场景过早截断率 50% 降到 25%（合成语料） | [音频离线评测](guide/reports/audio-eval.md) |
-| 本地混合检索 | 4904 个分块规模下中位 0.48 ms | [Criterion 基准](guide/reports/benchmarks.md) |
+| 音频热路径（摄入、VAD、分段、打断） | 实时因子 370 倍以上，Silero 单窗推理中位约 80 µs（每窗 32 ms 音频） | [Criterion 基准](src-tauri/benches/audio_hotpath.rs) |
+| 打断（barge-in）首次触发延迟 | 中位 217 ms，真实打断 4/4 检出（合成语料） | [离线评测](src-tauri/examples/eval_turns.rs) |
+| 两级断句的价值 | 句中犹豫场景过早截断率 50% 降到 25%（合成语料） | [离线评测](src-tauri/examples/eval_turns.rs) |
+| 本地混合检索 | 4904 个分块规模下中位 0.48 ms | [Criterion 基准](src-tauri/benches/materials.rs) |
 
-所有数字由仓库里的脚本在一台 Intel Core Ultra 7 255H 笔记本上跑出，测试环境和局限见[基准与评测报告](guide/benchmarks.md)。
+所有数字由仓库里的脚本在一台 Intel Core Ultra 7 255H 笔记本上跑出。复现见 [scripts/run-benchmarks.ps1](scripts/run-benchmarks.ps1)、[eval_turns](src-tauri/examples/eval_turns.rs) 与 [eval_rag](src-tauri/examples/eval_rag.rs)；测试环境的局限见下方「已知局限」。
 
 ![数字人出镜实时对话](.github/assets/screenshots/video-call.png)
 
@@ -85,7 +82,7 @@ RoleAI 是一个跑在本机的实时语音对话系统。难点不在"把 ASR�
 | --- | --- |
 | ![延迟瀑布](.github/assets/screenshots/latency-waterfall.png) | ![性能面板](.github/assets/screenshots/performance-panel.png) |
 
-**代码**：[services/realtime_pump/shared.rs](src-tauri/src/services/realtime_pump/shared.rs)，说明见[延迟可观测性指南](guide/latency.md)。
+**代码**：[services/realtime_pump/shared.rs](src-tauri/src/services/realtime_pump/shared.rs)。
 
 ### 5. 不装向量数据库的本地 RAG
 
@@ -93,7 +90,7 @@ RoleAI 是一个跑在本机的实时语音对话系统。难点不在"把 ASR�
 
 **做法**：PDF、DOCX、纯文本按章节语义分块，SQLite FTS5 全文检索和 sqlite-vec 向量检索两路召回，用倒数排序融合（RRF）合并。Embedding 维度变化时自动重建向量表。
 
-**证据**：4904 个分块规模下检索中位 0.48 ms；50 题离线题集验证检索机制（[RAG 评测](guide/reports/rag-eval.md)）。
+**证据**：4904 个分块规模下检索中位 0.48 ms；50 题离线题集验证检索机制（[eval_rag](src-tauri/examples/eval_rag.rs)）。
 
 **代码**：[materials/hybrid.rs](src-tauri/src/materials/hybrid.rs)
 
@@ -107,8 +104,6 @@ RoleAI 是一个跑在本机的实时语音对话系统。难点不在"把 ASR�
 - 能力白名单和 IPC 命令面的文件哈希锁定在[安全面基线](tests/tauri/security-surface-baseline.json)里，漂移即红测。
 - onnxruntime 构建期静态链接，避免运行时误加载系统目录里的旧版 DLL（真实踩过的坑）。
 - API Key 只存 Windows 凭据管理器，内存副本用 `zeroize` 清零，界面和配置文件里只有密钥引用。
-
-过程复盘见[《从五个进程到一个 exe》](guide/blog/2026-09-30-five-processes-to-one-exe.md)。
 
 ## 架构
 
@@ -155,15 +150,11 @@ sequenceDiagram
     Turn->>Out: 打断，清空播放队列并取消本轮
 ```
 
-Realtime 模式下，识别、生成和合成由同一条 WebSocket 长连接上的端到端模型完成。
-
-更多细节见[架构说明](guide/architecture.md)和[实时语音管线](guide/realtime-voice-pipeline.md)。
+Realtime 模式下，识别、生成和合成由同一条 WebSocket 长连接上的端到端模型完成。实现见 [src-tauri/src/audio/](src-tauri/src/audio/) 与 [src-tauri/src/providers/](src-tauri/src/providers/)。
 
 ## 设计决策
 
-关键取舍都记录在[架构决策记录（ADR）](guide/adr/README.md)里，每篇写明背景、备选方案、决策和代价。例如为什么[从多进程收敛为单一 Tauri 应用](guide/adr/0001-single-tauri-app.md)、为什么[用 SQLite + sqlite-vec 而不是独立向量数据库](guide/adr/0003-sqlite-sqlite-vec.md)、为什么[级联和 Realtime 两种模式并存](guide/adr/0004-cascade-and-realtime-dual-mode.md)。
-
-实现背后的踩坑见三篇[技术文章](guide/blog/README.md)。
+几个已经落在代码里的取舍：多进程收敛为单一 Tauri 应用；本地检索用 SQLite + sqlite-vec，不另装向量数据库（[materials/hybrid.rs](src-tauri/src/materials/hybrid.rs)）；级联与 Realtime 两种语音模式并存（[providers/cascade.rs](src-tauri/src/providers/cascade.rs)、[providers/realtime_session.rs](src-tauri/src/providers/realtime_session.rs)）。
 
 ## 角色：能说话、能出镜的数字人
 
@@ -177,7 +168,7 @@ RoleAI 里的数字人就是**角色**。一个角色由名称、系统提示词
 - **直播讲解员**：从本地产品资料生成分段讲稿，逐段确认后讲解，不编造价格、库存或效果承诺。舞台可用图片或循环视频。
 - **自定义角色**：自己写提示词和开场白，角色名全局唯一。
 
-所有角色共用同一条语音管线和本地数据：资料、索引、会话记录都存本机 SQLite，每次会话生成带证据引用的纪要；语音链路可以接云端服务，也可以用 Ollama、LM Studio、speaches（本地 Whisper）、Kokoro-FastAPI（本地 TTS）四套预设完全留在本机，见[本地模型指南](guide/local-models.md)。
+所有角色共用同一条语音管线和本地数据：资料、索引、会话记录都存本机 SQLite，每次会话生成带证据引用的纪要；语音链路可以接云端服务，也可以用 Ollama、LM Studio、speaches（本地 Whisper）、Kokoro-FastAPI（本地 TTS）四套预设完全留在本机（预设定义见 [config/presets_local.rs](src-tauri/src/config/presets_local.rs)）。
 
 | 工作台 | 虚拟直播 |
 | --- | --- |
@@ -194,7 +185,7 @@ RoleAI 里的数字人就是**角色**。一个角色由名称、系统提示词
 
 **云端：Tavus（已支持）**
 
-在「设置 → 视频通话（Tavus）」保存密钥，在「设置 → 角色」里给角色选一个形象，然后在工作台打开输入栏的「虚拟形象」开关，点「开始视频通话」。不需要本地 GPU，费用按你的 Tavus 账户结算。通话时角色人设会发给 Tavus，音视频经 Daily 房间传输。配置步骤见[配置指南](guide/configuration.md)，数据去向见[安全设计](guide/security.md)。
+在「设置 → 视频通话（Tavus）」保存密钥，在「设置 → 角色」里给角色选一个形象，然后在工作台打开输入栏的「虚拟形象」开关，点「开始视频通话」。不需要本地 GPU，费用按你的 Tavus 账户结算。通话时角色人设会发给 Tavus，音视频经 Daily 房间传输。
 
 **本地：[SoulX-LiveAct](https://github.com/Soul-AILab/SoulX-LiveAct)（规划中，不调用任何云 API）**
 
@@ -246,8 +237,6 @@ npm run tauri:build    # 产出安装包
 2. **选角色**：在工作台选内置角色，或自定义提示词与开场白。
 3. **开会话**：启动会话、授权麦克风后开口说话。用面试官角色对练前，先把简历和岗位资料导入「资料」页。
 
-更多配置见[配置指南](guide/configuration.md)，遇到问题见[故障排查](guide/troubleshooting.md)。
-
 ## 测试与质量
 
 ```powershell
@@ -258,7 +247,7 @@ npm run test:tauri-package  # 打包冒烟
 - `test:tauri` 依次运行 Rust 单元测试（约 725 个，含 proptest 属性测试）、前端 vitest、Node 契约测试，最后构建前端产物。
 - `test:tauri-package` 在隔离的临时配置目录里启动打包后的 exe，等主窗口可见，并断言进程树和安装目录都干净。
 - 契约测试钉住几类回归：前端只有 `src/api/commands.ts` 能调用 Tauri IPC；能力白名单和关键文件哈希漂移即失败；README 与 CI 只描述单一 Tauri 产品路径。
-- 性能与质量：Criterion 基准（`powershell -File scripts/run-benchmarks.ps1`）、断句/打断/RAG 离线评测、[覆盖率](guide/reports/coverage.md)和[变异测试](guide/reports/mutation.md)报告。
+- 性能与质量：Criterion 基准（`powershell -File scripts/run-benchmarks.ps1`）、断句/打断/RAG 离线评测（[eval_turns](src-tauri/examples/eval_turns.rs)、[eval_rag](src-tauri/examples/eval_rag.rs)）。覆盖率在 CI 的 coverage 作业里收集（[.github/workflows/ci.yml](.github/workflows/ci.yml)）；变异测试用 [scripts/run-mutants.ps1](scripts/run-mutants.ps1)。
 - CI：Windows 全量测试，Linux 和 macOS 每次提交跑 `cargo check --all-targets` 与单元测试；另有 CodeQL、OpenSSF Scorecard。见 [.github/workflows/](.github/workflows/ci.yml)。
 
 ## 已知局限
@@ -302,8 +291,8 @@ npm run test:tauri-package  # 打包冒烟
 │   ├── benches/ examples/  # Criterion 基准与离线评测
 │   └── capabilities/       # Tauri 能力白名单（安全面基线锁定）
 ├── native/AudioBridge/     # C# 会议音频子进程（NAudio.Wasapi）
-├── tests/tauri/            # Node 契约测试
-└── guide/                  # 文档、ADR、技术文章、评测报告
+├── scripts/                # 基准、离线评测与打包脚本
+└── tests/tauri/            # Node 契约测试
 ```
 
 ## 负责任使用
