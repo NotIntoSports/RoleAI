@@ -8,7 +8,7 @@ test("frontend and Rust foundation dependencies are locked", async () => {
 
   assert.equal(pkg.dependencies["@tauri-apps/api"], "2.12.1");
   assert.equal(pkg.devDependencies["@tauri-apps/cli"], "2.12.1");
-  assert.equal(pkg.devDependencies.vite, "8.3.2");
+  assert.equal(pkg.devDependencies.vite, "8.3.5");
   assert.equal(pkg.dependencies.react, "19.3.0");
   assert.equal(pkg.dependencies["@daily-co/daily-js"], "0.93.0");
   assert.equal(pkg.dependencies["react-dom"], "19.3.0");
